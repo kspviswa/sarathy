@@ -10,6 +10,7 @@ import sys
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -29,6 +30,17 @@ app = typer.Typer(
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+
+
+def _require_config():
+    """Check that config exists. If not, exit with onboarding message."""
+    from sarathy.config.loader import get_config_path
+
+    if not get_config_path().exists():
+        console.print(f"[red]Config not found at ~/.sarathy/config.json[/red]")
+        console.print("Please run [cyan]sarathy onboard[/cyan] first to set up sarathy.")
+        raise typer.Exit(1)
+
 
 # ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
@@ -155,47 +167,23 @@ def main(
 
 @app.command()
 def onboard():
-    """Initialize sarathy configuration and workspace."""
-    from sarathy.config.loader import get_config_path, load_config, save_config
+    """Interactive wizard to set up sarathy."""
+    from sarathy.config.loader import get_config_path
     from sarathy.config.schema import Config
     from sarathy.utils.helpers import get_workspace_path
 
     config_path = get_config_path()
+    config = Config()
 
-    if config_path.exists():
-        console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
-        console.print("  [bold]y[/bold] = overwrite with defaults (existing values will be lost)")
-        console.print(
-            "  [bold]N[/bold] = refresh config, keeping existing values and adding new fields"
-        )
-        if typer.confirm("Overwrite?"):
-            config = Config()
-            save_config(config)
-            console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
-        else:
-            config = load_config()
-            save_config(config)
-            console.print(
-                f"[green]✓[/green] Config refreshed at {config_path} (existing values preserved)"
-            )
-    else:
-        save_config(Config())
-        console.print(f"[green]✓[/green] Created config at {config_path}")
-
-    # Create workspace
     workspace = get_workspace_path()
-
     if not workspace.exists():
         workspace.mkdir(parents=True, exist_ok=True)
-        console.print(f"[green]✓[/green] Created workspace at {workspace}")
 
-    # Create default bootstrap files
     _create_workspace_templates(workspace)
 
-    console.print(f"\n{__logo__} sarathy is ready!")
-    console.print("\nNext steps:")
-    console.print("  1. Customize at [cyan]~/.sarathy/config.json[/cyan]")
-    console.print('  2. Chat: [cyan]sarathy agent -m "Hello!"[/cyan]')
+    from sarathy.cli.onboard import run_onboarding
+
+    run_onboarding(config, config_path, workspace)
 
 
 def _create_workspace_templates(workspace: Path):
@@ -249,7 +237,11 @@ def _make_provider(config: Config):
     from sarathy.providers.registry import find_by_name
 
     spec = find_by_name(provider_name)
-    if not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and spec.is_oauth):
+    if spec and spec.is_local:
+        pass
+    elif (
+        not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and spec.is_oauth)
+    ):
         console.print("[red]Error: No API key configured.[/red]")
         console.print("Set one in ~/.sarathy/config.json under providers section")
         raise typer.Exit(1)
@@ -274,6 +266,8 @@ def gateway(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Start the sarathy gateway."""
+    _require_config()
+
     from sarathy.config.loader import load_config, get_data_dir
     from sarathy.bus.queue import MessageBus
     from sarathy.agent.loop import AgentLoop
@@ -283,6 +277,8 @@ def gateway(
     from sarathy.cron.types import CronJob
     from sarathy.heartbeat.service import HeartbeatService
 
+    config = load_config()
+
     if verbose:
         import logging
 
@@ -290,7 +286,6 @@ def gateway(
 
     console.print(f"{__logo__} Starting sarathy gateway on port {port}...")
 
-    config = load_config()
     bus = MessageBus()
     provider = _make_provider(config)
     session_manager = SessionManager(
@@ -299,11 +294,9 @@ def gateway(
         max_session_messages=config.agents.defaults.max_session_messages,
     )
 
-    # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
 
-    # Create agent with cron service
     agent = AgentLoop(
         bus=bus,
         provider=provider,
@@ -324,9 +317,7 @@ def gateway(
         channels_config=config.channels,
     )
 
-    # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
-        """Execute a cron job through the agent."""
         response = await agent.process_direct(
             job.payload.message,
             session_key=f"cron:{job.id}",
@@ -347,13 +338,10 @@ def gateway(
 
     cron.on_job = on_cron_job
 
-    # Create channel manager
     channels = ChannelManager(config, bus)
 
     def _pick_heartbeat_target() -> tuple[str, str]:
-        """Pick a routable channel/chat target for heartbeat-triggered messages."""
         enabled = set(channels.enabled_channels)
-        # Prefer the most recently updated non-internal session on an enabled channel.
         for item in session_manager.list_sessions():
             key = item.get("key") or ""
             if ":" not in key:
@@ -363,12 +351,9 @@ def gateway(
                 continue
             if channel in enabled and chat_id:
                 return channel, chat_id
-        # Fallback keeps prior behavior but remains explicit.
         return "cli", "direct"
 
-    # Create heartbeat service
     async def on_heartbeat_execute(tasks: str) -> str:
-        """Phase 2: execute heartbeat tasks through the full agent loop."""
         channel, chat_id = _pick_heartbeat_target()
 
         async def _silent(*_args, **_kwargs):
@@ -383,12 +368,11 @@ def gateway(
         )
 
     async def on_heartbeat_notify(response: str) -> None:
-        """Deliver a heartbeat response to the user's channel."""
         from sarathy.bus.events import OutboundMessage
 
         channel, chat_id = _pick_heartbeat_target()
         if channel == "cli":
-            return  # No external channel available to deliver to
+            return
         await bus.publish_outbound(
             OutboundMessage(channel=channel, chat_id=chat_id, content=response)
         )
@@ -413,7 +397,7 @@ def gateway(
     if cron_status["jobs"] > 0:
         console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
 
-    console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
+    console.print(f"[green]✓[/green] Heartbeat: every {config.gateway.heartbeat.interval_s}s")
 
     async def run():
         try:
@@ -433,6 +417,89 @@ def gateway(
             await channels.stop_all()
 
     asyncio.run(run())
+
+
+# ============================================================================
+# Gateway / Server (start, stop, status, logs)
+# ============================================================================
+
+gateway_app = typer.Typer(help="Manage the sarathy gateway")
+app.add_typer(gateway_app, name="gateway")
+
+
+@gateway_app.command("start")
+def gateway_start(
+    port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Start the sarathy gateway in the background."""
+    _require_config()
+
+    from sarathy.gateway.manager import get_log_file_path, is_gateway_running, start_gateway
+
+    if is_gateway_running():
+        console.print("[yellow]Gateway is already running.[/yellow]")
+        raise typer.Exit(1)
+
+    log_path = get_log_file_path()
+    console.print(f"[dim]Starting gateway on port {port}...[/dim]")
+    console.print(f"[dim]Logs: {log_path}[/dim]")
+
+    try:
+        start_gateway(port=port, verbose=verbose)
+        console.print(f"[green]✓[/green] Gateway started (PID will be saved)")
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@gateway_app.command("stop")
+def gateway_stop():
+    """Stop the running sarathy gateway."""
+    from sarathy.gateway.manager import is_gateway_running, stop_gateway
+
+    if not is_gateway_running():
+        console.print("[yellow]Gateway is not running.[/yellow]")
+        raise typer.Exit(1)
+
+    if stop_gateway():
+        console.print("[green]✓[/green] Gateway stopped")
+    else:
+        console.print("[red]Failed to stop gateway[/red]")
+        raise typer.Exit(1)
+
+
+@gateway_app.command("status")
+def gateway_status():
+    """Show gateway status."""
+    from sarathy.gateway.manager import get_gateway_status
+
+    status = get_gateway_status()
+
+    if status["running"]:
+        console.print(f"[green]✓[/green] Gateway is [bold]running[/bold]")
+        console.print(f"  PID: {status['pid']}")
+        console.print(f"  Log: {status['log_file']}")
+    else:
+        console.print("[dim]Gateway is [bold]not running[/bold]")
+
+
+@gateway_app.command("logs")
+def gateway_logs(
+    lines: int = typer.Option(50, "--lines", "-n", help="Number of log lines to show"),
+):
+    """Show gateway logs."""
+    from sarathy.gateway.manager import get_recent_logs, is_gateway_running
+
+    if not is_gateway_running():
+        console.print("[yellow]Gateway is not running. No logs available.[/yellow]")
+        raise typer.Exit(1)
+
+    logs = get_recent_logs(lines=lines)
+    if logs:
+        console.print(Panel(logs, title="Gateway Logs", border_style="dim"))
+    else:
+        console.print("[dim]No logs available.[/dim]")
 
 
 # ============================================================================

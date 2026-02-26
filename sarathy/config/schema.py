@@ -103,9 +103,9 @@ class AgentsConfig(Base):
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
-    api_key: str = ""
-    api_base: str | None = None
-    extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
+    api_key: str = "dummy"
+    api_base: str | None = "http://localhost:11434"
+    extra_headers: dict[str, str] | None = None
 
 
 class ProvidersConfig(Base):

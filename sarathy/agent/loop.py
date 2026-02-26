@@ -465,7 +465,7 @@ Assistant response: {assistant_response[:500]}"""
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🐈 sarathi commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/remember <text> — Save to memory\n/help — Show available commands",
+                content="🐈 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/remember <text> — Save to memory\n/help — Show available commands",
             )
         if cmd.startswith("/remember "):
             remember_text = msg.content[len("/remember ") :].strip()

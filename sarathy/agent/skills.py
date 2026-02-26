@@ -167,7 +167,7 @@ class SkillsLoader:
         return content
     
     def _parse_sarathi_metadata(self, raw: str) -> dict:
-        """Parse skill metadata JSON from frontmatter (supports sarathi and openclaw keys)."""
+        """Parse skill metadata JSON from frontmatter (supports sarathy and openclaw keys)."""
         try:
             data = json.loads(raw)
             return data.get("sarathy", data.get("openclaw", {})) if isinstance(data, dict) else {}
@@ -186,7 +186,7 @@ class SkillsLoader:
         return True
     
     def _get_skill_meta(self, name: str) -> dict:
-        """Get sarathi metadata for a skill (cached in frontmatter)."""
+        """Get sarathy metadata for a skill (cached in frontmatter)."""
         meta = self.get_skill_metadata(name) or {}
         return self._parse_sarathi_metadata(meta.get("metadata", ""))
     

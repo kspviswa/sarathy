@@ -1,4 +1,4 @@
-"""MCP client: connects to MCP servers and wraps their tools as native sarathi tools."""
+"""MCP client: connects to MCP servers and wraps their tools as native sarathy tools."""
 
 import asyncio
 from contextlib import AsyncExitStack
@@ -12,7 +12,7 @@ from sarathy.agent.tools.registry import ToolRegistry
 
 
 class MCPToolWrapper(Tool):
-    """Wraps a single MCP server tool as a sarathi Tool."""
+    """Wraps a single MCP server tool as a sarathy Tool."""
 
     def __init__(self, session, server_name: str, tool_def, tool_timeout: int = 30):
         self._session = session

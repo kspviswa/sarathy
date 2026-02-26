@@ -1,4 +1,4 @@
-"""Utility functions for sarathi."""
+"""Utility functions for sarathy."""
 
 from pathlib import Path
 from datetime import datetime
@@ -11,7 +11,7 @@ def ensure_dir(path: Path) -> Path:
 
 
 def get_data_path() -> Path:
-    """Get the sarathi data directory (~/.sarathy)."""
+    """Get the sarathy data directory (~/.sarathy)."""
     return ensure_dir(Path.home() / ".sarathy")
 
 

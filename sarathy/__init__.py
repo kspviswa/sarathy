@@ -1,5 +1,5 @@
 """
-sarathi - A lightweight AI agent framework
+sarathy - A lightweight AI agent framework
 """
 
 __version__ = "0.1.4.post2"

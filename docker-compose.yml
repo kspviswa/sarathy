@@ -3,11 +3,11 @@ x-common-config: &common-config
     context: .
     dockerfile: Dockerfile
   volumes:
-    - ~/.sarathi:/root/.sarathi
+    - ~/.sarathy:/root/.sarathy
 
 services:
-  sarathi-gateway:
-    container_name: sarathi-gateway
+  sarathy-gateway:
+    container_name: sarathy-gateway
     <<: *common-config
     command: ["gateway"]
     restart: unless-stopped
@@ -22,7 +22,7 @@ services:
           cpus: '0.25'
           memory: 256M
   
-  sarathi-cli:
+  sarathy-cli:
     <<: *common-config
     profiles:
       - cli

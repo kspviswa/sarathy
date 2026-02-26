@@ -1,4 +1,4 @@
-"""CLI commands for sarathi."""
+"""CLI commands for sarathy."""
 
 import asyncio
 import os
@@ -23,7 +23,7 @@ from sarathy.config.schema import Config
 
 app = typer.Typer(
     name="sarathy",
-    help=f"{__logo__} sarathi - Personal AI Assistant",
+    help=f"{__logo__} sarathy - Personal AI Assistant",
     no_args_is_help=True,
 )
 
@@ -105,7 +105,7 @@ def _print_agent_response(response: str, render_markdown: bool) -> None:
     content = response or ""
     body = Markdown(content) if render_markdown else Text(content)
     console.print()
-    console.print(f"[cyan]{__logo__} sarathi[/cyan]")
+    console.print(f"[cyan]{__logo__} sarathy[/cyan]")
     console.print(body)
     console.print()
 
@@ -136,7 +136,7 @@ async def _read_interactive_input_async() -> str:
 
 def version_callback(value: bool):
     if value:
-        console.print(f"{__logo__} sarathi v{__version__}")
+        console.print(f"{__logo__} sarathy v{__version__}")
         raise typer.Exit()
 
 
@@ -155,7 +155,7 @@ def main(
 
 @app.command()
 def onboard():
-    """Initialize sarathi configuration and workspace."""
+    """Initialize sarathy configuration and workspace."""
     from sarathy.config.loader import get_config_path, load_config, save_config
     from sarathy.config.schema import Config
     from sarathy.utils.helpers import get_workspace_path
@@ -195,7 +195,7 @@ def onboard():
     console.print(f"\n{__logo__} sarathy is ready!")
     console.print("\nNext steps:")
     console.print("  1. Customize at [cyan]~/.sarathy/config.json[/cyan]")
-    console.print('  2. Chat: [cyan]sarathi agent -m "Hello!"[/cyan]')
+    console.print('  2. Chat: [cyan]sarathy agent -m "Hello!"[/cyan]')
 
 
 def _create_workspace_templates(workspace: Path):
@@ -273,7 +273,7 @@ def gateway(
     port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
-    """Start the sarathi gateway."""
+    """Start the sarathy gateway."""
     from sarathy.config.loader import load_config, get_data_dir
     from sarathy.bus.queue import MessageBus
     from sarathy.agent.loop import AgentLoop
@@ -288,7 +288,7 @@ def gateway(
 
         logging.basicConfig(level=logging.DEBUG)
 
-    console.print(f"{__logo__} Starting sarathi gateway on port {port}...")
+    console.print(f"{__logo__} Starting sarathy gateway on port {port}...")
 
     config = load_config()
     bus = MessageBus()
@@ -447,7 +447,7 @@ def agent(
         True, "--markdown/--no-markdown", help="Render assistant output as Markdown"
     ),
     logs: bool = typer.Option(
-        False, "--logs/--no-logs", help="Show sarathi runtime logs during chat"
+        False, "--logs/--no-logs", help="Show sarathy runtime logs during chat"
     ),
 ):
     """Interact with the agent directly."""
@@ -497,7 +497,7 @@ def agent(
 
             return nullcontext()
         # Animated spinner is safe to use with prompt_toolkit input handling
-        return console.status("[dim]sarathi is thinking...[/dim]", spinner="dots")
+        return console.status("[dim]sarathy is thinking...[/dim]", spinner="dots")
 
     async def _cli_progress(content: str, *, tool_hint: bool = False) -> None:
         ch = agent_loop.channels_config
@@ -890,14 +890,14 @@ def cron_run(
 
 @app.command()
 def status():
-    """Show sarathi status."""
+    """Show sarathy status."""
     from sarathy.config.loader import load_config, get_config_path
 
     config_path = get_config_path()
     config = load_config()
     workspace = config.workspace_path
 
-    console.print(f"{__logo__} sarathi Status\n")
+    console.print(f"{__logo__} sarathy Status\n")
 
     console.print(
         f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}"

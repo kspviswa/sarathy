@@ -1,4 +1,4 @@
-"""Utility functions for sarathi."""
+"""Utility functions for sarathy."""
 
 from sarathy.utils.helpers import ensure_dir, get_workspace_path, get_data_path
 

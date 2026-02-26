@@ -1,1 +1,1 @@
-"""CLI module for sarathi."""
+"""CLI module for sarathy."""

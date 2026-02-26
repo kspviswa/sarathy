@@ -12,7 +12,7 @@ def get_config_path() -> Path:
 
 
 def get_data_dir() -> Path:
-    """Get the sarathi data directory."""
+    """Get the sarathy data directory."""
     from sarathy.utils.helpers import get_data_path
     return get_data_path()
 

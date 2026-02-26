@@ -1,6 +1,6 @@
 <div align="center">
   <img src="sarathi_logo.png" alt="sarathi" width="500">
-  <h1>sarathi: Personal AI Assistant</h1>
+  <h1>Sarathi : My Personal Assistant</h1>
   <p>
     <a href="https://pypi.org/project/sarathi/"><img src="https://img.shields.io/pypi/v/sarathi" alt="PyPI"></a>
     <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
@@ -8,12 +8,23 @@
   </p>
 </div>
 
+## Who is Sarathi and Why ?
+
+Sarathi is my own openclaw implementation to solve my own needs. Frustrated with bloated openclaw and the likes and other derivatives, I finally came to conclusion that I need to own my bot's implementation to fit to my needs. Especially, I need a bot that run 100% local with only features I care for. This project is not to offer a competing openclaw alternatives.
+
+I was thinking about this internally and then saw Andrej Karpathy's take on [nanoclaw](https://github.com/qwibitai/nanoclaw). Although I'm not keen using a live organism that can either patch its own code or rich enough to continuously use claude code to keep customizing the bot to my needs.
+
+I need a bot implemented in a language I'm comfortable with, so that I can _vibe engineer_ it the way that makes sense for me to maintain. So I decided to fork [nanobot](https://github.com/qwibitai/nanoclaw) to make it as _my_ Sarathi.
+
+For the curious, _Sarathi_ means helper, guide, driver, mentor in both Sanskrit & Tamil.
+
+
 ## Installation
 
 ### Install from source (latest features, recommended for development)
 
 ```bash
-git clone https://github.com/your-repo/sarathi.git
+git clone https://github.com/kspviswa/sarathi.git
 cd sarathi
 pip install -e .
 ```

@@ -1,8 +1,8 @@
 """
-sarathy - A lightweight AI agent framework
+sarathy - my personal assistant
 """
 
 from importlib.metadata import version
 
 __version__ = version("sarathy")
-__logo__ = "🐈"
+__logo__ = "🪆"

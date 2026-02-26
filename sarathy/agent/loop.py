@@ -60,6 +60,7 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         session_cache_size: int = 50,
         max_session_messages: int = 500,
+        context_length: int = 8192,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
     ):
@@ -74,6 +75,7 @@ class AgentLoop:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.memory_window = memory_window
+        self.context_length = context_length
         self.brave_api_key = brave_api_key
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
@@ -465,7 +467,32 @@ Assistant response: {assistant_response[:500]}"""
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🐈 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/remember <text> — Save to memory\n/help — Show available commands",
+                content="🐈 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/context — Show context usage\n/remember <text> — Save to memory\n/help — Show available commands",
+            )
+        if cmd == "/context":
+            msg_count = len(session.messages)
+            unconsolidated = msg_count - session.last_consolidated
+            context_length = self.context_length
+            # Estimate: ~4 chars per token on average
+            estimated_tokens = sum(len(m.get("content", "")) for m in session.messages) // 4
+            estimated_tokens = min(estimated_tokens, unconsolidated * 500)  # Rough estimate
+            usage_pct = (
+                (min(unconsolidated, context_length) / context_length * 100)
+                if context_length
+                else 0
+            )
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"""📊 Context Usage
+
+Session: {msg.session_key}
+Messages in session: {msg_count}
+Messages to LLM: {unconsolidated} / {context_length}
+Est. tokens (recent): ~{estimated_tokens:,}
+Model context length: {self.context_length:,}
+
+{"⚠️ Consider /new to start fresh" if usage_pct > 80 else "✅ Context OK"}""",
             )
         if cmd.startswith("/remember "):
             remember_text = msg.content[len("/remember ") :].strip()

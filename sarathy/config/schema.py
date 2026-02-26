@@ -89,6 +89,9 @@ class AgentDefaults(Base):
     memory_window: int = 100
     session_cache_size: int = 50  # Max sessions to keep in memory
     max_session_messages: int = 500  # Max messages per session in memory
+    context_length: int = (
+        8192  # Max context length for the model (used for context usage calculation)
+    )
 
 
 class AgentsConfig(Base):

@@ -319,6 +319,7 @@ def gateway(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=session_manager,
         session_cache_size=config.agents.defaults.session_cache_size,
+        context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
     )
@@ -486,6 +487,7 @@ def agent(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_cache_size=config.agents.defaults.session_cache_size,
         max_session_messages=config.agents.defaults.max_session_messages,
+        context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
     )
@@ -851,6 +853,7 @@ def cron_run(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_cache_size=config.agents.defaults.session_cache_size,
         max_session_messages=config.agents.defaults.max_session_messages,
+        context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
     )
@@ -931,6 +934,8 @@ def status():
                 )
 
 
+# ============================================================================
+# Provider Management
 # ============================================================================
 # Provider Management
 # ============================================================================

@@ -10,14 +10,27 @@
 
 ## Who is Sarathy and Why ?
 
-Sarathy is my own openclaw implementation to solve my own needs. Frustrated with bloated openclaw and the likes and other derivatives, I finally came to conclusion that I need to own my bot's implementation to fit to my needs. Especially, I need a bot that run 100% local with only features I care for. This project is not to offer a competing openclaw alternatives.
+Sarathy is my own AI assistant implementation focused on **local models**. Frustrated with bloated alternatives and API costs, I built this to run 100% offline with only the features I need.
 
-I was thinking about this internally and then saw Andrej Karpathy's take on [nanoclaw](https://github.com/qwibitai/nanoclaw). Although I'm not keen using a live organism that can either patch its own code or rich enough to continuously use claude code to keep customizing the bot to my needs.
+_Sarathy_ means helper, guide, driver, mentor in both Sanskrit & Tamil.
 
-I need a bot implemented in a language I'm comfortable with, so that I can _vibe engineer_ it the way that makes sense for me to maintain. So I decided to fork [nanobot](https://github.com/qwibitai/nanoclaw) to make it as _my_ Sarathy.
+## Supported Models
 
-For the curious, _Sarathy_ means helper, guide, driver, mentor in both Sanskrit & Tamil.
+### Local Providers (Primary)
+- **Ollama** - `http://localhost:11434`
+- **LMStudio** - `http://localhost:1234/v1`
+- **vLLM** - any OpenAI-compatible local endpoint
 
+### Custom Endpoints
+- **Custom** - any OpenAI-compatible API (local or cloud)
+
+## Supported Channels
+
+| Channel | Description |
+|---------|-------------|
+| **Telegram** | Bot via @BotFather |
+| **Discord** | Bot via Discord Developer Portal |
+| **Email** | IMAP/SMTP |
 
 ## Installation
 
@@ -44,8 +57,7 @@ pip install sarathy
 ## Quick Start
 
 > [!TIP]
-> Set your API key in `~/.sarathy/config.json`.
-> Get API keys: [OpenRouter](https://openrouter.ai/keys) (Global)
+> Make sure you have Ollama, LMStudio, or vLLM running before starting Sarathy.
 
 **1. Initialize**
 
@@ -55,25 +67,45 @@ sarathy onboard
 
 **2. Configure** (`~/.sarathy/config.json`)
 
-Add or merge these **two parts** into your config (other options have defaults).
-
-*Set your API key* (e.g. OpenRouter, recommended for global users):
-```json
-{
-  "providers": {
-    "openrouter": {
-      "apiKey": "sk-or-v1-xxx"
-    }
-  }
-}
-```
-
-*Set your model*:
+Example for **Ollama**:
 ```json
 {
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-5"
+      "model": "llama3"
+    }
+  },
+  "providers": {
+    "ollama": {}
+  }
+}
+```
+
+Example for **LMStudio**:
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "llama-3-8b"
+    }
+  },
+  "providers": {
+    "lmstudio": {}
+  }
+}
+```
+
+Example for **Custom** (e.g., local vLLM or other OpenAI-compatible):
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "llama-3-70b-instruct"
+    }
+  },
+  "providers": {
+    "custom": {
+      "apiBase": "http://localhost:8000/v1"
     }
   }
 }
@@ -82,10 +114,14 @@ Add or merge these **two parts** into your config (other options have defaults).
 **3. Chat**
 
 ```bash
-sarathy agent
+sarathy agent -m "Hello!"
 ```
 
-That's it! You have a working AI assistant.
+Or start the **gateway** for multi-channel support:
+
+```bash
+sarathy gateway
+```
 
 ## CLI Reference
 
@@ -94,7 +130,7 @@ That's it! You have a working AI assistant.
 | `sarathy onboard` | Initialize config & workspace |
 | `sarathy agent -m "..."` | Chat with the agent |
 | `sarathy agent` | Interactive chat mode |
-| `sarathy gateway` | Start the gateway |
+| `sarathy gateway` | Start the gateway (Telegram/Discord/Email) |
 | `sarathy status` | Show status |
 
 Interactive mode exits: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`.

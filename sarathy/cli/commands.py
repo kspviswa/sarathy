@@ -192,14 +192,10 @@ def onboard():
     # Create default bootstrap files
     _create_workspace_templates(workspace)
 
-    console.print(f"\n{__logo__} sarathi is ready!")
+    console.print(f"\n{__logo__} sarathy is ready!")
     console.print("\nNext steps:")
-    console.print("  1. Add your API key to [cyan]~/.sarathy/config.json[/cyan]")
-    console.print("     Get one at: https://openrouter.ai/keys")
+    console.print("  1. Customize at [cyan]~/.sarathy/config.json[/cyan]")
     console.print('  2. Chat: [cyan]sarathi agent -m "Hello!"[/cyan]')
-    console.print(
-        "\n[dim]Want Telegram/WhatsApp? See: https://github.com/HKUDS/sarathi#-chat-apps[/dim]"
-    )
 
 
 def _create_workspace_templates(workspace: Path):
@@ -236,16 +232,11 @@ def _create_workspace_templates(workspace: Path):
 def _make_provider(config: Config):
     """Create the appropriate LLM provider from config."""
     from sarathy.providers.litellm_provider import LiteLLMProvider
-    from sarathy.providers.openai_codex_provider import OpenAICodexProvider
     from sarathy.providers.custom_provider import CustomProvider
 
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
-
-    # OpenAI Codex (OAuth)
-    if provider_name == "openai_codex" or model.startswith("openai-codex/"):
-        return OpenAICodexProvider(default_model=model)
 
     # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM
     if provider_name == "custom":
@@ -941,97 +932,37 @@ def status():
 
 
 # ============================================================================
-# OAuth Login
+# Provider Management
 # ============================================================================
 
 provider_app = typer.Typer(help="Manage providers")
 app.add_typer(provider_app, name="provider")
 
 
-_LOGIN_HANDLERS: dict[str, callable] = {}
-
-
-def _register_login(name: str):
-    def decorator(fn):
-        _LOGIN_HANDLERS[name] = fn
-        return fn
-
-    return decorator
-
-
 @provider_app.command("login")
 def provider_login(
-    provider: str = typer.Argument(
-        ..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"
-    ),
+    provider: str = typer.Argument(..., help="Provider name (e.g. 'ollama', 'lmstudio', 'vllm')"),
 ):
-    """Authenticate with an OAuth provider."""
+    """Authenticate with a provider (not needed for local providers)."""
     from sarathy.providers.registry import PROVIDERS
 
     key = provider.replace("-", "_")
-    spec = next((s for s in PROVIDERS if s.name == key and s.is_oauth), None)
+    spec = next((s for s in PROVIDERS if s.name == key), None)
     if not spec:
-        names = ", ".join(s.name.replace("_", "-") for s in PROVIDERS if s.is_oauth)
-        console.print(f"[red]Unknown OAuth provider: {provider}[/red]  Supported: {names}")
+        names = ", ".join(s.name for s in PROVIDERS)
+        console.print(f"[red]Unknown provider: {provider}[/red]  Available: {names}")
         raise typer.Exit(1)
 
-    handler = _LOGIN_HANDLERS.get(spec.name)
-    if not handler:
-        console.print(f"[red]Login not implemented for {spec.label}[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"{__logo__} OAuth Login - {spec.label}\n")
-    handler()
-
-
-@_register_login("openai_codex")
-def _login_openai_codex() -> None:
-    try:
-        from oauth_cli_kit import get_token, login_oauth_interactive
-
-        token = None
-        try:
-            token = get_token()
-        except Exception:
-            pass
-        if not (token and token.access):
-            console.print("[cyan]Starting interactive OAuth login...[/cyan]\n")
-            token = login_oauth_interactive(
-                print_fn=lambda s: console.print(s),
-                prompt_fn=lambda s: typer.prompt(s),
-            )
-        if not (token and token.access):
-            console.print("[red]✗ Authentication failed[/red]")
-            raise typer.Exit(1)
+    if spec.is_local:
         console.print(
-            f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]"
+            f"[green]✓ {spec.label} is a local provider - no authentication needed.[/green]"
         )
-    except ImportError:
-        console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
-        raise typer.Exit(1)
-
-
-@_register_login("github_copilot")
-def _login_github_copilot() -> None:
-    import asyncio
-
-    console.print("[cyan]Starting GitHub Copilot device flow...[/cyan]\n")
-
-    async def _trigger():
-        from litellm import acompletion
-
-        await acompletion(
-            model="github_copilot/gpt-4o",
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=1,
+        console.print(
+            f"  Make sure {spec.label} is running and accessible at the configured endpoint."
         )
-
-    try:
-        asyncio.run(_trigger())
-        console.print("[green]✓ Authenticated with GitHub Copilot[/green]")
-    except Exception as e:
-        console.print(f"[red]Authentication error: {e}[/red]")
-        raise typer.Exit(1)
+    else:
+        console.print(f"[yellow]For {spec.label}, set API key in config:[/yellow]")
+        console.print(f"  providers.{spec.name}.apiKey = 'your-api-key'")
 
 
 if __name__ == "__main__":

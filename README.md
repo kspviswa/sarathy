@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="sarathy_logo.png" alt="sarathy" width="500">
+  <img src="https://raw.githubusercontent.com/kspviswa/sarathy/refs/heads/main/sarathy_logo.png" alt="sarathy" width="500">
   <h1>Sarathy : My Personal Assistant</h1>
   <p>
     <a href="https://pypi.org/project/sarathy/"><img src="https://img.shields.io/pypi/v/sarathy" alt="PyPI"></a>

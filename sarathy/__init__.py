@@ -2,5 +2,7 @@
 sarathy - A lightweight AI agent framework
 """
 
-__version__ = "0.1.4.post2"
+from importlib.metadata import version
+
+__version__ = version("sarathy")
 __logo__ = "🐈"

@@ -254,6 +254,42 @@ class AgentLoop:
 
         return final_content, tools_used, messages
 
+    async def _suggest_memory_save(
+        self,
+        user_message: str,
+        assistant_response: str,
+    ) -> str | None:
+        """Ask LLM if there's anything important to remember from this exchange."""
+        prompt = f"""Did the user share any important information that should be saved to memory?
+Examples: preferences, API keys, important facts, personal details, project context.
+
+Respond with EXACTLY one of:
+- If important: "SAVE: <what to remember>"
+- If nothing important: "NO"
+
+User message: {user_message}
+Assistant response: {assistant_response[:500]}"""
+
+        try:
+            response = await self.provider.chat(
+                messages=[
+                    {"role": "user", "content": prompt},
+                ],
+                model=self.model,
+                temperature=0.1,
+                max_tokens=200,
+            )
+            content = response.content.strip() if response.content else ""
+            if content.startswith("SAVE:"):
+                memory_text = content[5:].strip()
+                current_memory = self.context.memory.read_long_term()
+                new_memory = f"{current_memory}\n- {memory_text}".strip()
+                self.context.memory.write_long_term(new_memory)
+                return memory_text
+        except Exception:
+            logger.exception("Failed to get memory suggestion")
+        return None
+
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
@@ -429,7 +465,23 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🐈 sarathi commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands",
+                content="🐈 sarathi commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/remember <text> — Save to memory\n/help — Show available commands",
+            )
+        if cmd.startswith("/remember "):
+            remember_text = msg.content[len("/remember ") :].strip()
+            if not remember_text:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Usage: /remember <text to save>\nExample: /remember My API key is abc123",
+                )
+            current_memory = self.context.memory.read_long_term()
+            new_memory = f"{current_memory}\n- {remember_text}".strip()
+            self.context.memory.write_long_term(new_memory)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f'✅ Saved to memory: "{remember_text}"',
             )
 
         unconsolidated = len(session.messages) - session.last_consolidated
@@ -488,6 +540,10 @@ class AgentLoop:
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+
+        suggested = await self._suggest_memory_save(msg.content, final_content or "")
+        if suggested:
+            logger.info("Auto-saved to memory: {}", suggested[:50])
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)

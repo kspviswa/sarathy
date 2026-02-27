@@ -530,6 +530,7 @@ Model context length: {self.context_length:,}
             verbose_arg = msg.content[len("/verbose") :].strip().lower()
             if verbose_arg in ("", "false", "off", "0"):
                 session.metadata["verbose"] = False
+                self.sessions.save(session)
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
@@ -537,6 +538,7 @@ Model context length: {self.context_length:,}
                 )
             elif verbose_arg in ("true", "on", "1"):
                 session.metadata["verbose"] = True
+                self.sessions.save(session)
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
@@ -596,6 +598,8 @@ Model context length: {self.context_length:,}
                 )
             )
 
+        verbose_flag = session.metadata.get("verbose", False)
+
         final_content, _, all_msgs, stats = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
@@ -603,6 +607,13 @@ Model context length: {self.context_length:,}
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
+
+        # Append tokens/sec if verbose is enabled
+        if verbose_flag and stats:
+            tps = stats.get("tokens_per_sec", 0)
+            tokens = stats.get("total_tokens", 0)
+            if tps > 0 and tokens > 0:
+                final_content = f"{final_content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
@@ -614,13 +625,67 @@ Model context length: {self.context_length:,}
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
 
+        metadata = dict(msg.metadata or {})
+        metadata["_stats"] = stats
+        metadata["_verbose"] = verbose_flag
+
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
                 return None
 
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=final_content,
+            metadata=metadata,
+        )
+
+        final_content, _, all_msgs, stats = await self._run_agent_loop(
+            initial_messages,
+            on_progress=on_progress or _bus_progress,
+        )
+
+        if final_content is None:
+            final_content = "I've completed processing but have no response to give."
+
+        # Append tokens/sec if verbose is enabled
+        if verbose_flag and stats:
+            tps = stats.get("tokens_per_sec", 0)
+            tokens = stats.get("total_tokens", 0)
+            if tps > 0 and tokens > 0:
+                final_content = f"{final_content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
+
+        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
+        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+
+        suggested = await self._suggest_memory_save(msg.content, final_content or "")
+        if suggested:
+            logger.info("Auto-saved to memory: {}", suggested[:50])
+
+        self._save_turn(session, all_msgs, 1 + len(history))
+        self.sessions.save(session)
+
+        logger.debug(
+            f"Session key={session.key}, verbose={verbose_flag}, session.metadata={session.metadata}"
+        )
+
+        # Update message tool with stats if it was used
+        if message_tool := self.tools.get("message"):
+            if isinstance(message_tool, MessageTool):
+                message_tool.set_response_metadata(
+                    {
+                        "_verbose": verbose_flag,
+                        "_stats": stats,
+                    }
+                )
+
         metadata = dict(msg.metadata or {})
         metadata["_stats"] = stats
-        metadata["_verbose"] = session.metadata.get("verbose", False)
+        metadata["_verbose"] = verbose_flag
+
+        if message_tool := self.tools.get("message"):
+            if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
+                return None
 
         return OutboundMessage(
             channel=msg.channel,

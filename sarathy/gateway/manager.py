@@ -173,18 +173,26 @@ def get_recent_logs(lines: int = 50) -> str:
     Returns:
         Log content as string
     """
-    logs_dir = get_logs_dir()
-    if not logs_dir.exists():
+    latest_log = get_latest_log_file()
+    if not latest_log:
         return ""
 
-    log_files = sorted(logs_dir.glob("gateway_*.log"), reverse=True)
-    if not log_files:
-        return ""
-
-    latest_log = log_files[0]
     try:
         content = latest_log.read_text()
         log_lines = content.strip().split("\n")
         return "\n".join(log_lines[-lines:])
     except IOError:
         return ""
+
+
+def get_latest_log_file() -> Path | None:
+    """Get the most recent gateway log file."""
+    logs_dir = get_logs_dir()
+    if not logs_dir.exists():
+        return None
+
+    log_files = sorted(logs_dir.glob("gateway_*.log"), reverse=True)
+    if not log_files:
+        return None
+
+    return log_files[0]

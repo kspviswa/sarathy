@@ -114,6 +114,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("start", "Start the bot"),
         BotCommand("new", "Start a new conversation"),
         BotCommand("stop", "Stop the current task"),
+        BotCommand("verbose", "Toggle token speed display"),
         BotCommand("help", "Show available commands"),
     ]
 
@@ -151,6 +152,7 @@ class TelegramChannel(BaseChannel):
         # Add command handlers
         self._app.add_handler(CommandHandler("start", self._on_start))
         self._app.add_handler(CommandHandler("new", self._forward_command))
+        self._app.add_handler(CommandHandler("verbose", self._forward_command))
         self._app.add_handler(CommandHandler("help", self._on_help))
 
         # Add message handler for text, photos, voice, documents
@@ -272,7 +274,17 @@ class TelegramChannel(BaseChannel):
 
         # Send text content
         if msg.content and msg.content != "[empty message]":
-            for chunk in _split_message(msg.content):
+            content = msg.content
+
+            # Append tokens/sec if verbose is enabled
+            if msg.metadata.get("_verbose") and msg.metadata.get("_stats"):
+                stats = msg.metadata["_stats"]
+                tps = stats.get("tokens_per_sec", 0)
+                tokens = stats.get("total_tokens", 0)
+                if tps > 0 and tokens > 0:
+                    content = f"{content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
+
+            for chunk in _split_message(content):
                 try:
                     html = _markdown_to_telegram_html(chunk)
                     await self._app.bot.send_message(

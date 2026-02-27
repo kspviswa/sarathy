@@ -192,16 +192,21 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
-    ) -> tuple[str | None, list[str], list[dict]]:
-        """Run the agent iteration loop. Returns (final_content, tools_used, messages)."""
+    ) -> tuple[str | None, list[str], list[dict], dict]:
+        """Run the agent iteration loop. Returns (final_content, tools_used, messages, stats)."""
+        import time
+
         messages = initial_messages
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        total_tokens = 0
+        total_time = 0.0
 
         while iteration < self.max_iterations:
             iteration += 1
 
+            start_time = time.perf_counter()
             response = await self.provider.chat(
                 messages=messages,
                 tools=self.tools.get_definitions(),
@@ -209,6 +214,11 @@ class AgentLoop:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
+            elapsed = time.perf_counter() - start_time
+
+            if response.usage:
+                total_tokens += response.usage.get("completion_tokens", 0)
+                total_time += elapsed
 
             if response.has_tool_calls:
                 if on_progress:
@@ -254,7 +264,13 @@ class AgentLoop:
                 "without completing the task. You can try breaking the task into smaller steps."
             )
 
-        return final_content, tools_used, messages
+        stats = {
+            "total_tokens": total_tokens,
+            "total_time": total_time,
+            "tokens_per_sec": (total_tokens / total_time) if total_time > 0 else 0,
+        }
+
+        return final_content, tools_used, messages, stats
 
     async def _suggest_memory_save(
         self,
@@ -414,7 +430,7 @@ Assistant response: {assistant_response[:500]}"""
                 channel=channel,
                 chat_id=chat_id,
             )
-            final_content, _, all_msgs = await self._run_agent_loop(messages)
+            final_content, _, all_msgs, _ = await self._run_agent_loop(messages)
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             return OutboundMessage(
@@ -467,7 +483,7 @@ Assistant response: {assistant_response[:500]}"""
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🪆 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/context — Show context usage\n/remember <text> — Save to memory\n/help — Show available commands",
+                content="🪆 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/context — Show context usage\n/remember <text> — Save to memory\n/verbose [true|false] — Show token speed\n/help — Show available commands",
             )
         if cmd == "/context":
             msg_count = len(session.messages)
@@ -510,6 +526,29 @@ Model context length: {self.context_length:,}
                 chat_id=msg.chat_id,
                 content=f'✅ Saved to memory: "{remember_text}"',
             )
+        if cmd.startswith("/verbose"):
+            verbose_arg = msg.content[len("/verbose") :].strip().lower()
+            if verbose_arg in ("", "false", "off", "0"):
+                session.metadata["verbose"] = False
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="✅ Verbose mode disabled. Token speed will not be shown.",
+                )
+            elif verbose_arg in ("true", "on", "1"):
+                session.metadata["verbose"] = True
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="✅ Verbose mode enabled. Token speed will be shown with responses.",
+                )
+            else:
+                current = session.metadata.get("verbose", False)
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"Usage: /verbose [true|false]\nCurrent: verbose={current}",
+                )
 
         unconsolidated = len(session.messages) - session.last_consolidated
         if unconsolidated >= self.memory_window and session.key not in self._consolidating:
@@ -557,7 +596,7 @@ Model context length: {self.context_length:,}
                 )
             )
 
-        final_content, _, all_msgs = await self._run_agent_loop(
+        final_content, _, all_msgs, stats = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
         )
@@ -579,11 +618,15 @@ Model context length: {self.context_length:,}
             if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
                 return None
 
+        metadata = dict(msg.metadata or {})
+        metadata["_stats"] = stats
+        metadata["_verbose"] = session.metadata.get("verbose", False)
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
-            metadata=msg.metadata or {},
+            metadata=metadata,
         )
 
     _TOOL_RESULT_MAX_CHARS = 500

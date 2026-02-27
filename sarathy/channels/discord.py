@@ -32,9 +32,9 @@ def _split_message(content: str, max_len: int = MAX_MESSAGE_LEN) -> list[str]:
             chunks.append(content)
             break
         cut = content[:max_len]
-        pos = cut.rfind('\n')
+        pos = cut.rfind("\n")
         if pos <= 0:
-            pos = cut.rfind(' ')
+            pos = cut.rfind(" ")
         if pos <= 0:
             pos = max_len
         chunks.append(content[:pos])
@@ -104,8 +104,18 @@ class DiscordChannel(BaseChannel):
         url = f"{DISCORD_API_BASE}/channels/{msg.chat_id}/messages"
         headers = {"Authorization": f"Bot {self.config.token}"}
 
+        content = msg.content or ""
+
+        # Append tokens/sec if verbose is enabled
+        if msg.metadata.get("_verbose") and msg.metadata.get("_stats"):
+            stats = msg.metadata["_stats"]
+            tps = stats.get("tokens_per_sec", 0)
+            tokens = stats.get("total_tokens", 0)
+            if tps > 0 and tokens > 0:
+                content = f"{content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
+
         try:
-            chunks = _split_message(msg.content or "")
+            chunks = _split_message(content)
             if not chunks:
                 return
 
@@ -249,7 +259,9 @@ class DiscordChannel(BaseChannel):
                 continue
             try:
                 media_dir.mkdir(parents=True, exist_ok=True)
-                file_path = media_dir / f"{attachment.get('id', 'file')}_{filename.replace('/', '_')}"
+                file_path = (
+                    media_dir / f"{attachment.get('id', 'file')}_{filename.replace('/', '_')}"
+                )
                 resp = await self._http.get(url)
                 resp.raise_for_status()
                 file_path.write_bytes(resp.content)

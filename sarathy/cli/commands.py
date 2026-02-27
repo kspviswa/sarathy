@@ -367,14 +367,24 @@ def gateway_logs(
 
     if follow:
         import subprocess
-        import sys
+        import signal
 
-        log_file = get_log_file_path()
+        from sarathy.gateway.manager import get_latest_log_file
+
+        log_file = get_latest_log_file()
+        if not log_file or not log_file.exists():
+            console.print("[red]No log file found.[/red]")
+            raise typer.Exit(1)
+
         console.print(f"[dim]Following {log_file}... (Ctrl+C to exit)[/dim]")
+        proc = None
         try:
-            subprocess.run(["tail", "-f", str(log_file)], check=True)
+            proc = subprocess.Popen(["tail", "-f", str(log_file)], stdout=1, stderr=1)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            proc.wait()
         except KeyboardInterrupt:
-            pass
+            if proc:
+                proc.terminate()
         return
 
     logs = get_recent_logs(lines=lines)

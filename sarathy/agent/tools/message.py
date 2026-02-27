@@ -21,12 +21,17 @@ class MessageTool(Tool):
         self._default_chat_id = default_chat_id
         self._default_message_id = default_message_id
         self._sent_in_turn: bool = False
+        self._response_metadata: dict[str, Any] = {}
 
     def set_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Set the current message context."""
         self._default_channel = channel
         self._default_chat_id = chat_id
         self._default_message_id = message_id
+
+    def set_response_metadata(self, metadata: dict[str, Any]) -> None:
+        """Set metadata for response (verbose, stats, etc)."""
+        self._response_metadata = metadata
 
     def set_send_callback(self, callback: Callable[[OutboundMessage], Awaitable[None]]) -> None:
         """Set the callback for sending messages."""
@@ -35,6 +40,7 @@ class MessageTool(Tool):
     def start_turn(self) -> None:
         """Reset per-turn send tracking."""
         self._sent_in_turn = False
+        self._response_metadata = {}
 
     @property
     def name(self) -> str:
@@ -73,6 +79,15 @@ class MessageTool(Tool):
         media: list[str] | None = None,
         **kwargs: Any,
     ) -> str:
+        # Handle case where model passes a dict instead of string
+        if isinstance(content, dict):
+            # Extract values from dict if passed
+            content_dict = content
+            channel = channel or content_dict.get("channel")
+            chat_id = chat_id or content_dict.get("chat_id")
+            content = content_dict.get("content", str(content_dict))
+            media = media or content_dict.get("media", [])
+
         channel = channel or self._default_channel
         chat_id = chat_id or self._default_chat_id
         message_id = message_id or self._default_message_id
@@ -82,6 +97,14 @@ class MessageTool(Tool):
 
         if not self._send_callback:
             return "Error: Message sending not configured"
+
+        # Append verbose stats if enabled
+        if self._response_metadata.get("_verbose") and self._response_metadata.get("_stats"):
+            stats = self._response_metadata["_stats"]
+            tps = stats.get("tokens_per_sec", 0)
+            tokens = stats.get("total_tokens", 0)
+            if tps > 0 and tokens > 0:
+                content = f"{content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
 
         msg = OutboundMessage(
             channel=channel,
@@ -95,7 +118,8 @@ class MessageTool(Tool):
 
         try:
             await self._send_callback(msg)
-            self._sent_in_turn = True
+            if channel == self._default_channel and chat_id == self._default_chat_id:
+                self._sent_in_turn = True
             media_info = f" with {len(media)} attachments" if media else ""
             return f"Message sent to {channel}:{chat_id}{media_info}"
         except Exception as e:

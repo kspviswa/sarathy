@@ -90,8 +90,7 @@ def start_gateway(
     cmd = [
         sys.executable,
         "-m",
-        "sarathy",
-        "gateway",
+        "sarathy.gateway.run",
         "--port",
         str(port),
     ]

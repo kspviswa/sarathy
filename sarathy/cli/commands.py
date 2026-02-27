@@ -305,6 +305,39 @@ def gateway_stop():
         raise typer.Exit(1)
 
 
+@gateway_app.command("restart")
+def gateway_restart(
+    port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Restart the sarathy gateway (stop and start)."""
+    from sarathy.gateway.manager import (
+        get_log_file_path,
+        is_gateway_running,
+        start_gateway,
+        stop_gateway,
+    )
+
+    was_running = is_gateway_running()
+
+    if was_running:
+        console.print("[dim]Stopping gateway...[/dim]")
+        if not stop_gateway():
+            console.print("[red]Failed to stop gateway[/red]")
+            raise typer.Exit(1)
+        console.print("[green]✓[/green] Gateway stopped")
+
+    console.print(f"[dim]Starting gateway on port {port}...[/dim]")
+    console.print(f"[dim]Logs: {get_log_file_path()}[/dim]")
+
+    try:
+        start_gateway(port=port, verbose=verbose)
+        console.print(f"[green]✓[/green] Gateway started")
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
 @gateway_app.command("status")
 def gateway_status():
     """Show gateway status."""
@@ -323,13 +356,26 @@ def gateway_status():
 @gateway_app.command("logs")
 def gateway_logs(
     lines: int = typer.Option(50, "--lines", "-n", help="Number of log lines to show"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output (like tail -f)"),
 ):
     """Show gateway logs."""
-    from sarathy.gateway.manager import get_recent_logs, is_gateway_running
+    from sarathy.gateway.manager import get_recent_logs, get_log_file_path, is_gateway_running
 
     if not is_gateway_running():
         console.print("[yellow]Gateway is not running. No logs available.[/yellow]")
         raise typer.Exit(1)
+
+    if follow:
+        import subprocess
+        import sys
+
+        log_file = get_log_file_path()
+        console.print(f"[dim]Following {log_file}... (Ctrl+C to exit)[/dim]")
+        try:
+            subprocess.run(["tail", "-f", str(log_file)], check=True)
+        except KeyboardInterrupt:
+            pass
+        return
 
     logs = get_recent_logs(lines=lines)
     if logs:

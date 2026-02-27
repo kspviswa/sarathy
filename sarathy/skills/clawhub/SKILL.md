@@ -2,7 +2,7 @@
 name: clawhub
 description: Search and install agent skills from ClawHub, the public skill registry.
 homepage: https://clawhub.ai
-metadata: {"sarathi":{"emoji":"🦞"}}
+metadata: {"sarathy":{"emoji":"🦞"}}
 ---
 
 # ClawHub
@@ -27,21 +27,21 @@ npx --yes clawhub@latest search "web scraping" --limit 5
 ## Install
 
 ```bash
-npx --yes clawhub@latest install <slug> --workdir ~/.sarathi/workspace
+npx --yes clawhub@latest install <slug> --workdir ~/.sarathy/workspace
 ```
 
-Replace `<slug>` with the skill name from search results. This places the skill into `~/.sarathi/workspace/skills/`, where sarathi loads workspace skills from. Always include `--workdir`.
+Replace `<slug>` with the skill name from search results. This places the skill into `~/.sarathy/workspace/skills/`, where sarathy loads workspace skills from. Always include `--workdir`.
 
 ## Update
 
 ```bash
-npx --yes clawhub@latest update --all --workdir ~/.sarathi/workspace
+npx --yes clawhub@latest update --all --workdir ~/.sarathy/workspace
 ```
 
 ## List installed
 
 ```bash
-npx --yes clawhub@latest list --workdir ~/.sarathi/workspace
+npx --yes clawhub@latest list --workdir ~/.sarathy/workspace
 ```
 
 ## Notes
@@ -49,5 +49,5 @@ npx --yes clawhub@latest list --workdir ~/.sarathi/workspace
 - Requires Node.js (`npx` comes with it).
 - No API key needed for search and install.
 - Login (`npx --yes clawhub@latest login`) is only required for publishing.
-- `--workdir ~/.sarathi/workspace` is critical — without it, skills install to the current directory instead of the sarathi workspace.
+- `--workdir ~/.sarathy/workspace` is critical — without it, skills install to the current directory instead of the sarathy workspace.
 - After install, remind the user to start a new session to load the skill.

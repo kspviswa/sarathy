@@ -467,7 +467,7 @@ Assistant response: {assistant_response[:500]}"""
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🐈 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/context — Show context usage\n/remember <text> — Save to memory\n/help — Show available commands",
+                content="🪆 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/context — Show context usage\n/remember <text> — Save to memory\n/help — Show available commands",
             )
         if cmd == "/context":
             msg_count = len(session.messages)

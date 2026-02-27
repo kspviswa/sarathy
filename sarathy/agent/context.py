@@ -58,7 +58,7 @@ Skills with available="false" need dependencies installed first - you can try in
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
-        return f"""# sarathy 🐈
+        return f"""# sarathy 🪆
 
 You are sarathy, a helpful AI assistant.
 

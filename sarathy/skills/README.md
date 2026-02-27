@@ -1,6 +1,6 @@
-# sarathi Skills
+# sarathy Skills
 
-This directory contains built-in skills that extend sarathi's capabilities.
+This directory contains built-in skills that extend sarathy's capabilities.
 
 ## Skill Format
 

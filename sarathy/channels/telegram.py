@@ -298,7 +298,7 @@ class TelegramChannel(BaseChannel):
         if not update.message:
             return
         await update.message.reply_text(
-            "🐈 sarathy commands:\n"
+            "🪆 sarathy commands:\n"
             "/new — Start a new conversation\n"
             "/stop — Stop the current task\n"
             "/help — Show available commands"

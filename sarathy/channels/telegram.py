@@ -229,13 +229,59 @@ class TelegramChannel(BaseChannel):
             logger.warning("Telegram bot not running")
             return
 
-        self._stop_typing(msg.chat_id)
+        is_progress = msg.metadata.get("_progress", False)
 
+        # Handle progress messages
+        if is_progress:
+            if self.config.streaming:
+                await self._send_progress(msg)
+            # If not streaming, skip progress (or could send as separate messages)
+            return
+
+        # Final message
+        await self._send_final(msg)
+
+    async def _send_progress(self, msg: OutboundMessage) -> None:
+        """Send a progress message (streaming) using sendMessageDraft."""
+        if not msg.content:
+            return
+
+        chat_id = str(msg.chat_id)
         try:
-            chat_id = int(msg.chat_id)
+            chat_id = int(chat_id)
         except ValueError:
             logger.error("Invalid chat_id: {}", msg.chat_id)
             return
+
+        is_tool_hint = msg.metadata.get("_tool_hint", False)
+        prefix = "🔧 " if is_tool_hint else "↳ "
+
+        try:
+            html = _markdown_to_telegram_html(prefix + msg.content)
+            message_id = msg.metadata.get("_telegram_message_id")
+
+            if message_id:
+                await self._app.bot.edit_message_text(
+                    chat_id=chat_id, message_id=message_id, text=html, parse_mode="HTML"
+                )
+            else:
+                sent = await self._app.bot.send_message(
+                    chat_id=chat_id, text=html, parse_mode="HTML"
+                )
+                msg.metadata["_telegram_message_id"] = sent.message_id
+        except Exception as e:
+            logger.warning("Failed to send progress: {}", e)
+
+    async def _send_final(self, msg: OutboundMessage) -> None:
+        """Send the final message."""
+        chat_id_str = str(msg.chat_id)
+        try:
+            chat_id_int = int(chat_id_str)
+        except ValueError:
+            logger.error("Invalid chat_id: {}", msg.chat_id)
+            return
+
+        self._stop_typing(chat_id_str)
 
         reply_params = None
         if self.config.reply_to_message:
@@ -262,39 +308,32 @@ class TelegramChannel(BaseChannel):
                     else "document"
                 )
                 with open(media_path, "rb") as f:
-                    await sender(chat_id=chat_id, **{param: f}, reply_parameters=reply_params)
+                    await sender(chat_id=chat_id_int, **{param: f}, reply_parameters=reply_params)
             except Exception as e:
                 filename = media_path.rsplit("/", 1)[-1]
                 logger.error("Failed to send media {}: {}", media_path, e)
                 await self._app.bot.send_message(
-                    chat_id=chat_id,
+                    chat_id=chat_id_int,
                     text=f"[Failed to send: {filename}]",
                     reply_parameters=reply_params,
                 )
 
         # Send text content
         if msg.content and msg.content != "[empty message]":
-            content = msg.content
-
-            # Append tokens/sec if verbose is enabled
-            if msg.metadata.get("_verbose") and msg.metadata.get("_stats"):
-                stats = msg.metadata["_stats"]
-                tps = stats.get("tokens_per_sec", 0)
-                tokens = stats.get("total_tokens", 0)
-                if tps > 0 and tokens > 0:
-                    content = f"{content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
-
-            for chunk in _split_message(content):
+            for chunk in _split_message(msg.content):
                 try:
                     html = _markdown_to_telegram_html(chunk)
                     await self._app.bot.send_message(
-                        chat_id=chat_id, text=html, parse_mode="HTML", reply_parameters=reply_params
+                        chat_id=chat_id_int,
+                        text=html,
+                        parse_mode="HTML",
+                        reply_parameters=reply_params,
                     )
                 except Exception as e:
                     logger.warning("HTML parse failed, falling back to plain text: {}", e)
                     try:
                         await self._app.bot.send_message(
-                            chat_id=chat_id, text=chunk, reply_parameters=reply_params
+                            chat_id=chat_id_int, text=chunk, reply_parameters=reply_params
                         )
                     except Exception as e2:
                         logger.error("Error sending Telegram message: {}", e2)

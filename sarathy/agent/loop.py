@@ -470,8 +470,9 @@ Assistant response: {assistant_response[:500]}"""
                 parts = cmd.split(None, 1)
                 args = parts[1].strip() if len(parts) > 1 else ""
 
-                # If no args, show help
-                if not args:
+                # If no args AND has subcommands, show help
+                # Otherwise, execute the command
+                if not args and builtin.subcommands:
                     help_text = get_help_text(
                         builtin.name,
                         builtin.description,
@@ -644,7 +645,9 @@ Assistant response: {assistant_response[:500]}"""
         self.sessions.save(session)
         self.sessions.invalidate(session.key)
         return OutboundMessage(
-            channel=msg.channel, chat_id=msg.chat_id, content="New session started."
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=f"✨ Saved to memory and started a new session.\n\n🆔 Session ID: `{session.key}`\n\nReady for a fresh conversation!",
         )
 
     def _handle_clear_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
@@ -655,7 +658,7 @@ Assistant response: {assistant_response[:500]}"""
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
-            content="Session cleared (discarded without saving to memory).",
+            content=f"🗑️ Session cleared (discarded without saving to memory).\n\n🆔 New Session ID: `{session.key}`\n\nReady for a fresh conversation!",
         )
 
     def _handle_think_command(

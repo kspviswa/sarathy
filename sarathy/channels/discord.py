@@ -132,7 +132,10 @@ class DiscordChannel(BaseChannel):
                 if not await self._send_payload(url, headers, payload):
                     break  # Abort remaining chunks on failure
         finally:
-            await self._stop_typing(msg.chat_id)
+            # Only stop typing for final responses, not for intermediate message tool sends
+            is_final = msg.metadata.get("_final", True)
+            if is_final:
+                await self._stop_typing(msg.chat_id)
 
     async def _send_payload(
         self, url: str, headers: dict[str, str], payload: dict[str, Any]
@@ -293,10 +296,20 @@ class DiscordChannel(BaseChannel):
         """Start periodic typing indicator for a channel."""
         await self._stop_typing(channel_id)
 
+        import time
+
+        typing_ttl_seconds = 120  # 2 minutes TTL safety net
+
         async def typing_loop() -> None:
             url = f"{DISCORD_API_BASE}/channels/{channel_id}/typing"
             headers = {"Authorization": f"Bot {self.config.token}"}
+            start_time = time.monotonic()
             while self._running:
+                # Check TTL - stop after 2 minutes to prevent stuck indicators
+                if time.monotonic() - start_time > typing_ttl_seconds:
+                    logger.debug("Discord typing TTL reached ({}s); stopping", typing_ttl_seconds)
+                    await self._stop_typing(channel_id)
+                    break
                 try:
                     await self._http.post(url, headers=headers)
                 except asyncio.CancelledError:

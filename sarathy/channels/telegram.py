@@ -339,7 +339,10 @@ class TelegramChannel(BaseChannel):
             logger.error("Invalid chat_id: {}", msg.chat_id)
             return
 
-        self._stop_typing(chat_id_str)
+        # Only stop typing for final responses, not for intermediate message tool sends
+        is_final = msg.metadata.get("_final", True)
+        if is_final:
+            self._stop_typing(chat_id_str)
 
         reply_params = None
         if self.config.reply_to_message:
@@ -536,9 +539,20 @@ class TelegramChannel(BaseChannel):
             task.cancel()
 
     async def _typing_loop(self, chat_id: str) -> None:
-        """Repeatedly send 'typing' action until cancelled."""
+        """Repeatedly send 'typing' action until cancelled. Includes TTL safety net."""
+        import time
+
+        typing_ttl_seconds = 120  # 2 minutes TTL safety net
+        start_time = time.monotonic()
         try:
             while self._app:
+                # Check TTL - stop after 2 minutes to prevent stuck indicators
+                if time.monotonic() - start_time > typing_ttl_seconds:
+                    logger.debug(
+                        "Typing TTL reached ({}s); stopping typing indicator", typing_ttl_seconds
+                    )
+                    self._stop_typing(chat_id)
+                    break
                 await self._app.bot.send_chat_action(chat_id=int(chat_id), action="typing")
                 await asyncio.sleep(4)
         except asyncio.CancelledError:

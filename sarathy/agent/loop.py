@@ -326,10 +326,11 @@ Assistant response: {assistant_response[:500]}"""
                 task = asyncio.create_task(self._dispatch(msg))
                 self._active_tasks.setdefault(msg.session_key, []).append(task)
                 task.add_done_callback(
-                    lambda t, k=msg.session_key: self._active_tasks.get(k, [])
-                    and self._active_tasks[k].remove(t)
-                    if t in self._active_tasks.get(k, [])
-                    else None
+                    lambda t, k=msg.session_key: (
+                        self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
+                        if t in self._active_tasks.get(k, [])
+                        else None
+                    )
                 )
 
     async def _handle_stop(self, msg: InboundMessage) -> None:
@@ -615,9 +616,6 @@ Model context length: {self.context_length:,}
             if tps > 0 and tokens > 0:
                 final_content = f"{final_content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
 
-        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
-        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
-
         suggested = await self._suggest_memory_save(msg.content, final_content or "")
         if suggested:
             logger.info("Auto-saved to memory: {}", suggested[:50])
@@ -629,9 +627,22 @@ Model context length: {self.context_length:,}
         metadata["_stats"] = stats
         metadata["_verbose"] = verbose_flag
 
+        # Only suppress final reply if message tool sent to DIFFERENT target
         if message_tool := self.tools.get("message"):
-            if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
-                return None
+            if isinstance(message_tool, MessageTool):
+                sent_targets = message_tool.get_turn_sends()
+                if (msg.channel, msg.chat_id) in sent_targets:
+                    # Message tool sent to same target - don't suppress, let it through
+                    pass
+                elif sent_targets:
+                    # Message tool sent to different target - suppress final
+                    return None
+
+        # Mark as final response so typing indicator knows to stop
+        metadata["_final"] = True
+
+        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
+        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         return OutboundMessage(
             channel=msg.channel,
@@ -683,9 +694,17 @@ Model context length: {self.context_length:,}
         metadata["_stats"] = stats
         metadata["_verbose"] = verbose_flag
 
+        # Only suppress final reply if message tool sent to DIFFERENT target
         if message_tool := self.tools.get("message"):
-            if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
-                return None
+            if isinstance(message_tool, MessageTool):
+                sent_targets = message_tool.get_turn_sends()
+                if (msg.channel, msg.chat_id) in sent_targets:
+                    pass  # Same target - don't suppress
+                elif sent_targets:
+                    return None  # Different target - suppress
+
+        # Mark as final response so typing indicator knows to stop
+        metadata["_final"] = True
 
         return OutboundMessage(
             channel=msg.channel,

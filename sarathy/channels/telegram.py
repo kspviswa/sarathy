@@ -155,6 +155,10 @@ class TelegramChannel(BaseChannel):
         # Add command handlers
         self._app.add_handler(CommandHandler("start", self._on_start))
         self._app.add_handler(CommandHandler("new", self._forward_command))
+        self._app.add_handler(CommandHandler("clear", self._forward_command))
+        self._app.add_handler(CommandHandler("think", self._forward_command))
+        self._app.add_handler(CommandHandler("context", self._forward_command))
+        self._app.add_handler(CommandHandler("remember", self._forward_command))
         self._app.add_handler(CommandHandler("verbose", self._forward_command))
         self._app.add_handler(CommandHandler("help", self._on_help))
 

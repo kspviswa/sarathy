@@ -10,19 +10,65 @@
 
 ## Who is Sarathy and Why ?
 
-Sarathy is my own AI assistant implementation focused on **local models**. Frustrated with bloated alternatives and API costs, I built this to run 100% offline with only the features I need.
+Sarathy is my own AI assistant implementation focused on **local models**. While [Openclaw](https://github.com/openclaw/openclaw) was a revolutionary idea, it’s heavily bloated and impossible for me to understand the data flow. It caters to all needs. Other similar OC variants also quickly becoming bloated even though they start small. 
 
-_Sarathy_ means helper, guide, driver, mentor in both Sanskrit & Tamil.
+Inspired by [nanoclaw](https://github.com/qwibitai/nanoclaw) and [karpathy tweet](https://x.com/karpathy/status/2024987174077432126?s=20) on personalizing agents, I decided to fork an implementation in the language I’m comfortable with. I forked off [nanobot](https://github.com/HKUDS/nanobot) and I made _Sarathy_. 
+
+I built this to run 100% local with only the features I need.
+
+> _Sarathy_ means helper, guide, driver, mentor in both Sanskrit & Tamil.
+
+
+## What's Different in Sarathy?
+
+While nanobot served as the initial inspiration, Sarathy has evolved significantly with many architectural changes and new features focused on local-first AI assistance.
+
+### Textual-based Interactive Onboarding
+- `sarathy onboard` launches a TUI wizard for first-time setup
+- Guided provider selection and configuration
+- Automatic workspace and skill template creation
+
+### Dynamic Skills System with Hot-Reload
+- Skills auto-discovered at runtime from `~/.sarathy/skills/` and workspace
+- File watcher monitors for changes (using **watchdog** instead of watchfiles)
+- No restart needed when adding/modifying skills
+- YAML-based skill definitions with multi-line help text support
+
+### Gateway Management
+- Full lifecycle management: `start`, `stop`, `restart`, `status`, `logs`
+- Background daemon with log rotation
+- `tail -f` style log streaming with `--follow` flag
+
+### Agent Enhancements
+- **Token usage tracking**: Real-time display of token count and generation speed
+- **Context length configuration**: Adjustable context window per session
+- **Reasoning effort**: Control model reasoning depth (low/medium/high)
+- **Session caching**: Configurable history and message limits
+
+### Channel Features
+- **Typing indicators**: Real-time typing status for Telegram and Discord
+- **Progress updates**: Tool execution progress shown in channels
+- **Verbose mode**: Detailed stats (token count, speed) in responses
+
+### Built-in Commands
+- `/think` - Enable reasoning mode
+- `/clear` - Clear conversation context
+- `/context` - Show conversation context
+- `/remember` - Persist information to memory
+- Unified handling across Telegram and Discord
+
+---
 
 ## Supported Models
 
-### Local Providers (Primary)
-- **Ollama** - `http://localhost:11434`
-- **LMStudio** - `http://localhost:1234/v1`
-- **vLLM** - any OpenAI-compatible local endpoint
+Sarathy focuses on local models. The following providers are supported:
 
-### Custom Endpoints
-- **Custom** - any OpenAI-compatible API (local or cloud)
+| Provider | Endpoint | Description |
+|----------|----------|-------------|
+| **Ollama** | `http://localhost:11434` | Local models via Ollama API |
+| **LMStudio** | `http://localhost:1234/v1` | Local models with OpenAI-compatible API |
+| **vLLM** | `http://localhost:8000/v1` | Local models with OpenAI-compatible API |
+| **Custom** | configurable | Any OpenAI-compatible endpoint |
 
 ## Supported Channels
 
@@ -59,7 +105,7 @@ pip install sarathy
 > [!TIP]
 > Make sure you have Ollama, LMStudio, or vLLM running before starting Sarathy.
 
-**1. Initialize**
+**1. Initialize** (Interactive TUI wizard)
 
 ```bash
 sarathy onboard
@@ -120,17 +166,200 @@ sarathy agent -m "Hello!"
 Or start the **gateway** for multi-channel support:
 
 ```bash
-sarathy gateway
+sarathy gateway start
 ```
+
+---
 
 ## CLI Reference
 
+### Main Commands
+
 | Command | Description |
 |---------|-------------|
-| `sarathy onboard` | Initialize config & workspace |
-| `sarathy agent -m "..."` | Chat with the agent |
-| `sarathy agent` | Interactive chat mode |
-| `sarathy gateway` | Start the gateway (Telegram/Discord/Email) |
-| `sarathy status` | Show status |
+| `sarathy onboard` | Interactive TUI wizard for initial setup |
+| `sarathy agent [OPTIONS]` | Chat with the agent |
+| `sarathy status` | Show sarathy status |
+| `sarathy version` | Show version information |
 
-Interactive mode exits: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`.
+#### Agent Options
+
+| Option | Description |
+|--------|-------------|
+| `-m, --message TEXT` | Message to send to the agent |
+| `-s, --session TEXT` | Session ID (default: `cli:direct`) |
+| `--markdown / --no-markdown` | Render output as Markdown (default: true) |
+| `--logs / --no-logs` | Show runtime logs during chat |
+
+#### Interactive Mode
+
+When running `sarathy agent` without `-m`:
+- Type messages to chat with the agent
+- Exit with: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`
+
+---
+
+### Gateway Management
+
+| Command | Description |
+|---------|-------------|
+| `sarathy gateway start [OPTIONS]` | Start the gateway in background |
+| `sarathy gateway stop` | Stop the running gateway |
+| `sarathy gateway restart [OPTIONS]` | Restart the gateway |
+| `sarathy gateway status` | Show gateway status |
+| `sarathy gateway logs [OPTIONS]` | Show gateway logs |
+
+#### Gateway Options
+
+| Option | Description |
+|--------|-------------|
+| `-p, --port INTEGER` | Gateway port (default: 18790) |
+| `-v, --verbose` | Verbose output |
+| `-n, --lines INTEGER` | Number of log lines (default: 50) |
+| `-f, --follow` | Follow log output (like `tail -f`) |
+
+---
+
+### Channel Management
+
+| Command | Description |
+|---------|-------------|
+| `sarathy channels status` | Show channel status (Telegram, Discord, Email) |
+
+---
+
+### Scheduled Tasks (Cron)
+
+| Command | Description |
+|---------|-------------|
+| `sarathy cron list [OPTIONS]` | List scheduled jobs |
+| `sarathy cron add [OPTIONS]` | Add a new scheduled job |
+| `sarathy cron remove JOB_ID` | Remove a scheduled job |
+| `sarathy cron enable JOB_ID` | Enable a job |
+| `sarathy cron disable JOB_ID` | Disable a job |
+| `sarathy cron run JOB_ID` | Manually run a job |
+
+#### Cron Options
+
+| Option | Description |
+|--------|-------------|
+| `-a, --all` | Include disabled jobs in list |
+| `-n, --name TEXT` | Job name (required for add) |
+| `-m, --message TEXT` | Message for agent (required for add) |
+| `-e, --every INTEGER` | Run every N seconds |
+| `-c, --cron TEXT` | Cron expression (e.g., `0 9 * * *`) |
+| `--tz TEXT` | IANA timezone (e.g., `America/Vancouver`) |
+| `--at TEXT` | Run once at time (ISO format) |
+| `-d, --deliver` | Deliver response to channel |
+| `--to TEXT` | Recipient for delivery |
+| `--channel TEXT` | Channel for delivery |
+
+---
+
+## Configuration Schema
+
+Key configuration sections in `~/.sarathy/config.json`:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "llama3",
+      "temperature": 0.7,
+      "max_tokens": 4096,
+      "max_tool_iterations": 10,
+      "memory_window": 10,
+      "session_cache_size": 100,
+      "max_session_messages": 50,
+      "context_length": 8192,
+      "reasoning_effort": "low"
+    }
+  },
+  "providers": {
+    "ollama": {},
+    "lmstudio": {},
+    "custom": {
+      "apiBase": "http://localhost:8000/v1"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "token": "YOUR_BOT_TOKEN"
+    },
+    "discord": {
+      "enabled": false,
+      "gateway_url": "YOUR_WEBHOOK_URL"
+    },
+    "email": {
+      "enabled": false,
+      "imap_host": "imap.example.com",
+      "smtp_host": "smtp.example.com"
+    }
+  },
+  "tools": {
+    "exec": {
+      "enabled": true
+    },
+    "web": {
+      "search": {
+        "api_key": "YOUR_BRAVE_API_KEY"
+      }
+    },
+    "restrict_to_workspace": true,
+    "mcp_servers": {}
+  },
+  "workspace_path": "~/sarathy-workspace"
+}
+```
+
+---
+
+## Workspace Structure
+
+```
+~/sarathy-workspace/
+├── memory/
+│   ├── MEMORY.md      # Persistent memory
+│   └── HISTORY.md     # Conversation history
+├── skills/            # Workspace-specific skills
+└── ...                # Your files and projects
+```
+
+---
+
+## Built-in Skills
+
+Sarathy includes several built-in skills:
+
+| Skill | Description |
+|-------|-------------|
+| `memory` | Read/write persistent memory |
+| `github` | GitHub repository operations |
+| `cron` | Schedule and manage tasks |
+| `tmux` | Terminal multiplexer control |
+| `summarize` | Summarize long content |
+| `weather` | Get weather information |
+| `clawhub` | ClawHub integration |
+| `skill-creator` | Create new skills |
+
+---
+
+## Development
+
+```bash
+# Install in development mode
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Lint
+ruff check sarathy/
+```
+
+## Contribution Guidelines
+
+As you can probably guess, I'm NOT interested (at the moment) to accept either feature requests or contributions to Sarathy. It is just for my own purposes. I have opened it to the public for others to get motivated (just like nanoclaw did). But if you find some security flaws and wanna be a good samaritan to point out, by all means do it.
+
+At some point in future, I might consider making sarathy as a general purpose tool ^[Although the chance is pretty slim since there are tons of such claws out there.]. 

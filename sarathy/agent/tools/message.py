@@ -20,7 +20,9 @@ class MessageTool(Tool):
         self._default_channel = default_channel
         self._default_chat_id = default_chat_id
         self._default_message_id = default_message_id
-        self._sent_in_turn: bool = False
+        self._turn_sends: list[
+            tuple[str, str]
+        ] = []  # List of (channel, chat_id) tuples sent this turn
         self._response_metadata: dict[str, Any] = {}
 
     def set_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
@@ -39,8 +41,12 @@ class MessageTool(Tool):
 
     def start_turn(self) -> None:
         """Reset per-turn send tracking."""
-        self._sent_in_turn = False
+        self._turn_sends = []
         self._response_metadata = {}
+
+    def get_turn_sends(self) -> list[tuple[str, str]]:
+        """Return list of (channel, chat_id) tuples sent this turn."""
+        return self._turn_sends.copy()
 
     @property
     def name(self) -> str:
@@ -118,8 +124,8 @@ class MessageTool(Tool):
 
         try:
             await self._send_callback(msg)
-            if channel == self._default_channel and chat_id == self._default_chat_id:
-                self._sent_in_turn = True
+            # Track the actual send target
+            self._turn_sends.append((channel, chat_id))
             media_info = f" with {len(media)} attachments" if media else ""
             return f"Message sent to {channel}:{chat_id}{media_info}"
         except Exception as e:

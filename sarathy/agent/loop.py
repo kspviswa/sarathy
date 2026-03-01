@@ -631,10 +631,14 @@ Model context length: {self.context_length:,}
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 sent_targets = message_tool.get_turn_sends()
+                logger.info("Message tool sent to: {}", sent_targets)
                 if (msg.channel, msg.chat_id) in sent_targets:
+                    logger.info("Message tool sent to SAME target - not suppressing final response")
                     # Message tool sent to same target - don't suppress, let it through
-                    pass
                 elif sent_targets:
+                    logger.info(
+                        "Message tool sent to DIFFERENT target - suppressing final response"
+                    )
                     # Message tool sent to different target - suppress final
                     return None
 
@@ -698,9 +702,14 @@ Model context length: {self.context_length:,}
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 sent_targets = message_tool.get_turn_sends()
+                logger.info("Message tool sent to: {}", sent_targets)
                 if (msg.channel, msg.chat_id) in sent_targets:
+                    logger.info("Message tool sent to SAME target - not suppressing final response")
                     pass  # Same target - don't suppress
                 elif sent_targets:
+                    logger.info(
+                        "Message tool sent to DIFFERENT target - suppressing final response"
+                    )
                     return None  # Different target - suppress
 
         # Mark as final response so typing indicator knows to stop

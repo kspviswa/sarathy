@@ -342,7 +342,12 @@ class TelegramChannel(BaseChannel):
         # Only stop typing for final responses, not for intermediate message tool sends
         is_final = msg.metadata.get("_final", True)
         if is_final:
+            logger.info("Telegram: stopping typing (final response) for chat_id={}", chat_id_str)
             self._stop_typing(chat_id_str)
+        else:
+            logger.info(
+                "Telegram: NOT stopping typing (intermediate message) for chat_id={}", chat_id_str
+            )
 
         reply_params = None
         if self.config.reply_to_message:
@@ -530,6 +535,7 @@ class TelegramChannel(BaseChannel):
         """Start sending 'typing...' indicator for a chat."""
         # Cancel any existing typing task for this chat
         self._stop_typing(chat_id)
+        logger.info("Telegram: starting typing indicator for chat_id={}", chat_id)
         self._typing_tasks[chat_id] = asyncio.create_task(self._typing_loop(chat_id))
 
     def _stop_typing(self, chat_id: str) -> None:

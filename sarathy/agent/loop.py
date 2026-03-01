@@ -259,6 +259,13 @@ class AgentLoop:
                         messages, tool_call.id, tool_call.name, result
                     )
             else:
+                # Add assistant message to history when there's no tool call
+                self.context.add_assistant_message(
+                    messages,
+                    response.content,
+                    tool_calls=None,
+                    reasoning_content=response.reasoning_content,
+                )
                 final_content = self._strip_think(response.content)
                 if final_content is None:
                     logger.warning(

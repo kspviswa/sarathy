@@ -387,33 +387,59 @@ class SkillManager:
         logger.info("Skill file watcher stopped")
 
     async def _watch_loop(self):
-        """Main watch loop using watchfiles."""
+        """Main watch loop using watchdog."""
         try:
-            from watchfiles import awatch
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
 
-            watch_dirs = []
-            if self.workspace_skills.exists():
-                watch_dirs.append(self.workspace_skills)
-            if self.global_skills.exists():
-                watch_dirs.append(self.global_skills)
+            class SkillFileHandler(FileSystemEventHandler):
+                def __init__(self, skill_manager):
+                    self.skill_manager = skill_manager
+                    self._last_modified = {}
 
-            if not watch_dirs:
-                return
+                def on_any_event(self, event):
+                    if event.is_directory:
+                        return
+                    if not event.src_path.endswith("SKILL.md"):
+                        return
 
-            async for changes in awatch(*watch_dirs, debounce=500, stop_event=self._stop_event):
-                for change_type, path in changes:
-                    if not path.endswith("SKILL.md"):
-                        continue
+                    # Debounce: ignore if we've seen this recently
+                    import time
 
-                    logger.debug(f"Skill file changed: {change_type} {path}")
-                    await self._handle_file_change(change_type, path)
+                    key = event.src_path
+                    now = time.time()
+                    if key in self._last_modified and now - self._last_modified[key] < 1.0:
+                        return
+                    self._last_modified[key] = now
+
+                    change_type = event.event_type
+                    logger.debug(f"Skill file changed: {change_type} {event.src_path}")
+
+                    # Schedule async handler in the event loop
+                    asyncio.create_task(
+                        self.skill_manager._handle_file_change(change_type, event.src_path)
+                    )
 
                     # Notify callbacks
-                    for callback in self._reload_callbacks:
-                        try:
-                            await callback()
-                        except Exception as e:
-                            logger.error(f"Reload callback failed: {e}")
+                    for callback in self.skill_manager._reload_callbacks:
+                        asyncio.create_task(callback())
+
+            handler = SkillFileHandler(self)
+            observer = Observer()
+
+            if self.workspace_skills.exists():
+                observer.schedule(handler, str(self.workspace_skills), recursive=True)
+            if self.global_skills.exists():
+                observer.schedule(handler, str(self.global_skills), recursive=True)
+
+            observer.start()
+
+            # Wait until stopped
+            await self._stop_event.wait()
+
+            observer.stop()
+            observer.join()
+
         except Exception as e:
             logger.error(f"Skill watcher error: {e}")
 

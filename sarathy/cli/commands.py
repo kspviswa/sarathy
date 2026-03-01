@@ -492,6 +492,7 @@ def agent(
         context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        reasoning_effort=config.agents.defaults.reasoning_effort,
     )
 
     # Show spinner when logs are off (no output to miss); skip when logs are on
@@ -858,6 +859,7 @@ def cron_run(
         context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        reasoning_effort=config.agents.defaults.reasoning_effort,
     )
 
     store_path = get_data_dir() / "cron" / "jobs.json"

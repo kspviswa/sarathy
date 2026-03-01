@@ -63,6 +63,7 @@ class AgentLoop:
         context_length: int = 8192,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        reasoning_effort: str | None = None,
     ):
         from sarathy.config.schema import ExecToolConfig
 
@@ -76,6 +77,7 @@ class AgentLoop:
         self.max_tokens = max_tokens
         self.memory_window = memory_window
         self.context_length = context_length
+        self.reasoning_effort = reasoning_effort
         self.brave_api_key = brave_api_key
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
@@ -213,6 +215,7 @@ class AgentLoop:
                 model=self.model,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+                reasoning_effort=self.reasoning_effort,
             )
             elapsed = time.perf_counter() - start_time
 
@@ -255,6 +258,13 @@ class AgentLoop:
                     )
             else:
                 final_content = self._strip_think(response.content)
+                if final_content is None:
+                    logger.warning(
+                        "Empty response from LLM (iteration {}). "
+                        "This may be due to extended thinking tokens being stripped, "
+                        "or an issue with the model/context. Consider checking reasoning_effort config.",
+                        iteration,
+                    )
                 break
 
         if final_content is None and iteration >= self.max_iterations:
@@ -607,7 +617,11 @@ Model context length: {self.context_length:,}
         )
 
         if final_content is None:
-            final_content = "I've completed processing but have no response to give."
+            logger.warning("Empty response generated - possible context length or model issue")
+            final_content = (
+                "I encountered an issue generating a response. This may be due to context length "
+                "or model issues. Try /clear or starting a new conversation."
+            )
 
         # Append tokens/sec if verbose is enabled
         if verbose_flag and stats:
@@ -655,73 +669,6 @@ Model context length: {self.context_length:,}
             metadata=metadata,
         )
 
-        final_content, _, all_msgs, stats = await self._run_agent_loop(
-            initial_messages,
-            on_progress=on_progress or _bus_progress,
-        )
-
-        if final_content is None:
-            final_content = "I've completed processing but have no response to give."
-
-        # Append tokens/sec if verbose is enabled
-        if verbose_flag and stats:
-            tps = stats.get("tokens_per_sec", 0)
-            tokens = stats.get("total_tokens", 0)
-            if tps > 0 and tokens > 0:
-                final_content = f"{final_content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
-
-        preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
-        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
-
-        suggested = await self._suggest_memory_save(msg.content, final_content or "")
-        if suggested:
-            logger.info("Auto-saved to memory: {}", suggested[:50])
-
-        self._save_turn(session, all_msgs, 1 + len(history))
-        self.sessions.save(session)
-
-        logger.debug(
-            f"Session key={session.key}, verbose={verbose_flag}, session.metadata={session.metadata}"
-        )
-
-        # Update message tool with stats if it was used
-        if message_tool := self.tools.get("message"):
-            if isinstance(message_tool, MessageTool):
-                message_tool.set_response_metadata(
-                    {
-                        "_verbose": verbose_flag,
-                        "_stats": stats,
-                    }
-                )
-
-        metadata = dict(msg.metadata or {})
-        metadata["_stats"] = stats
-        metadata["_verbose"] = verbose_flag
-
-        # Only suppress final reply if message tool sent to DIFFERENT target
-        if message_tool := self.tools.get("message"):
-            if isinstance(message_tool, MessageTool):
-                sent_targets = message_tool.get_turn_sends()
-                logger.info("Message tool sent to: {}", sent_targets)
-                if (msg.channel, msg.chat_id) in sent_targets:
-                    logger.info("Message tool sent to SAME target - not suppressing final response")
-                    pass  # Same target - don't suppress
-                elif sent_targets:
-                    logger.info(
-                        "Message tool sent to DIFFERENT target - suppressing final response"
-                    )
-                    return None  # Different target - suppress
-
-        # Mark as final response so typing indicator knows to stop
-        metadata["_final"] = True
-
-        return OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content=final_content,
-            metadata=metadata,
-        )
-
     _TOOL_RESULT_MAX_CHARS = 500
 
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
@@ -729,6 +676,9 @@ Model context length: {self.context_length:,}
         from datetime import datetime
 
         for m in messages[skip:]:
+            if m.get("role") == "assistant" and not m.get("content"):
+                logger.debug("Skipping empty assistant message in _save_turn")
+                continue
             entry = {k: v for k, v in m.items() if k != "reasoning_content"}
             if entry.get("role") == "tool" and isinstance(entry.get("content"), str):
                 content = entry["content"]

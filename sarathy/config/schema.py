@@ -93,6 +93,9 @@ class AgentDefaults(Base):
     context_length: int = (
         8192  # Max context length for the model (used for context usage calculation)
     )
+    reasoning_effort: str | None = (
+        None  # "off", "low", "medium", "high", "xhigh" for thinking-enabled models
+    )
 
 
 class AgentsConfig(Base):

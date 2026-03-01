@@ -87,6 +87,7 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
         context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        reasoning_effort=config.agents.defaults.reasoning_effort,
     )
 
     async def on_cron_job(job: CronJob) -> str | None:

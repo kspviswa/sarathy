@@ -372,6 +372,7 @@ class SkillManager:
             return
 
         self._stop_event = asyncio.Event()
+        self._event_queue: asyncio.Queue = asyncio.Queue()
         self._watch_task = asyncio.create_task(self._watch_loop())
         logger.info("Skill file watcher started")
 
@@ -391,10 +392,13 @@ class SkillManager:
         try:
             from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
+            import time
+
+            # Use a queue to communicate between watchdog thread and asyncio
+            event_queue = self._event_queue
 
             class SkillFileHandler(FileSystemEventHandler):
-                def __init__(self, skill_manager):
-                    self.skill_manager = skill_manager
+                def __init__(self):
                     self._last_modified = {}
 
                 def on_any_event(self, event):
@@ -403,42 +407,63 @@ class SkillManager:
                     if not event.src_path.endswith("SKILL.md"):
                         return
 
-                    # Debounce: ignore if we've seen this recently
-                    import time
-
+                    # Debounce
                     key = event.src_path
                     now = time.time()
                     if key in self._last_modified and now - self._last_modified[key] < 1.0:
                         return
                     self._last_modified[key] = now
 
-                    change_type = event.event_type
-                    logger.debug(f"Skill file changed: {change_type} {event.src_path}")
+                    # Put event in queue for processing in asyncio loop
+                    try:
+                        event_queue.put_nowait((event.event_type, event.src_path))
+                    except Exception:
+                        pass
 
-                    # Schedule async handler in the event loop
-                    asyncio.create_task(
-                        self.skill_manager._handle_file_change(change_type, event.src_path)
-                    )
-
-                    # Notify callbacks
-                    for callback in self.skill_manager._reload_callbacks:
-                        asyncio.create_task(callback())
-
-            handler = SkillFileHandler(self)
+            handler = SkillFileHandler()
             observer = Observer()
 
+            # Watch workspace skills
             if self.workspace_skills.exists():
                 observer.schedule(handler, str(self.workspace_skills), recursive=True)
+                logger.debug(f"Watching workspace skills: {self.workspace_skills}")
+
+            # Watch global skills
             if self.global_skills.exists():
                 observer.schedule(handler, str(self.global_skills), recursive=True)
+                logger.debug(f"Watching global skills: {self.global_skills}")
+
+            if not observer.emitters:
+                logger.warning("No skills directories to watch")
+                return
 
             observer.start()
+            logger.info("File observer started")
 
-            # Wait until stopped
-            await self._stop_event.wait()
+            # Process events from queue
+            while not self._stop_event.is_set():
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.5)
+                    change_type, path = event
+                    logger.debug(f"Skill file changed: {change_type} {path}")
+
+                    # Handle the file change
+                    await self._handle_file_change(change_type, path)
+
+                    # Notify callbacks
+                    for callback in self._reload_callbacks:
+                        try:
+                            await callback()
+                        except Exception as e:
+                            logger.error(f"Reload callback failed: {e}")
+                except asyncio.TimeoutError:
+                    continue
+                except Exception as e:
+                    logger.error(f"Error processing file event: {e}")
 
             observer.stop()
             observer.join()
+            logger.info("File observer stopped")
 
         except Exception as e:
             logger.error(f"Skill watcher error: {e}")

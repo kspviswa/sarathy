@@ -401,7 +401,7 @@ class SkillManager:
                 def __init__(self):
                     self._last_modified = {}
 
-                def on_any_event(self, event):
+                def on_modified(self, event):
                     if event.is_directory:
                         return
                     if not event.src_path.endswith("SKILL.md"):

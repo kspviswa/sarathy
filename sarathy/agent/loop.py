@@ -786,9 +786,14 @@ Model context length: {self.context_length:,}
         from datetime import datetime
 
         for m in messages[skip:]:
-            if m.get("role") == "assistant" and not m.get("content"):
-                logger.debug("Skipping empty assistant message in _save_turn")
-                continue
+            # Skip assistant messages only if BOTH content AND tool_calls are empty
+            # This preserves tool_calls in history (needed for context)
+            if m.get("role") == "assistant":
+                has_content = m.get("content")
+                has_tool_calls = m.get("tool_calls")
+                if not has_content and not has_tool_calls:
+                    logger.debug("Skipping empty assistant message in _save_turn")
+                    continue
             entry = {k: v for k, v in m.items() if k != "reasoning_content"}
             if entry.get("role") == "tool" and isinstance(entry.get("content"), str):
                 content = entry["content"]

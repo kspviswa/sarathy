@@ -206,6 +206,12 @@ class TelegramChannel(BaseChannel):
         # Add dynamic commands from command_manager
         if self.command_manager:
             for cmd_info in self.command_manager.get_all_commands():
+                # Telegram doesn't support hyphens in bot commands
+                if "-" in cmd_info.name:
+                    logger.debug(
+                        "Skipping command '{}' for Telegram (hyphens not supported)", cmd_info.name
+                    )
+                    continue
                 commands.append(BotCommand(cmd_info.name, cmd_info.description))
 
                 # Add handler for skill command if not already registered

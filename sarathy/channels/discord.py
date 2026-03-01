@@ -47,14 +47,16 @@ class DiscordChannel(BaseChannel):
 
     name = "discord"
 
-    def __init__(self, config: DiscordConfig, bus: MessageBus):
+    def __init__(self, config: DiscordConfig, bus: MessageBus, command_manager=None):
         super().__init__(config, bus)
         self.config: DiscordConfig = config
+        self.command_manager = command_manager
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._seq: int | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._typing_tasks: dict[str, asyncio.Task] = {}
         self._http: httpx.AsyncClient | None = None
+        self._registered_skill_commands: set[str] = set()
 
     async def start(self) -> None:
         """Start the Discord gateway connection."""

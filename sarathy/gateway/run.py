@@ -21,6 +21,11 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
 
     config = load_config()
 
+    # Ensure global skills are created on first run
+    from sarathy.cli.commands import _create_global_skills
+
+    _create_global_skills()
+
     bus = MessageBus()
     from sarathy.providers.litellm_provider import LiteLLMProvider
     from sarathy.providers.custom_provider import CustomProvider
@@ -105,7 +110,26 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
 
     cron.on_job = on_cron_job
 
-    channels = ChannelManager(config, bus)
+    # Initialize skill manager and command manager
+    from sarathy.agent.skills import SkillManager
+    from sarathy.core.commands import CommandManager
+
+    skill_manager = SkillManager(config.workspace_path)
+    command_manager = CommandManager()
+    command_manager.sync_from_skill_manager(skill_manager)
+
+    # Start skill manager watching
+    await skill_manager.start_watching()
+
+    # Update commands when skills change
+    async def on_skills_updated():
+        command_manager.sync_from_skill_manager(skill_manager)
+        await command_manager.notify_update()
+
+    skill_manager.on_reload(on_skills_updated)
+
+    # Initialize channels with command manager
+    channels = ChannelManager(config, bus, command_manager=command_manager)
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         enabled = set(channels.enabled_channels)

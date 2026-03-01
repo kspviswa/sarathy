@@ -180,6 +180,7 @@ def onboard():
         workspace.mkdir(parents=True, exist_ok=True)
 
     _create_workspace_templates(workspace)
+    _create_global_skills()
 
     from sarathy.cli.onboard import run_onboarding
 
@@ -214,7 +215,49 @@ def _create_workspace_templates(workspace: Path):
         history_file.write_text("", encoding="utf-8")
         console.print("  [dim]Created memory/HISTORY.md[/dim]")
 
-    (workspace / "skills").mkdir(exist_ok=True)
+    # Create workspace skills directory and populate with starter skills
+    workspace_skills_dir = workspace / "skills"
+    workspace_skills_dir.mkdir(exist_ok=True)
+
+    # Copy starter skills from templates
+    template_skills_dir = templates_dir / "skills"
+    if template_skills_dir.is_dir():
+        for skill_dir in template_skills_dir.iterdir():
+            if skill_dir.is_dir():
+                dest_skill_dir = workspace_skills_dir / skill_dir.name
+                dest_skill_dir.mkdir(exist_ok=True)
+                skill_file = skill_dir / "SKILL.md"
+                dest_skill_file = dest_skill_dir / "SKILL.md"
+                if not dest_skill_file.exists() and skill_file.is_file():
+                    dest_skill_file.write_text(
+                        skill_file.read_text(encoding="utf-8"), encoding="utf-8"
+                    )
+                    console.print(f"  [dim]Created skills/{skill_dir.name}/SKILL.md[/dim]")
+
+
+def _create_global_skills():
+    """Create ~/.sarathy/skills/ with built-in skills from the package."""
+    from importlib.resources import files as pkg_files
+
+    global_skills_dir = Path.home() / ".sarathy" / "skills"
+    global_skills_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get built-in skills from the package
+    builtin_skills_dir = Path(__file__).parent.parent / "skills"
+
+    if not builtin_skills_dir.exists():
+        return
+
+    # Copy built-in skills to ~/.sarathy/skills/ if they don't exist
+    for skill_dir in builtin_skills_dir.iterdir():
+        if skill_dir.is_dir():
+            dest_skill_dir = global_skills_dir / skill_dir.name
+            dest_skill_dir.mkdir(exist_ok=True)
+            skill_file = skill_dir / "SKILL.md"
+            dest_skill_file = dest_skill_dir / "SKILL.md"
+            if not dest_skill_file.exists() and skill_file.is_file():
+                dest_skill_file.write_text(skill_file.read_text(encoding="utf-8"), encoding="utf-8")
+                console.print(f"  [dim]Copied built-in skill: {skill_dir.name}[/dim]")
 
 
 def _make_provider(config: Config):

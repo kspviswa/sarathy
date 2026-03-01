@@ -109,8 +109,8 @@ class TelegramChannel(BaseChannel):
 
     name = "telegram"
 
-    # Commands registered with Telegram's command menu
-    BOT_COMMANDS = [
+    # Default commands registered with Telegram's command menu
+    DEFAULT_COMMANDS = [
         BotCommand("start", "Start the bot"),
         BotCommand("new", "Start a new conversation"),
         BotCommand("stop", "Stop the current task"),
@@ -122,12 +122,15 @@ class TelegramChannel(BaseChannel):
         self,
         config: TelegramConfig,
         bus: MessageBus,
+        command_manager=None,
     ):
         super().__init__(config, bus)
         self.config: TelegramConfig = config
+        self.command_manager = command_manager
         self._app: Application | None = None
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies
         self._typing_tasks: dict[str, asyncio.Task] = {}  # chat_id -> typing loop task
+        self._registered_skill_commands: set[str] = set()
 
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
@@ -180,11 +183,12 @@ class TelegramChannel(BaseChannel):
         bot_info = await self._app.bot.get_me()
         logger.info("Telegram bot @{} connected", bot_info.username)
 
-        try:
-            await self._app.bot.set_my_commands(self.BOT_COMMANDS)
-            logger.debug("Telegram bot commands registered")
-        except Exception as e:
-            logger.warning("Failed to register bot commands: {}", e)
+        # Register commands (default + dynamic from skills)
+        await self._register_commands()
+
+        # Register callback for command updates if command_manager is available
+        if self.command_manager:
+            self.command_manager.on_update(self._on_commands_updated)
 
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
@@ -195,6 +199,60 @@ class TelegramChannel(BaseChannel):
         # Keep running until stopped
         while self._running:
             await asyncio.sleep(1)
+
+    async def _register_commands(self) -> None:
+        """Register bot commands with Telegram."""
+        commands = list(self.DEFAULT_COMMANDS)
+
+        # Add dynamic commands from command_manager
+        if self.command_manager:
+            for cmd_info in self.command_manager.get_all_commands():
+                commands.append(BotCommand(cmd_info.name, cmd_info.description))
+
+                # Add handler for skill command if not already registered
+                if cmd_info.name not in self._registered_skill_commands:
+                    self._app.add_handler(CommandHandler(cmd_info.name, self._handle_skill_command))
+                    self._registered_skill_commands.add(cmd_info.name)
+
+        try:
+            await self._app.bot.set_my_commands(commands)
+            logger.debug(f"Registered {len(commands)} bot commands")
+        except Exception as e:
+            logger.warning("Failed to register bot commands: {}", e)
+
+    async def _on_commands_updated(self) -> None:
+        """Handle command updates from command manager."""
+        logger.info("Commands updated, re-registering...")
+        await self._register_commands()
+
+    async def _handle_skill_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle skill-based slash commands."""
+        if not update.message or not context.args is not None:
+            return
+
+        command_name = context.command
+
+        # Show help if no arguments provided
+        if not context.args:
+            if self.command_manager:
+                help_text = self.command_manager.get_command_help(command_name)
+                if help_text:
+                    await update.message.reply_text(help_text)
+                else:
+                    await update.message.reply_text(
+                        f"Command /{command_name} is available but no help text is defined."
+                    )
+            return
+
+        # Forward to agent for processing
+        args_text = " ".join(context.args)
+        await self._handle_message(
+            sender_id=self._sender_id(update.effective_user),
+            chat_id=str(update.message.chat_id),
+            content=f"/{command_name} {args_text}",
+        )
 
     async def stop(self) -> None:
         """Stop the Telegram bot."""

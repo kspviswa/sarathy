@@ -194,6 +194,7 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        reasoning_effort: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], dict]:
         """Run the agent iteration loop. Returns (final_content, tools_used, messages, stats)."""
         import time
@@ -215,7 +216,7 @@ class AgentLoop:
                 model=self.model,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
-                reasoning_effort=self.reasoning_effort,
+                reasoning_effort=reasoning_effort or self.reasoning_effort,
             )
             elapsed = time.perf_counter() - start_time
 
@@ -490,11 +491,44 @@ Assistant response: {assistant_response[:500]}"""
             return OutboundMessage(
                 channel=msg.channel, chat_id=msg.chat_id, content="New session started."
             )
+        if cmd == "/clear":
+            session.clear()
+            self.sessions.save(session)
+            self.sessions.invalidate(session.key)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Session cleared (discarded without saving to memory).",
+            )
+        if cmd.startswith("/think"):
+            args = msg.content[len("/think") :].strip()
+            if not args or args == "status":
+                current = session.metadata.get("reasoning_effort") or self.reasoning_effort or "off"
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"🧠 Thinking: {current}\n\nUse /think <level> to change. Levels: off, low, medium, high, xhigh",
+                )
+            level = args.lower()
+            valid_levels = {"off", "low", "medium", "high", "xhigh"}
+            if level not in valid_levels:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"Invalid level: {level}. Valid: off, low, medium, high, xhigh",
+                )
+            session.metadata["reasoning_effort"] = level
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"🧠 Thinking set to: {level}",
+            )
         if cmd == "/help":
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🪆 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/context — Show context usage\n/remember <text> — Save to memory\n/verbose [true|false] — Show token speed\n/help — Show available commands",
+                content="🪆 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/think [level] — Set thinking level (off/low/medium/high/xhigh)\n/context — Show context usage\n/remember <text> — Save to memory\n/verbose [true|false] — Show token speed\n/help — Show available commands",
             )
         if cmd == "/context":
             msg_count = len(session.messages)
@@ -611,9 +645,13 @@ Model context length: {self.context_length:,}
 
         verbose_flag = session.metadata.get("verbose", False)
 
+        effective_reasoning_effort = (
+            session.metadata.get("reasoning_effort") or self.reasoning_effort
+        )
         final_content, _, all_msgs, stats = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
+            reasoning_effort=effective_reasoning_effort,
         )
 
         if final_content is None:

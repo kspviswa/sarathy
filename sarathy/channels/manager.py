@@ -23,9 +23,10 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus):
+    def __init__(self, config: Config, bus: MessageBus, command_manager=None):
         self.config = config
         self.bus = bus
+        self.command_manager = command_manager
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
 
@@ -42,6 +43,7 @@ class ChannelManager:
                 self.channels["telegram"] = TelegramChannel(
                     self.config.channels.telegram,
                     self.bus,
+                    command_manager=self.command_manager,
                 )
                 logger.info("Telegram channel enabled")
             except ImportError as e:
@@ -52,7 +54,11 @@ class ChannelManager:
             try:
                 from sarathy.channels.discord import DiscordChannel
 
-                self.channels["discord"] = DiscordChannel(self.config.channels.discord, self.bus)
+                self.channels["discord"] = DiscordChannel(
+                    self.config.channels.discord,
+                    self.bus,
+                    command_manager=self.command_manager,
+                )
                 logger.info("Discord channel enabled")
             except ImportError as e:
                 logger.warning("Discord channel not available: {}", e)

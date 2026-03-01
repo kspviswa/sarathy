@@ -36,6 +36,8 @@ dependencies = [
     "prompt-toolkit>=3.0.50,<4.0.0",
     "mcp>=1.26.0,<2.0.0",
     "json-repair>=0.57.0,<1.0.0",
+    "watchfiles>=0.21.0,<1.0.0",
+    "pyyaml>=6.0.0,<7.0.0",
 ]
 
 [project.optional-dependencies]
@@ -63,6 +65,7 @@ packages = ["sarathy"]
 include = [
     "sarathy/**/*.py",
     "sarathy/templates/**/*.md",
+    "sarathy/templates/skills/**/*.md",
     "sarathy/skills/**/*.md",
     "sarathy/skills/**/*.sh",
 ]

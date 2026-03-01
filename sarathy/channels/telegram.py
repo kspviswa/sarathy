@@ -110,11 +110,9 @@ class TelegramChannel(BaseChannel):
     name = "telegram"
 
     # Default commands registered with Telegram's command menu
+    # Only /start and /help are local; all others come from CommandManager
     DEFAULT_COMMANDS = [
         BotCommand("start", "Start the bot"),
-        BotCommand("new", "Start a new conversation"),
-        BotCommand("stop", "Stop the current task"),
-        BotCommand("verbose", "Toggle token speed display"),
         BotCommand("help", "Show available commands"),
     ]
 
@@ -152,15 +150,12 @@ class TelegramChannel(BaseChannel):
         self._app = builder.build()
         self._app.add_error_handler(self._on_error)
 
-        # Add command handlers
+        # Add command handlers - only /start and /help are local, rest go to agent loop
         self._app.add_handler(CommandHandler("start", self._on_start))
-        self._app.add_handler(CommandHandler("new", self._forward_command))
-        self._app.add_handler(CommandHandler("clear", self._forward_command))
-        self._app.add_handler(CommandHandler("think", self._forward_command))
-        self._app.add_handler(CommandHandler("context", self._forward_command))
-        self._app.add_handler(CommandHandler("remember", self._forward_command))
-        self._app.add_handler(CommandHandler("verbose", self._forward_command))
         self._app.add_handler(CommandHandler("help", self._on_help))
+
+        # Forward all other commands to agent loop for unified handling
+        self._app.add_handler(MessageHandler(filters.COMMAND, self._forward_all_commands))
 
         # Add message handler for text, photos, voice, documents
         self._app.add_handler(
@@ -424,12 +419,15 @@ class TelegramChannel(BaseChannel):
         """Handle /help command, bypassing ACL so all users can access it."""
         if not update.message:
             return
-        await update.message.reply_text(
-            "🪆 sarathy commands:\n"
-            "/new — Start a new conversation\n"
-            "/stop — Stop the current task\n"
-            "/help — Show available commands"
-        )
+
+        lines = ["🪆 Available commands:"]
+
+        # Get built-in and skill commands from command manager
+        if self.command_manager:
+            for cmd in self.command_manager.get_all_commands():
+                lines.append(f"/{cmd.name} — {cmd.description}")
+
+        await update.message.reply_text("\n".join(lines))
 
     @staticmethod
     def _sender_id(user) -> str:
@@ -441,6 +439,25 @@ class TelegramChannel(BaseChannel):
         """Forward slash commands to the bus for unified handling in AgentLoop."""
         if not update.message or not update.effective_user:
             return
+        await self._handle_message(
+            sender_id=self._sender_id(update.effective_user),
+            chat_id=str(update.message.chat_id),
+            content=update.message.text,
+        )
+
+    async def _forward_all_commands(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Forward all slash commands (except /start, /help) to agent loop."""
+        if not update.message or not update.effective_user:
+            return
+
+        command = update.message.text.strip().lower()
+
+        # Skip /start and /help - they have local handlers
+        if command.startswith("/start") or command.startswith("/help"):
+            return
+
         await self._handle_message(
             sender_id=self._sender_id(update.effective_user),
             chat_id=str(update.message.chat_id),

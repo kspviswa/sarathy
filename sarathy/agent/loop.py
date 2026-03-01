@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
+from sarathy.agent.builtin_commands import BUILTIN_COMMANDS, get_help_text
 from sarathy.agent.context import ContextBuilder
 from sarathy.agent.memory import MemoryStore
 from sarathy.agent.subagent import SubagentManager
@@ -457,145 +458,50 @@ Assistant response: {assistant_response[:500]}"""
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
 
-        # Slash commands
+        # Slash commands - unified handler
         cmd = msg.content.strip().lower()
-        if cmd == "/new":
-            lock = self._get_consolidation_lock(session.key)
-            self._consolidating.add(session.key)
-            try:
-                async with lock:
-                    snapshot = session.messages[session.last_consolidated :]
-                    if snapshot:
-                        temp = Session(key=session.key)
-                        temp.messages = list(snapshot)
-                        if not await self._consolidate_memory(temp, archive_all=True):
-                            return OutboundMessage(
-                                channel=msg.channel,
-                                chat_id=msg.chat_id,
-                                content="Memory archival failed, session not cleared. Please try again.",
-                            )
-            except Exception:
-                logger.exception("/new archival failed for {}", session.key)
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="Memory archival failed, session not cleared. Please try again.",
-                )
-            finally:
-                self._consolidating.discard(session.key)
-                self._prune_consolidation_lock(session.key, lock)
 
-            session.clear()
-            self.sessions.save(session)
-            self.sessions.invalidate(session.key)
-            return OutboundMessage(
-                channel=msg.channel, chat_id=msg.chat_id, content="New session started."
-            )
-        if cmd == "/clear":
-            session.clear()
-            self.sessions.save(session)
-            self.sessions.invalidate(session.key)
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="Session cleared (discarded without saving to memory).",
-            )
-        if cmd.startswith("/think"):
-            args = msg.content[len("/think") :].strip()
-            if not args or args == "status":
-                current = session.metadata.get("reasoning_effort") or self.reasoning_effort or "off"
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=f"🧠 Thinking: {current}\n\nUse /think <level> to change. Levels: off, low, medium, high, xhigh",
-                )
-            level = args.lower()
-            valid_levels = {"off", "low", "medium", "high", "xhigh"}
-            if level not in valid_levels:
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=f"Invalid level: {level}. Valid: off, low, medium, high, xhigh",
-                )
-            session.metadata["reasoning_effort"] = level
-            self.sessions.save(session)
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=f"🧠 Thinking set to: {level}",
-            )
-        if cmd == "/help":
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="🪆 sarathy commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/think [level] — Set thinking level (off/low/medium/high/xhigh)\n/context — Show context usage\n/remember <text> — Save to memory\n/verbose [true|false] — Show token speed\n/help — Show available commands",
-            )
-        if cmd == "/context":
-            msg_count = len(session.messages)
-            unconsolidated = msg_count - session.last_consolidated
-            context_length = self.context_length
-            # Estimate: ~4 chars per token on average
-            estimated_tokens = sum(len(m.get("content", "")) for m in session.messages) // 4
-            estimated_tokens = min(estimated_tokens, unconsolidated * 500)  # Rough estimate
-            usage_pct = (
-                (min(unconsolidated, context_length) / context_length * 100)
-                if context_length
-                else 0
-            )
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=f"""📊 Context Usage
+        # Check if it's a built-in command
+        if cmd.startswith("/"):
+            cmd_name = cmd.split()[0][1:]  # Remove leading /
+            if cmd_name in BUILTIN_COMMANDS:
+                builtin = BUILTIN_COMMANDS[cmd_name]
+                # Parse command and args
+                parts = cmd.split(None, 1)
+                args = parts[1].strip() if len(parts) > 1 else ""
 
-Session: {msg.session_key}
-Messages in session: {msg_count}
-Messages to LLM: {unconsolidated} / {context_length}
-Est. tokens (recent): ~{estimated_tokens:,}
-Model context length: {self.context_length:,}
+                # If no args, show help
+                if not args:
+                    help_text = get_help_text(
+                        builtin.name,
+                        builtin.description,
+                        builtin.subcommands,
+                        builtin.has_status,
+                    )
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=help_text,
+                    )
 
-{"⚠️ Consider /new to start fresh" if usage_pct > 80 else "✅ Context OK"}""",
-            )
-        if cmd.startswith("/remember "):
-            remember_text = msg.content[len("/remember ") :].strip()
-            if not remember_text:
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="Usage: /remember <text to save>\nExample: /remember My API key is abc123",
-                )
-            current_memory = self.context.memory.read_long_term()
-            new_memory = f"{current_memory}\n- {remember_text}".strip()
-            self.context.memory.write_long_term(new_memory)
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=f'✅ Saved to memory: "{remember_text}"',
-            )
-        if cmd.startswith("/verbose"):
-            verbose_arg = msg.content[len("/verbose") :].strip().lower()
-            if verbose_arg in ("", "false", "off", "0"):
-                session.metadata["verbose"] = False
-                self.sessions.save(session)
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="✅ Verbose mode disabled. Token speed will not be shown.",
-                )
-            elif verbose_arg in ("true", "on", "1"):
-                session.metadata["verbose"] = True
-                self.sessions.save(session)
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="✅ Verbose mode enabled. Token speed will be shown with responses.",
-                )
-            else:
-                current = session.metadata.get("verbose", False)
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=f"Usage: /verbose [true|false]\nCurrent: verbose={current}",
-                )
+                # Handle each built-in command
+                if cmd_name == "new":
+                    return await self._handle_new_command(session, msg)
+                elif cmd_name == "clear":
+                    return self._handle_clear_command(session, msg)
+                elif cmd_name == "think":
+                    return self._handle_think_command(session, msg, args)
+                elif cmd_name == "verbose":
+                    return self._handle_verbose_command(session, msg, args)
+                elif cmd_name == "context":
+                    return self._handle_context_command(session, msg)
+                elif cmd_name == "remember":
+                    return self._handle_remember_command(session, msg, args)
+                elif cmd_name == "help":
+                    return self._handle_help_command(session, msg)
+                elif cmd_name == "stop":
+                    # Stop is handled in the message loop, not here
+                    pass
 
         unconsolidated = len(session.messages) - session.last_consolidated
         if unconsolidated >= self.memory_window and session.key not in self._consolidating:
@@ -705,6 +611,169 @@ Model context length: {self.context_length:,}
             chat_id=msg.chat_id,
             content=final_content,
             metadata=metadata,
+        )
+
+    async def _handle_new_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
+        """Handle /new command - start new conversation (saves to memory)."""
+        lock = self._get_consolidation_lock(session.key)
+        self._consolidating.add(session.key)
+        try:
+            async with lock:
+                snapshot = session.messages[session.last_consolidated :]
+                if snapshot:
+                    temp = Session(key=session.key)
+                    temp.messages = list(snapshot)
+                    if not await self._consolidate_memory(temp, archive_all=True):
+                        return OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content="Memory archival failed, session not cleared. Please try again.",
+                        )
+        except Exception:
+            logger.exception("/new archival failed for {}", session.key)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Memory archival failed, session not cleared. Please try again.",
+            )
+        finally:
+            self._consolidating.discard(session.key)
+            self._prune_consolidation_lock(session.key, lock)
+
+        session.clear()
+        self.sessions.save(session)
+        self.sessions.invalidate(session.key)
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content="New session started."
+        )
+
+    def _handle_clear_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
+        """Handle /clear command - clear session without saving."""
+        session.clear()
+        self.sessions.save(session)
+        self.sessions.invalidate(session.key)
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="Session cleared (discarded without saving to memory).",
+        )
+
+    def _handle_think_command(
+        self, session: Session, msg: InboundMessage, args: str
+    ) -> OutboundMessage:
+        """Handle /think command - set thinking level."""
+        if args == "status":
+            current = session.metadata.get("reasoning_effort") or self.reasoning_effort or "off"
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"🧠 Thinking: {current}\n\nUse /think <level> to change. Levels: off, low, medium, high, xhigh",
+            )
+
+        level = args.lower()
+        valid_levels = {"off", "low", "medium", "high", "xhigh"}
+        if level not in valid_levels:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"Invalid level: {level}. Valid: off, low, medium, high, xhigh",
+            )
+        session.metadata["reasoning_effort"] = level
+        self.sessions.save(session)
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=f"🧠 Thinking set to: {level}",
+        )
+
+    def _handle_verbose_command(
+        self, session: Session, msg: InboundMessage, args: str
+    ) -> OutboundMessage:
+        """Handle /verbose command - toggle token speed display."""
+        if args == "status":
+            current = session.metadata.get("verbose", False)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"📊 Verbose: {'on' if current else 'off'}",
+            )
+
+        if args in ("false", "off", "0"):
+            session.metadata["verbose"] = False
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="✅ Verbose mode disabled. Token speed will not be shown.",
+            )
+        elif args in ("true", "on", "1"):
+            session.metadata["verbose"] = True
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="✅ Verbose mode enabled. Token speed will be shown with responses.",
+            )
+        else:
+            current = session.metadata.get("verbose", False)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"Usage: /verbose [true|false|status]\nCurrent: {'on' if current else 'off'}",
+            )
+
+    def _handle_context_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
+        """Handle /context command - show context usage."""
+        msg_count = len(session.messages)
+        unconsolidated = msg_count - session.last_consolidated
+        context_length = self.context_length
+        estimated_tokens = sum(len(m.get("content", "")) for m in session.messages) // 4
+        estimated_tokens = min(estimated_tokens, unconsolidated * 500)
+        usage_pct = (
+            (min(unconsolidated, context_length) / context_length * 100) if context_length else 0
+        )
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=f"""📊 Context Usage
+
+Session: {msg.session_key}
+Messages in session: {msg_count}
+Messages to LLM: {unconsolidated} / {context_length}
+Est. tokens (recent): ~{estimated_tokens:,}
+Model context length: {self.context_length:,}
+
+{"⚠️ Consider /new to start fresh" if usage_pct > 80 else "✅ Context OK"}""",
+        )
+
+    def _handle_remember_command(
+        self, session: Session, msg: InboundMessage, args: str
+    ) -> OutboundMessage:
+        """Handle /remember command - save to memory."""
+        if not args:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Usage: /remember <text to save>\nExample: /remember My API key is abc123",
+            )
+        current_memory = self.context.memory.read_long_term()
+        new_memory = f"{current_memory}\n- {args}".strip()
+        self.context.memory.write_long_term(new_memory)
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=f'✅ Saved to memory: "{args}"',
+        )
+
+    def _handle_help_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
+        """Handle /help command - show all commands."""
+        lines = ["🪆 Available commands:"]
+        for cmd in BUILTIN_COMMANDS.values():
+            lines.append(f"/{cmd.name} — {cmd.description}")
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="\n".join(lines),
         )
 
     _TOOL_RESULT_MAX_CHARS = 500

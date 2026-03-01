@@ -119,6 +119,18 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     command_manager = CommandManager()
     command_manager.sync_from_skill_manager(skill_manager)
 
+    # Register built-in commands
+    from sarathy.agent.builtin_commands import BUILTIN_COMMANDS
+
+    for cmd in BUILTIN_COMMANDS.values():
+        command_manager.register_command(
+            name=cmd.name,
+            description=cmd.description,
+            skill_name="builtin",
+            help_text=f"{cmd.description}\n\nUsage: /{cmd.name}"
+            + (f" <{', '.join(cmd.subcommands)}>" if cmd.subcommands else ""),
+        )
+
     # Start skill manager watching
     await skill_manager.start_watching()
 

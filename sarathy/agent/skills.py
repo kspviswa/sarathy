@@ -324,30 +324,29 @@ class SkillManager:
         """Parse commands from skill frontmatter."""
         commands = []
 
-        # Extract YAML frontmatter
+        # Extract YAML frontmatter - match from --- to next ---
         if not content.startswith("---"):
             return commands
 
-        match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-        if not match:
-            return commands
+        # Find the closing ---
+        lines = content.split("\n")
+        frontmatter_lines = []
+        in_frontmatter = False
+        for i, line in enumerate(lines):
+            if line.strip() == "---" and i > 0:
+                break
+            frontmatter_lines.append(line)
 
-        frontmatter = match.group(1)
+        frontmatter = "\n".join(frontmatter_lines[1:])  # Skip first ---
 
         # Try to parse as YAML
         try:
             import yaml
 
             data = yaml.safe_load(frontmatter) or {}
-        except ImportError:
+        except Exception:
             # Fallback: simple parsing
             data = {}
-            for line in frontmatter.split("\n"):
-                if ":" in line and not line.startswith(" "):
-                    key, value = line.split(":", 1)
-                    if key.strip() == "commands":
-                        # This is a naive check, we'll do better below
-                        pass
 
         # Look for commands section
         commands_data = data.get("commands", [])

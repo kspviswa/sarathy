@@ -305,13 +305,13 @@ class TelegramChannel(BaseChannel):
         await self._send_final(msg)
 
     async def _send_progress(self, msg: OutboundMessage) -> None:
-        """Send a progress message (streaming) using sendMessageDraft."""
+        """Send a progress message (streaming) using sendMessageDraft API."""
         if not msg.content:
             return
 
-        chat_id = str(msg.chat_id)
+        chat_id_str = str(msg.chat_id)
         try:
-            chat_id = int(chat_id)
+            chat_id_int = int(chat_id_str)
         except ValueError:
             logger.error("Invalid chat_id: {}", msg.chat_id)
             return
@@ -321,19 +321,25 @@ class TelegramChannel(BaseChannel):
 
         try:
             html = _markdown_to_telegram_html(prefix + msg.content)
-            message_id = msg.metadata.get("_telegram_message_id")
+            draft_id = msg.metadata.get("_telegram_draft_id")
 
-            if message_id:
-                await self._app.bot.edit_message_text(
-                    chat_id=chat_id, message_id=message_id, text=html, parse_mode="HTML"
+            if draft_id:
+                await self._app.bot.send_message_draft(
+                    chat_id=chat_id_int,
+                    draft_id=draft_id,
+                    text=html,
+                    parse_mode="HTML",
                 )
             else:
-                sent = await self._app.bot.send_message(
-                    chat_id=chat_id, text=html, parse_mode="HTML"
+                await self._app.bot.send_message_draft(
+                    chat_id=chat_id_int,
+                    draft_id=chat_id_int,
+                    text=html,
+                    parse_mode="HTML",
                 )
-                msg.metadata["_telegram_message_id"] = sent.message_id
+                msg.metadata["_telegram_draft_id"] = chat_id_int
         except Exception as e:
-            logger.warning("Failed to send progress: {}", e)
+            logger.warning("Failed to send progress draft: {}", e)
 
     async def _send_final(self, msg: OutboundMessage) -> None:
         """Send the final message."""
@@ -344,11 +350,29 @@ class TelegramChannel(BaseChannel):
             logger.error("Invalid chat_id: {}", msg.chat_id)
             return
 
-        # Only stop typing for final responses, not for intermediate message tool sends
         is_final = msg.metadata.get("_final", True)
+        draft_id = msg.metadata.get("_telegram_draft_id")
+        draft_finalized = False
+
         if is_final:
             logger.info("Telegram: stopping typing (final response) for chat_id={}", chat_id_str)
             self._stop_typing(chat_id_str)
+            if draft_id:
+                try:
+                    content = msg.content or ""
+                    if content and content != "[empty message]":
+                        html = _markdown_to_telegram_html(content)
+                        await self._app.bot.edit_message_text(
+                            chat_id=chat_id_int,
+                            message_id=draft_id,
+                            text=html,
+                            parse_mode="HTML",
+                        )
+                        draft_finalized = True
+                    msg.metadata.pop("_telegram_draft_id", None)
+                except Exception as e:
+                    logger.warning("Failed to finalize draft: {}", e)
+                    msg.metadata.pop("_telegram_draft_id", None)
         else:
             logger.info(
                 "Telegram: NOT stopping typing (intermediate message) for chat_id={}", chat_id_str
@@ -389,8 +413,8 @@ class TelegramChannel(BaseChannel):
                     reply_parameters=reply_params,
                 )
 
-        # Send text content
-        if msg.content and msg.content != "[empty message]":
+        # Send text content (skip if draft was already finalized)
+        if msg.content and msg.content != "[empty message]" and not draft_finalized:
             for chunk in _split_message(msg.content):
                 try:
                     html = _markdown_to_telegram_html(chunk)

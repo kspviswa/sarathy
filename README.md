@@ -49,12 +49,15 @@ While nanobot served as the initial inspiration, Sarathy has evolved significant
 - **Typing indicators**: Real-time typing status for Telegram and Discord
 - **Progress updates**: Tool execution progress shown in channels
 - **Verbose mode**: Detailed stats (token count, speed) in responses
+- **Streaming mode**: Real-time response streaming in Telegram (uses sendMessageDraft API)
 
 ### Built-in Commands
 - `/think` - Enable reasoning mode
+- `/streaming` - Toggle real-time response streaming
 - `/clear` - Clear conversation context
 - `/context` - Show conversation context
 - `/remember` - Persist information to memory
+- `/verbose` - Toggle detailed stats display
 - Unified handling across Telegram and Discord
 
 ---

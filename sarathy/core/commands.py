@@ -47,6 +47,22 @@ class CommandManager:
         )
         logger.debug(f"Registered command: /{name} from skill {skill_name}")
 
+    def register_builtin_command(
+        self,
+        name: str,
+        description: str,
+        help_text: str = "",
+    ) -> None:
+        """Register a built-in command (not from a skill)."""
+        self._commands[name] = CommandInfo(
+            name=name,
+            description=description,
+            skill_name="builtin",
+            help_text=help_text,
+            handler=None,
+        )
+        logger.debug(f"Registered built-in command: /{name}")
+
     def unregister_command(self, name: str) -> None:
         """Remove a command."""
         if name in self._commands:

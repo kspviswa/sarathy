@@ -176,6 +176,8 @@ class LiteLLMProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        stream: bool = False,
+        on_progress: callable | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -187,6 +189,8 @@ class LiteLLMProvider(LLMProvider):
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
             reasoning_effort: Effort level for thinking-enabled models ("off", "low", "medium", "high", "xhigh").
+            stream: Whether to stream the response.
+            on_progress: Callback for streaming progress updates.
 
         Returns:
             LLMResponse with content and/or tool calls.
@@ -197,8 +201,6 @@ class LiteLLMProvider(LLMProvider):
         if self._supports_cache_control(original_model):
             messages, tools = self._apply_cache_control(messages, tools)
 
-        # Clamp max_tokens to at least 1 — negative or zero values cause
-        # LiteLLM to reject the request with "max_tokens must be at least 1".
         max_tokens = max(1, max_tokens)
 
         kwargs: dict[str, Any] = {
@@ -208,22 +210,17 @@ class LiteLLMProvider(LLMProvider):
             "temperature": temperature,
         }
 
-        # Add reasoning_effort for thinking-enabled models (LiteLLM will drop if unsupported)
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
 
-        # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
 
-        # Pass api_key directly — more reliable than env vars alone
         if self.api_key:
             kwargs["api_key"] = self.api_key
 
-        # Pass api_base for custom endpoints
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
-        # Pass extra headers (e.g. APP-Code for AiHubMix)
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
 
@@ -232,12 +229,84 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tool_choice"] = "auto"
 
         try:
+            if stream and on_progress:
+                return await self._stream_chat(kwargs, on_progress)
             response = await acompletion(**kwargs)
             return self._parse_response(response)
         except Exception as e:
-            # Return error as content for graceful handling
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",
+                finish_reason="error",
+            )
+
+    async def _stream_chat(self, kwargs: dict, on_progress: callable) -> LLMResponse:
+        """Handle streaming chat completion."""
+        from litellm import astream
+
+        accumulated_content = ""
+        accumulated_tool_calls = []
+        finish_reason = "unknown"
+
+        try:
+            async for chunk in astream(**kwargs):
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    accumulated_content += delta.content
+                    await on_progress(accumulated_content)
+
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        if len(accumulated_tool_calls) <= tc.index:
+                            accumulated_tool_calls.append(
+                                {
+                                    "id": "",
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            )
+                        if tc.id:
+                            accumulated_tool_calls[tc.index]["id"] = tc.id
+                        if tc.function and tc.function.name:
+                            accumulated_tool_calls[tc.index]["function"]["name"] = tc.function.name
+                        if tc.function and tc.function.arguments:
+                            accumulated_tool_calls[tc.index]["function"]["arguments"] += (
+                                tc.function.arguments
+                            )
+
+                finish_reason = chunk.choices[0].finish_reason or "unknown"
+
+            has_tool_calls = len(accumulated_tool_calls) > 0 and any(
+                tc.get("function", {}).get("name") for tc in accumulated_tool_calls
+            )
+
+            tool_calls = []
+            if has_tool_calls:
+                for tc in accumulated_tool_calls:
+                    if tc.get("function", {}).get("name"):
+                        import json
+
+                        args = tc["function"].get("arguments", "")
+                        try:
+                            args = json.loads(args) if args else {}
+                        except json.JSONDecodeError:
+                            args = {"_raw": args}
+                        tool_calls.append(
+                            ToolCallRequest(
+                                id=tc.get("id", ""),
+                                name=tc["function"]["name"],
+                                arguments=args,
+                            )
+                        )
+
+            return LLMResponse(
+                content=accumulated_content or None,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
+            )
+        except Exception as e:
+            return LLMResponse(
+                content=f"Error streaming LLM: {str(e)}",
                 finish_reason="error",
             )
 

@@ -196,9 +196,22 @@ class AgentLoop:
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
         reasoning_effort: str | None = None,
+        channel: str | None = None,
+        session_metadata: dict | None = None,
     ) -> tuple[str | None, list[str], list[dict], dict]:
         """Run the agent iteration loop. Returns (final_content, tools_used, messages, stats)."""
         import time
+
+        streaming_enabled = False
+        session_streaming = session_metadata.get("streaming", False) if session_metadata else False
+
+        if session_streaming:
+            streaming_enabled = True
+        elif channel and self.channels_config:
+            if channel == "telegram":
+                streaming_enabled = self.channels_config.telegram.streaming
+            elif channel == "discord":
+                streaming_enabled = self.channels_config.discord.streaming
 
         messages = initial_messages
         iteration = 0
@@ -211,6 +224,7 @@ class AgentLoop:
             iteration += 1
 
             start_time = time.perf_counter()
+            should_stream = streaming_enabled and on_progress is not None
             response = await self.provider.chat(
                 messages=messages,
                 tools=self.tools.get_definitions(),
@@ -218,6 +232,8 @@ class AgentLoop:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
                 reasoning_effort=reasoning_effort or self.reasoning_effort,
+                stream=should_stream,
+                on_progress=on_progress if should_stream else None,
             )
             elapsed = time.perf_counter() - start_time
 
@@ -450,7 +466,7 @@ Assistant response: {assistant_response[:500]}"""
                 channel=channel,
                 chat_id=chat_id,
             )
-            final_content, _, all_msgs, _ = await self._run_agent_loop(messages)
+            final_content, _, all_msgs, _ = await self._run_agent_loop(messages, channel=channel)
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             return OutboundMessage(
@@ -501,6 +517,8 @@ Assistant response: {assistant_response[:500]}"""
                     return self._handle_think_command(session, msg, args)
                 elif cmd_name == "verbose":
                     return self._handle_verbose_command(session, msg, args)
+                elif cmd_name == "streaming":
+                    return self._handle_streaming_command(session, msg, args)
                 elif cmd_name == "context":
                     return self._handle_context_command(session, msg)
                 elif cmd_name == "remember":
@@ -566,6 +584,8 @@ Assistant response: {assistant_response[:500]}"""
             initial_messages,
             on_progress=on_progress or _bus_progress,
             reasoning_effort=effective_reasoning_effort,
+            channel=msg.channel,
+            session_metadata=session.metadata,
         )
 
         if final_content is None:
@@ -730,6 +750,42 @@ Assistant response: {assistant_response[:500]}"""
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content=f"Usage: /verbose [true|false|status]\nCurrent: {'on' if current else 'off'}",
+            )
+
+    def _handle_streaming_command(
+        self, session: Session, msg: InboundMessage, args: str
+    ) -> OutboundMessage:
+        """Handle /streaming command - toggle streaming mode."""
+        if args == "status":
+            current = session.metadata.get("streaming", False)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"🔴 Streaming: {'enabled' if current else 'disabled'}",
+            )
+
+        if args in ("false", "off", "0"):
+            session.metadata["streaming"] = False
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="🔴 Streaming disabled for this session.",
+            )
+        elif args in ("true", "on", "1"):
+            session.metadata["streaming"] = True
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="🟢 Streaming enabled for this session.",
+            )
+        else:
+            current = session.metadata.get("streaming", False)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"Usage: /streaming [true|false|status]\nCurrent: {'enabled' if current else 'disabled'}",
             )
 
     def _handle_context_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:

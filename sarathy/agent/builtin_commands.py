@@ -41,6 +41,12 @@ BUILTIN_COMMANDS = {
         subcommands=["status", "true", "false"],
         has_status=True,
     ),
+    "streaming": BuiltinCommand(
+        name="streaming",
+        description="Toggle streaming mode",
+        subcommands=["status", "true", "false"],
+        has_status=True,
+    ),
     "context": BuiltinCommand(
         name="context",
         description="Show context usage",

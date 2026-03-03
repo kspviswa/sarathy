@@ -96,6 +96,8 @@ class LLMProvider(ABC):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        stream: bool = False,
+        on_progress: callable | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -106,6 +108,8 @@ class LLMProvider(ABC):
             model: Model identifier (provider-specific).
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            stream: Whether to stream the response.
+            on_progress: Callback for streaming progress updates.
 
         Returns:
             LLMResponse with content and/or tool calls.

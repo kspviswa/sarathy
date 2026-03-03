@@ -114,6 +114,7 @@ class TelegramChannel(BaseChannel):
     DEFAULT_COMMANDS = [
         BotCommand("start", "Start the bot"),
         BotCommand("help", "Show available commands"),
+        BotCommand("streaming", "Toggle streaming mode"),
     ]
 
     def __init__(
@@ -129,6 +130,10 @@ class TelegramChannel(BaseChannel):
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies
         self._typing_tasks: dict[str, asyncio.Task] = {}  # chat_id -> typing loop task
         self._registered_skill_commands: set[str] = set()
+        self._streaming_enabled_chats: set[int] = set()  # Per-chat streaming override
+        self._active_drafts: dict[int, int] = {}  # chat_id -> draft_id for streaming
+        self._last_draft_update: dict[int, float] = {}  # chat_id -> last update timestamp
+        self._draft_throttle_ms: int = 500  # Throttle drafts to every 500ms
 
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
@@ -150,9 +155,10 @@ class TelegramChannel(BaseChannel):
         self._app = builder.build()
         self._app.add_error_handler(self._on_error)
 
-        # Add command handlers - only /start and /help are local, rest go to agent loop
+        # Add command handlers - only /start, /help, /streaming are local, rest go to agent loop
         self._app.add_handler(CommandHandler("start", self._on_start))
         self._app.add_handler(CommandHandler("help", self._on_help))
+        self._app.add_handler(CommandHandler("streaming", self._on_streaming))
 
         # Forward all other commands to agent loop for unified handling
         self._app.add_handler(MessageHandler(filters.COMMAND, self._forward_all_commands))
@@ -319,9 +325,16 @@ class TelegramChannel(BaseChannel):
         is_tool_hint = msg.metadata.get("_tool_hint", False)
         prefix = "🔧 " if is_tool_hint else "↳ "
 
+        import time
+
+        now = time.time() * 1000
+        last_update = self._last_draft_update.get(chat_id_int, 0)
+        if now - last_update < self._draft_throttle_ms:
+            return
+
         try:
             html = _markdown_to_telegram_html(prefix + msg.content)
-            draft_id = msg.metadata.get("_telegram_draft_id")
+            draft_id = self._active_drafts.get(chat_id_int)
 
             if draft_id:
                 await self._app.bot.send_message_draft(
@@ -337,7 +350,9 @@ class TelegramChannel(BaseChannel):
                     text=html,
                     parse_mode="HTML",
                 )
-                msg.metadata["_telegram_draft_id"] = chat_id_int
+                self._active_drafts[chat_id_int] = chat_id_int
+
+            self._last_draft_update[chat_id_int] = now
         except Exception as e:
             logger.warning("Failed to send progress draft: {}", e)
 
@@ -351,7 +366,7 @@ class TelegramChannel(BaseChannel):
             return
 
         is_final = msg.metadata.get("_final", True)
-        draft_id = msg.metadata.get("_telegram_draft_id")
+        draft_id = self._active_drafts.get(chat_id_int)
         draft_finalized = False
 
         if is_final:
@@ -362,17 +377,18 @@ class TelegramChannel(BaseChannel):
                     content = msg.content or ""
                     if content and content != "[empty message]":
                         html = _markdown_to_telegram_html(content)
-                        await self._app.bot.edit_message_text(
+                        await self._app.bot.send_message(
                             chat_id=chat_id_int,
-                            message_id=draft_id,
                             text=html,
                             parse_mode="HTML",
                         )
                         draft_finalized = True
-                    msg.metadata.pop("_telegram_draft_id", None)
+                    self._active_drafts.pop(chat_id_int, None)
+                    self._last_draft_update.pop(chat_id_int, None)
                 except Exception as e:
                     logger.warning("Failed to finalize draft: {}", e)
-                    msg.metadata.pop("_telegram_draft_id", None)
+                    self._active_drafts.pop(chat_id_int, None)
+                    self._last_draft_update.pop(chat_id_int, None)
         else:
             logger.info(
                 "Telegram: NOT stopping typing (intermediate message) for chat_id={}", chat_id_str
@@ -459,6 +475,34 @@ class TelegramChannel(BaseChannel):
 
         await update.message.reply_text("\n".join(lines))
 
+    async def _on_streaming(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /streaming command - toggle streaming mode for this chat."""
+        if not update.message or not update.message.chat_id:
+            return
+
+        chat_id = update.message.chat_id
+
+        args = ""
+        if update.message.text:
+            parts = update.message.text.strip().split(None, 1)
+            if len(parts) > 1:
+                args = parts[1].strip().lower()
+
+        if args == "status":
+            current = chat_id in self._streaming_enabled_chats
+            await update.message.reply_text(f"🔴 Streaming: {'enabled' if current else 'disabled'}")
+        elif args in ("false", "off", "0"):
+            self._streaming_enabled_chats.discard(chat_id)
+            await update.message.reply_text("🔴 Streaming disabled for this chat.")
+        elif args in ("true", "on", "1"):
+            self._streaming_enabled_chats.add(chat_id)
+            await update.message.reply_text("🟢 Streaming enabled for this chat.")
+        else:
+            current = chat_id in self._streaming_enabled_chats
+            await update.message.reply_text(
+                f"Usage: /streaming [true|false|status]\nCurrent: {'enabled' if current else 'disabled'}"
+            )
+
     @staticmethod
     def _sender_id(user) -> str:
         """Build sender_id with username for allowlist matching."""
@@ -478,14 +522,18 @@ class TelegramChannel(BaseChannel):
     async def _forward_all_commands(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Forward all slash commands (except /start, /help) to agent loop."""
+        """Forward all slash commands (except /start, /help, /streaming) to agent loop."""
         if not update.message or not update.effective_user:
             return
 
         command = update.message.text.strip().lower()
 
-        # Skip /start and /help - they have local handlers
-        if command.startswith("/start") or command.startswith("/help"):
+        # Skip /start, /help, /streaming - they have local handlers
+        if (
+            command.startswith("/start")
+            or command.startswith("/help")
+            or command.startswith("/streaming")
+        ):
             return
 
         await self._handle_message(

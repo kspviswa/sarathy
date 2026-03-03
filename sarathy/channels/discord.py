@@ -57,6 +57,7 @@ class DiscordChannel(BaseChannel):
         self._typing_tasks: dict[str, asyncio.Task] = {}
         self._http: httpx.AsyncClient | None = None
         self._registered_skill_commands: set[str] = set()
+        self._streaming_enabled_channels: set[str] = set()  # Per-channel streaming override
 
     async def start(self) -> None:
         """Start the Discord gateway connection."""
@@ -278,12 +279,18 @@ class DiscordChannel(BaseChannel):
 
         reply_to = (payload.get("referenced_message") or {}).get("id")
 
+        content = "\n".join(p for p in content_parts if p) or "[empty message]"
+
+        if content.strip().startswith("/streaming"):
+            await self._handle_streaming_command(channel_id, content)
+            return
+
         await self._start_typing(channel_id)
 
         await self._handle_message(
             sender_id=sender_id,
             chat_id=channel_id,
-            content="\n".join(p for p in content_parts if p) or "[empty message]",
+            content=content,
             media=media_paths,
             metadata={
                 "message_id": str(payload.get("id", "")),
@@ -291,6 +298,38 @@ class DiscordChannel(BaseChannel):
                 "reply_to": reply_to,
             },
         )
+
+    async def _handle_streaming_command(self, channel_id: str, content: str) -> None:
+        """Handle /streaming command - toggle streaming mode for this channel."""
+        args = content.strip().split(None, 1)[1:] and content.strip().split(None, 1)[1] or ""
+
+        if args == "status":
+            current = channel_id in self._streaming_enabled_channels
+            await self._send_direct_message(
+                channel_id, f"🔴 Streaming: {'enabled' if current else 'disabled'}"
+            )
+        elif args in ("false", "off", "0"):
+            self._streaming_enabled_channels.discard(channel_id)
+            await self._send_direct_message(channel_id, "🔴 Streaming disabled for this channel.")
+        elif args in ("true", "on", "1"):
+            self._streaming_enabled_channels.add(channel_id)
+            await self._send_direct_message(channel_id, "🟢 Streaming enabled for this channel.")
+        else:
+            current = channel_id in self._streaming_enabled_channels
+            await self._send_direct_message(
+                channel_id,
+                f"Usage: /streaming [true|false|status]\nCurrent: {'enabled' if current else 'disabled'}",
+            )
+
+    async def _send_direct_message(self, channel_id: str, content: str) -> None:
+        """Send a direct message to a channel."""
+        if not self._http:
+            return
+
+        url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages"
+        headers = {"Authorization": f"Bot {self.config.token}"}
+        payload = {"content": content}
+        await self._send_payload(url, headers, payload)
 
     async def _start_typing(self, channel_id: str) -> None:
         """Start periodic typing indicator for a channel."""

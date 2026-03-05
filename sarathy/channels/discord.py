@@ -12,6 +12,7 @@ from loguru import logger
 from sarathy.bus.events import OutboundMessage
 from sarathy.bus.queue import MessageBus
 from sarathy.channels.base import BaseChannel
+from sarathy.channels.utils import detect_and_convert_tables
 from sarathy.config.schema import DiscordConfig
 
 
@@ -108,6 +109,8 @@ class DiscordChannel(BaseChannel):
         headers = {"Authorization": f"Bot {self.config.token}"}
 
         content = msg.content or ""
+
+        content = detect_and_convert_tables(content)
 
         # Append tokens/sec if verbose is enabled
         if msg.metadata.get("_verbose") and msg.metadata.get("_stats"):

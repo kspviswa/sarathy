@@ -12,6 +12,7 @@ from telegram.request import HTTPXRequest
 from sarathy.bus.events import OutboundMessage
 from sarathy.bus.queue import MessageBus
 from sarathy.channels.base import BaseChannel
+from sarathy.channels.utils import detect_and_convert_tables
 from sarathy.config.schema import TelegramConfig
 
 
@@ -21,6 +22,8 @@ def _markdown_to_telegram_html(text: str) -> str:
     """
     if not text:
         return ""
+
+    text = detect_and_convert_tables(text)
 
     # 1. Extract and protect code blocks (preserve content from other processing)
     code_blocks: list[str] = []

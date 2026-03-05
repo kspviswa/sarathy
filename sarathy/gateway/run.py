@@ -32,9 +32,9 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     from sarathy.providers.registry import find_by_name
 
     model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
-    api_base = config.get_api_base(model)
+    provider_name = config.get_provider_name()
+    p = config.get_provider()
+    api_base = config.get_api_base()
 
     # Use CustomProvider for OpenAI-compatible endpoints (/v1) because:
     # 1. LiteLLM strips reasoning content from streaming deltas with OpenAI provider
@@ -64,7 +64,7 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
 
         provider = LiteLLMProvider(
             api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
+            api_base=config.get_api_base(),
             default_model=model,
             extra_headers=p.extra_headers if p else None,
             provider_name=provider_name,

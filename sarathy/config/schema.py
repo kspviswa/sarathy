@@ -87,6 +87,7 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.sarathy/workspace"
     model: str = "llama3"  # Default to local model (Ollama/LMStudio/vLLM)
+    provider: str = ""  # REQUIRED - must match a provider key in providers section
     max_tokens: int = 4096
     temperature: float = 0.1
     max_tool_iterations: int = 40
@@ -198,67 +199,53 @@ class Config(BaseSettings):
     def _match_provider(
         self, model: str | None = None
     ) -> tuple["ProviderConfig | None", str | None]:
-        """Match provider config and its registry name. Returns (config, spec_name)."""
+        """Get provider config and name from explicit provider setting.
+
+        Requires agents.defaults.provider to be set and must match a configured provider.
+        """
         from sarathy.providers.registry import PROVIDERS
 
-        model_lower = (model or self.agents.defaults.model).lower()
-        model_normalized = model_lower.replace("-", "_")
-        model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
-        normalized_prefix = model_prefix.replace("-", "_")
+        provider_name = self.agents.defaults.provider
+        if not provider_name:
+            available = [s.name for s in PROVIDERS if hasattr(self.providers, s.name)]
+            raise ValueError(
+                f"Missing required 'provider' in agents.defaults. "
+                f"Available providers: {', '.join(available)}"
+            )
 
-        def _kw_matches(kw: str) -> bool:
-            kw = kw.lower()
-            return kw in model_lower or kw.replace("-", "_") in model_normalized
+        # Get the provider config directly by name
+        p = getattr(self.providers, provider_name, None)
+        if not p:
+            available = [s.name for s in PROVIDERS if hasattr(self.providers, s.name)]
+            raise ValueError(
+                f"Unknown provider '{provider_name}' in agents.defaults.provider. "
+                f"Available providers: {', '.join(available)}"
+            )
 
-        # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and model_prefix and normalized_prefix == spec.name:
-                if spec.is_oauth or p.api_key:
-                    return p, spec.name
+        return p, provider_name
 
-        # Match by keyword (order follows PROVIDERS registry)
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and any(_kw_matches(kw) for kw in spec.keywords):
-                if spec.is_oauth or p.api_key:
-                    return p, spec.name
-
-        # Fallback: gateways first, then others (follows registry order)
-        # OAuth providers are NOT valid fallbacks — they require explicit model selection
-        for spec in PROVIDERS:
-            if spec.is_oauth:
-                continue
-            p = getattr(self.providers, spec.name, None)
-            if p and p.api_key:
-                return p, spec.name
-        return None, None
-
-    def get_provider(self, model: str | None = None) -> ProviderConfig | None:
-        """Get matched provider config (api_key, api_base, extra_headers). Falls back to first available."""
-        p, _ = self._match_provider(model)
+    def get_provider(self) -> ProviderConfig | None:
+        """Get provider config from explicit provider setting."""
+        p, _ = self._match_provider()
         return p
 
-    def get_provider_name(self, model: str | None = None) -> str | None:
-        """Get the registry name of the matched provider (e.g. "deepseek", "openrouter")."""
-        _, name = self._match_provider(model)
+    def get_provider_name(self) -> str | None:
+        """Get the explicit provider name from config (e.g. 'ollama', 'custom')."""
+        _, name = self._match_provider()
         return name
 
-    def get_api_key(self, model: str | None = None) -> str | None:
-        """Get API key for the given model. Falls back to first available key."""
-        p = self.get_provider(model)
+    def get_api_key(self) -> str | None:
+        """Get API key for the configured provider."""
+        p = self.get_provider()
         return p.api_key if p else None
 
-    def get_api_base(self, model: str | None = None) -> str | None:
-        """Get API base URL for the given model. Applies default URLs for known gateways."""
+    def get_api_base(self) -> str | None:
+        """Get API base URL for the configured provider."""
         from sarathy.providers.registry import find_by_name
 
-        p, name = self._match_provider(model)
+        p, name = self._match_provider()
         if p and p.api_base:
             return p.api_base
-        # Only gateways get a default api_base here. Standard providers
-        # (like Moonshot) set their base URL via env vars in _setup_env
-        # to avoid polluting the global litellm.api_base.
         if name:
             spec = find_by_name(name)
             if spec and spec.is_gateway and spec.default_api_base:

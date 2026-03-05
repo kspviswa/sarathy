@@ -266,14 +266,18 @@ def _make_provider(config: Config):
     from sarathy.providers.custom_provider import CustomProvider
 
     model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
+    provider_name = config.get_provider_name()
+    if not provider_name:
+        console.print("[red]Error: No provider configured.[/red]")
+        console.print("Set 'provider' in agents.defaults in ~/.sarathy/config.json")
+        raise typer.Exit(1)
+    p = config.get_provider()
 
     # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM
     if provider_name == "custom":
         return CustomProvider(
             api_key=p.api_key if p else "no-key",
-            api_base=config.get_api_base(model) or "http://localhost:8000/v1",
+            api_base=config.get_api_base() or "http://localhost:8000/v1",
             default_model=model,
         )
 
@@ -291,7 +295,7 @@ def _make_provider(config: Config):
 
     return LiteLLMProvider(
         api_key=p.api_key if p else None,
-        api_base=config.get_api_base(model),
+        api_base=config.get_api_base(),
         default_model=model,
         extra_headers=p.extra_headers if p else None,
         provider_name=provider_name,
@@ -917,6 +921,10 @@ def status():
         from sarathy.providers.registry import PROVIDERS
 
         console.print(f"Model: {config.agents.defaults.model}")
+
+        # Show explicit provider from config
+        provider_name = config.agents.defaults.provider
+        console.print(f"Provider: {provider_name}")
 
         # Check API keys from registry
         for spec in PROVIDERS:

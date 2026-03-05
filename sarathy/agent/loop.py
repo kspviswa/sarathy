@@ -186,7 +186,10 @@ class AgentLoop:
         If the text becomes empty after stripping, fall back to reasoning_content.
         """
         if not text:
-            return reasoning_content if reasoning_content else None
+            if reasoning_content:
+                cleaned = re.sub(r"<tool_call>[\s\S]*?</tool_call>\s*", "", reasoning_content).strip()
+                return cleaned if cleaned else None
+            return None
         stripped = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
         return stripped if stripped else (reasoning_content if reasoning_content else None)
 
@@ -201,6 +204,43 @@ class AgentLoop:
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
 
         return ", ".join(_fmt(tc) for tc in tool_calls)
+
+    @staticmethod
+    def _extract_tool_calls_from_reasoning(reasoning_content: str | None) -> list[dict] | None:
+        """Extract tool calls from reasoning_content (for models like Qwen3 via Ollama).
+
+        Some backends (like Ollama) put tool calls in reasoning_content instead of
+        structured tool_calls. This extracts them from the XML-like format.
+
+        Returns list of tool call dicts with id, name, arguments, or None if no tool calls found.
+        """
+        if not reasoning_content:
+            return None
+
+        tool_calls = []
+        pattern = r"<tool_call>\s*<function=(\w+)>(.*?)</function>\s*</tool_call>"
+        matches = re.findall(pattern, reasoning_content, re.DOTALL)
+
+        for func_name, params_block in matches:
+            arguments = {}
+            param_pattern = r"<parameter=(\w+)>(.*?)</parameter>"
+            param_matches = re.findall(param_pattern, params_block, re.DOTALL)
+
+            for key, value in param_matches:
+                arguments[key] = value.strip()
+
+            if arguments:
+                tool_calls.append({
+                    "id": f"reasoning_{len(tool_calls)}",
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "arguments": json.dumps(arguments),
+                    },
+                })
+
+        return tool_calls if tool_calls else None
+
 
     async def _run_agent_loop(
         self,
@@ -286,22 +326,56 @@ class AgentLoop:
                         messages, tool_call.id, tool_call.name, result
                     )
             else:
-                # Add assistant message to history when there's no tool call
-                self.context.add_assistant_message(
-                    messages,
-                    response.content,
-                    tool_calls=None,
-                    reasoning_content=response.reasoning_content,
-                )
-                final_content = self._strip_think(response.content, response.reasoning_content)
-                if final_content is None:
-                    logger.warning(
-                        "Empty response from LLM (iteration {}). "
-                        "This may be due to extended thinking tokens being stripped, "
-                        "or an issue with the model/context. Consider checking reasoning_effort config.",
-                        iteration,
+                # Check if tool calls are embedded in reasoning_content (Ollama/Qwen3 bug)
+                extracted_tool_calls = self._extract_tool_calls_from_reasoning(response.reasoning_content)
+
+                if extracted_tool_calls:
+                    # Found tool calls in reasoning_content - execute them!
+                    logger.info("Found {} tool call(s) in reasoning_content", len(extracted_tool_calls))
+
+                    if on_progress:
+                        clean = self._strip_think(response.content, response.reasoning_content)
+                        if clean:
+                            await on_progress(clean)
+                        # Create fake tool call objects for _tool_hint
+                        fake_tcs = [type('obj', (object,), {'name': tc['function']['name'], 'arguments': json.loads(tc['function']['arguments'])})() for tc in extracted_tool_calls]
+                        await on_progress(self._tool_hint(fake_tcs), tool_hint=True)
+
+                    # Add assistant message with tool calls
+                    messages = self.context.add_assistant_message(
+                        messages,
+                        None,  # content is None, tool calls in reasoning
+                        tool_calls=extracted_tool_calls,
+                        reasoning_content=response.reasoning_content,
                     )
-                break
+
+                    # Execute each tool call
+                    for tc in extracted_tool_calls:
+                        func_name = tc["function"]["name"]
+                        func_args = json.loads(tc["function"]["arguments"])
+                        tools_used.append(func_name)
+                        logger.info("Tool call (from reasoning): {}({})", func_name, json.dumps(func_args)[:200])
+                        result = await self.tools.execute(func_name, func_args)
+                        messages = self.context.add_tool_result(
+                            messages, tc["id"], func_name, result
+                        )
+                else:
+                    # No tool calls found - regular response
+                    self.context.add_assistant_message(
+                        messages,
+                        response.content,
+                        tool_calls=None,
+                        reasoning_content=response.reasoning_content,
+                    )
+                    final_content = self._strip_think(response.content, response.reasoning_content)
+                    if final_content is None:
+                        logger.warning(
+                            "Empty response from LLM (iteration {}). "
+                            "This may be due to extended thinking tokens being stripped, "
+                            "or an issue with the model/context. Consider checking reasoning_effort config.",
+                            iteration,
+                        )
+                    break
 
         if final_content is None and iteration >= self.max_iterations:
             logger.warning("Max iterations ({}) reached", self.max_iterations)

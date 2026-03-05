@@ -306,7 +306,10 @@ Key configuration sections in `~/.sarathy/config.json`:
     },
     "web": {
       "search": {
-        "api_key": "YOUR_BRAVE_API_KEY"
+        "enabled": true,
+        "provider": "firecrawl",
+        "api_key": "",
+        "max_results": 5
       }
     },
     "restrict_to_workspace": true,
@@ -315,6 +318,23 @@ Key configuration sections in `~/.sarathy/config.json`:
   "workspace_path": "~/sarathy-workspace"
 }
 ```
+
+### Web Search Configuration
+
+The web search tool can be configured under `tools.web.search`:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable/disable web search tool |
+| `provider` | string | `"firecrawl"` | Search provider: `"firecrawl"` or `"brave"` |
+| `api_key` | string | `""` | Provider API key (falls back to env var if empty) |
+| `max_results` | integer | `5` | Maximum number of results to return (1-10) |
+
+**Environment Variables:**
+- Firecrawl: `FIRECRAWL_API_KEY`
+- Brave: `BRAVE_API_KEY`
+
+If `api_key` is empty in config, the corresponding environment variable will be used.
 
 ---
 

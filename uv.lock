@@ -504,6 +504,23 @@ wheels = [
 ]
 
 [[package]]
+name = "firecrawl"
+version = "2.16.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "nest-asyncio" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "requests" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/05/3e/ea0790497727c4e5c7a35ab0271f8c83c90b55d42d3d8084bb90a220369e/firecrawl-2.16.5.tar.gz", hash = "sha256:f8e65aa65d76a6c1877a0a9e04396eb76d10423d33ea142bb3dd102aaeecdfa3", size = 40079, upload-time = "2025-08-06T20:39:00.383Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e4/ea/0f270320baa0b960e05ab79e8d57847fe5be4a05a037cfd5c233c5e660c8/firecrawl-2.16.5-py3-none-any.whl", hash = "sha256:cde8f0f674fb3778647afc194a14564ba581d2dd55794fd5f5b63ee0fd77fdc7", size = 40058, upload-time = "2025-08-06T20:38:59.358Z" },
+]
+
+[[package]]
 name = "frozenlist"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1308,6 +1325,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nest-asyncio"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/f8/51569ac65d696c8ecbee95938f89d4abf00f47d58d48f6fbabfe8f0baefe/nest_asyncio-1.6.0.tar.gz", hash = "sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe", size = 7418, upload-time = "2024-01-21T14:25:19.227Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/c4/c2971a3ba4c6103a3d10c4b0f24f461ddc027f0f09763220cf35ca1401b3/nest_asyncio-1.6.0-py3-none-any.whl", hash = "sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c", size = 5195, upload-time = "2024-01-21T14:25:17.223Z" },
+]
+
+[[package]]
 name = "oauth-cli-kit"
 version = "0.1.3"
 source = { registry = "https://pypi.org/simple" }
@@ -2090,10 +2116,11 @@ wheels = [
 
 [[package]]
 name = "sarathy"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "." }
 dependencies = [
     { name = "croniter" },
+    { name = "firecrawl" },
     { name = "httpx" },
     { name = "json-repair" },
     { name = "litellm" },
@@ -2125,6 +2152,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "croniter", specifier = ">=6.0.0,<7.0.0" },
+    { name = "firecrawl", specifier = ">=2.0.0,<3.0.0" },
     { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
     { name = "json-repair", specifier = ">=0.57.0,<1.0.0" },
     { name = "litellm", specifier = ">=1.81.5,<2.0.0" },

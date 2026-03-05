@@ -483,7 +483,7 @@ def agent(
         max_tokens=config.agents.defaults.max_tokens,
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
-        brave_api_key=config.tools.web.search.api_key or None,
+        web_search_config=config.tools.web.search,
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
@@ -851,7 +851,7 @@ def cron_run(
         max_tokens=config.agents.defaults.max_tokens,
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
-        brave_api_key=config.tools.web.search.api_key or None,
+        web_search_config=config.tools.web.search,
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_cache_size=config.agents.defaults.session_cache_size,
@@ -936,6 +936,17 @@ def status():
                 console.print(
                     f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
                 )
+
+        # Web search status
+        ws = config.tools.web.search
+        if ws.enabled:
+            env_key = "FIRECRAWL_API_KEY" if ws.provider == "firecrawl" else "BRAVE_API_KEY"
+            has_key = bool(ws.api_key or os.environ.get(env_key))
+            console.print(
+                f"Web Search ({ws.provider}): {'[green]✓[/green]' if has_key else '[yellow]⚠ no API key[/yellow]'}"
+            )
+        else:
+            console.print("Web Search: [dim]disabled[/dim]")
 
 
 # ============================================================================

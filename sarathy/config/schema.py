@@ -140,8 +140,10 @@ class GatewayConfig(Base):
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
-    api_key: str = ""  # Brave Search API key
-    max_results: int = 5
+    enabled: bool = True  # Whether to enable web search tool
+    provider: str = "firecrawl"  # Provider: "brave" or "firecrawl"
+    api_key: str = ""  # Provider API key (fallback to env var if empty)
+    max_results: int = 5  # Maximum results to return
 
 
 class WebToolsConfig(Base):

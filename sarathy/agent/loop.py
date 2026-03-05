@@ -21,14 +21,14 @@ from sarathy.agent.tools.message import MessageTool
 from sarathy.agent.tools.registry import ToolRegistry
 from sarathy.agent.tools.shell import ExecTool
 from sarathy.agent.tools.spawn import SpawnTool
-from sarathy.agent.tools.web import WebFetchTool, WebSearchTool
+from sarathy.agent.tools.web import WebFetchTool, create_web_search_tool
 from sarathy.bus.events import InboundMessage, OutboundMessage
 from sarathy.bus.queue import MessageBus
 from sarathy.providers.base import LLMProvider
 from sarathy.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
-    from sarathy.config.schema import ChannelsConfig, ExecToolConfig
+    from sarathy.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
     from sarathy.cron.service import CronService
 
 
@@ -54,7 +54,7 @@ class AgentLoop:
         temperature: float = 0.1,
         max_tokens: int = 4096,
         memory_window: int = 100,
-        brave_api_key: str | None = None,
+        web_search_config: "WebSearchConfig | None" = None,
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
@@ -66,7 +66,7 @@ class AgentLoop:
         channels_config: ChannelsConfig | None = None,
         reasoning_effort: str | None = None,
     ):
-        from sarathy.config.schema import ExecToolConfig
+        from sarathy.config.schema import ExecToolConfig, WebSearchConfig
 
         self.bus = bus
         self.channels_config = channels_config
@@ -79,7 +79,7 @@ class AgentLoop:
         self.memory_window = memory_window
         self.context_length = context_length
         self.reasoning_effort = reasoning_effort
-        self.brave_api_key = brave_api_key
+        self.web_search_config = web_search_config or WebSearchConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
@@ -98,7 +98,7 @@ class AgentLoop:
             model=self.model,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
-            brave_api_key=brave_api_key,
+            web_search_config=self.web_search_config,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
         )
@@ -128,7 +128,14 @@ class AgentLoop:
                 path_append=self.exec_config.path_append,
             )
         )
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key))
+        if self.web_search_config.enabled:
+            self.tools.register(
+                create_web_search_tool(
+                    provider=self.web_search_config.provider,
+                    api_key=self.web_search_config.api_key,
+                    max_results=self.web_search_config.max_results,
+                )
+            )
         self.tools.register(WebFetchTool())
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))

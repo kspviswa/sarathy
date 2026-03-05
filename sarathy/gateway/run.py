@@ -34,11 +34,21 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
+    api_base = config.get_api_base(model)
 
-    if provider_name == "custom":
+    # Use CustomProvider for OpenAI-compatible endpoints (/v1) because:
+    # 1. LiteLLM strips reasoning content from streaming deltas with OpenAI provider
+    # 2. CustomProvider properly extracts reasoning/thinking from Ollama, LMStudio, vLLM
+    if api_base and api_base.endswith("/v1"):
         provider = CustomProvider(
             api_key=p.api_key if p else "no-key",
-            api_base=config.get_api_base(model) or "http://localhost:8000/v1",
+            api_base=api_base,
+            default_model=model,
+        )
+    elif provider_name == "custom":
+        provider = CustomProvider(
+            api_key=p.api_key if p else "no-key",
+            api_base=api_base or "http://localhost:8000/v1",
             default_model=model,
         )
     else:

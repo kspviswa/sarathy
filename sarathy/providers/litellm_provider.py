@@ -1,5 +1,6 @@
 """LiteLLM provider implementation for multi-provider support."""
 
+import asyncio
 import json
 import json_repair
 import os
@@ -210,8 +211,12 @@ class LiteLLMProvider(LLMProvider):
             "temperature": temperature,
         }
 
+        # Only pass reasoning_effort for non-OpenAI-compatible endpoints
+        # Some providers like Ollama's /v1 don't support the think parameter
         if reasoning_effort:
-            kwargs["reasoning_effort"] = reasoning_effort
+            api_base = self.api_base or ""
+            if not api_base.endswith("/v1"):
+                kwargs["reasoning_effort"] = reasoning_effort
 
         self._apply_model_overrides(model, kwargs)
 
@@ -220,6 +225,10 @@ class LiteLLMProvider(LLMProvider):
 
         if self.api_base:
             kwargs["api_base"] = self.api_base
+            # Use openai provider for OpenAI-compatible endpoints (/v1)
+            # This ensures proper streaming and response handling
+            if self.api_base.endswith("/v1"):
+                kwargs["custom_llm_provider"] = "openai"
 
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
@@ -241,19 +250,34 @@ class LiteLLMProvider(LLMProvider):
 
     async def _stream_chat(self, kwargs: dict, on_progress: callable) -> LLMResponse:
         """Handle streaming chat completion."""
-        from litellm import astream
-
         accumulated_content = ""
+        accumulated_reasoning = ""
         accumulated_tool_calls = []
         finish_reason = "unknown"
 
+        # Add stream=True to enable streaming
+        kwargs["stream"] = True
+
         try:
-            async for chunk in astream(**kwargs):
+            response = await acompletion(**kwargs)
+            async for chunk in response:
                 delta = chunk.choices[0].delta
+
+                # Extract reasoning/thinking content from delta
+                # Different providers use different field names:
+                # - Ollama /v1: delta.reasoning
+                # - Ollama raw: delta.thinking
+                # - Some models: delta.content with <thinking> blocks
+                reasoning = getattr(delta, "reasoning", None) or getattr(delta, "thinking", None)
+                if reasoning:
+                    accumulated_reasoning += reasoning
 
                 if delta.content:
                     accumulated_content += delta.content
-                    await on_progress(accumulated_content)
+                    if asyncio.iscoroutinefunction(on_progress):
+                        await on_progress(accumulated_content)
+                    else:
+                        on_progress(accumulated_content)
 
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
@@ -303,6 +327,7 @@ class LiteLLMProvider(LLMProvider):
                 content=accumulated_content or None,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
+                reasoning_content=accumulated_reasoning or None,
             )
         except Exception as e:
             return LLMResponse(

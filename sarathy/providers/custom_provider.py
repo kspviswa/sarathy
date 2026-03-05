@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import json_repair
@@ -38,8 +39,12 @@ class CustomProvider(LLMProvider):
             "max_tokens": max(1, max_tokens),
             "temperature": temperature,
         }
+        # Only pass reasoning_effort for non-OpenAI-compatible endpoints
+        # Some providers like Ollama's /v1 don't support the think parameter
         if reasoning_effort:
-            kwargs["reasoning_effort"] = reasoning_effort
+            api_base = self.api_base or ""
+            if not api_base.endswith("/v1"):
+                kwargs["reasoning_effort"] = reasoning_effort
         if tools:
             kwargs.update(tools=tools, tool_choice="auto")
 
@@ -54,6 +59,7 @@ class CustomProvider(LLMProvider):
     async def _stream_chat(self, kwargs: dict, on_progress: callable) -> LLMResponse:
         """Handle streaming chat completion."""
         accumulated_content = ""
+        accumulated_reasoning = ""
         accumulated_tool_calls = []
         finish_reason = "unknown"
 
@@ -61,9 +67,20 @@ class CustomProvider(LLMProvider):
             async for chunk in await self._client.chat.completions.create(**kwargs, stream=True):
                 delta = chunk.choices[0].delta
 
+                # Extract reasoning/thinking content from delta
+                # Different providers use different field names:
+                # - Ollama /v1: delta.reasoning
+                # - Ollama raw: delta.thinking
+                reasoning = getattr(delta, "reasoning", None) or getattr(delta, "thinking", None)
+                if reasoning:
+                    accumulated_reasoning += reasoning
+
                 if delta.content:
                     accumulated_content += delta.content
-                    await on_progress(accumulated_content)
+                    if asyncio.iscoroutinefunction(on_progress):
+                        await on_progress(accumulated_content)
+                    else:
+                        on_progress(accumulated_content)
 
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
@@ -113,6 +130,7 @@ class CustomProvider(LLMProvider):
                 content=accumulated_content or None,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
+                reasoning_content=accumulated_reasoning or None,
             )
         except Exception as e:
             return LLMResponse(content=f"Error streaming: {e}", finish_reason="error")

@@ -180,11 +180,15 @@ class AgentLoop:
                 cron_tool.set_context(channel, chat_id)
 
     @staticmethod
-    def _strip_think(text: str | None) -> str | None:
-        """Remove <think>…</think> blocks that some models embed in content."""
+    def _strip_think(text: str | None, reasoning_content: str | None = None) -> str | None:
+        """Strip <think>...</think> blocks that some models embed in content.
+
+        If the text becomes empty after stripping, fall back to reasoning_content.
+        """
         if not text:
-            return None
-        return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
+            return reasoning_content if reasoning_content else None
+        stripped = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+        return stripped if stripped else (reasoning_content if reasoning_content else None)
 
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:
@@ -250,7 +254,7 @@ class AgentLoop:
 
             if response.has_tool_calls:
                 if on_progress:
-                    clean = self._strip_think(response.content)
+                    clean = self._strip_think(response.content, response.reasoning_content)
                     if clean:
                         await on_progress(clean)
                     await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
@@ -289,7 +293,7 @@ class AgentLoop:
                     tool_calls=None,
                     reasoning_content=response.reasoning_content,
                 )
-                final_content = self._strip_think(response.content)
+                final_content = self._strip_think(response.content, response.reasoning_content)
                 if final_content is None:
                     logger.warning(
                         "Empty response from LLM (iteration {}). "

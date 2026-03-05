@@ -418,4 +418,14 @@ ruff check sarathy/
 
 As you can probably guess, I'm NOT interested (at the moment) to accept either feature requests or contributions to Sarathy. It is just for my own purposes. I have opened it to the public for others to get motivated (just like nanoclaw did). But if you find some security flaws and wanna be a good samaritan to point out, by all means do it.
 
-At some point in future, I might consider making sarathy as a general purpose tool ^[Although the chance is pretty slim since there are tons of such claws out there.]. 
+At some point in future, I might consider making sarathy as a general purpose tool ^[Although the chance is pretty slim since there are tons of such claws out there.].
+
+---
+
+## Changelog
+
+### 2026-03-04
+- **Fix**: Handle thinking/reasoning tokens from models like Qwen3, DeepSeek-R1, Kimi K2.5
+  - Updated `_strip_think()` to fall back to `reasoning_content` when content becomes empty after stripping thinking blocks
+  - Added `thinking_blocks` field to `LLMResponse` for Anthropic Claude thinking
+  - Preserved `reasoning_content` in session history for multi-turn conversations with reasoning models 

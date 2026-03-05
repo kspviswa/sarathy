@@ -131,6 +131,8 @@ class CustomProvider(LLMProvider):
             for tc in (msg.tool_calls or [])
         ]
         u = response.usage
+        reasoning_content = getattr(msg, "reasoning_content", None) or None
+        thinking_blocks = getattr(msg, "thinking_blocks", None) or None
         return LLMResponse(
             content=msg.content,
             tool_calls=tool_calls,
@@ -142,7 +144,8 @@ class CustomProvider(LLMProvider):
             }
             if u
             else {},
-            reasoning_content=getattr(msg, "reasoning_content", None) or None,
+            reasoning_content=reasoning_content,
+            thinking_blocks=thinking_blocks,
         )
 
     def get_default_model(self) -> str:

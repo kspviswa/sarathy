@@ -424,6 +424,13 @@ At some point in future, I might consider making sarathy as a general purpose to
 
 ## Changelog
 
+### 2026-03-05
+- **Fix**: Extract tool calls from reasoning_content for Ollama/Qwen3 models
+  - Some backends (like Ollama) put tool calls in reasoning_content instead of structured tool_calls field
+  - Added `_extract_tool_calls_from_reasoning()` to parse `<tool_call>` XML patterns from thinking
+  - Tool calls in reasoning are now executed just like structured tool calls
+  - Strips tool_call XML from display to avoid leaking raw XML to users
+
 ### 2026-03-04
 - **Fix**: Handle thinking/reasoning tokens from models like Qwen3, DeepSeek-R1, Kimi K2.5
   - Updated `_strip_think()` to fall back to `reasoning_content` when content becomes empty after stripping thinking blocks

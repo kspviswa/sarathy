@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from loguru import logger
-from telegram import BotCommand, Update, ReplyParameters
+from telegram import BotCommand, Update, ReplyParameters, ReactionTypeEmoji
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
 
@@ -134,6 +134,7 @@ class TelegramChannel(BaseChannel):
         self._active_drafts: dict[int, int] = {}  # chat_id -> draft_id for streaming
         self._last_draft_update: dict[int, float] = {}  # chat_id -> last update timestamp
         self._draft_throttle_ms: int = 500  # Throttle drafts to every 500ms
+        self._active_message_count: dict[int, int] = {}  # chat_id -> count of active messages
 
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
@@ -369,9 +370,31 @@ class TelegramChannel(BaseChannel):
         draft_id = self._active_drafts.get(chat_id_int)
         draft_finalized = False
 
+        # Build reply_params FIRST (before draft handling)
+        reply_params = None
+        if self.config.reply_to_message:
+            reply_to_message_id = msg.metadata.get("message_id")
+            if reply_to_message_id:
+                reply_params = ReplyParameters(
+                    message_id=reply_to_message_id, allow_sending_without_reply=True
+                )
+
         if is_final:
-            logger.info("Telegram: stopping typing (final response) for chat_id={}", chat_id_str)
-            self._stop_typing(chat_id_str)
+            # Check if more messages pending before stopping typing
+            self._active_message_count[chat_id_int] = (
+                self._active_message_count.get(chat_id_int, 1) - 1
+            )
+            remaining = self._active_message_count.get(chat_id_int, 0)
+            if remaining <= 0:
+                logger.info("Telegram: stopping typing (all done) for chat_id={}", chat_id_str)
+                self._stop_typing(chat_id_str)
+                self._active_message_count[chat_id_int] = 0
+            else:
+                logger.info(
+                    "Telegram: keeping typing ON ({} pending) for chat_id={}",
+                    remaining,
+                    chat_id_str,
+                )
             if draft_id:
                 try:
                     content = msg.content or ""
@@ -381,6 +404,7 @@ class TelegramChannel(BaseChannel):
                             chat_id=chat_id_int,
                             text=html,
                             parse_mode="HTML",
+                            reply_parameters=reply_params,  # Pass reply_params to draft!
                         )
                         draft_finalized = True
                     self._active_drafts.pop(chat_id_int, None)
@@ -393,14 +417,6 @@ class TelegramChannel(BaseChannel):
             logger.info(
                 "Telegram: NOT stopping typing (intermediate message) for chat_id={}", chat_id_str
             )
-
-        reply_params = None
-        if self.config.reply_to_message:
-            reply_to_message_id = msg.metadata.get("message_id")
-            if reply_to_message_id:
-                reply_params = ReplyParameters(
-                    message_id=reply_to_message_id, allow_sending_without_reply=True
-                )
 
         # Send media files
         for media_path in msg.media or []:
@@ -448,6 +464,20 @@ class TelegramChannel(BaseChannel):
                         )
                     except Exception as e2:
                         logger.error("Error sending Telegram message: {}", e2)
+
+        # Remove reaction from the user's message if enabled
+        if is_final and self.config.react_to_message and self._app:
+            original_message_id = msg.metadata.get("message_id")
+            if original_message_id:
+                try:
+                    await self._app.bot.set_message_reaction(
+                        chat_id=chat_id_int,
+                        message_id=original_message_id,
+                        reaction=[],  # Empty array removes all reactions
+                    )
+                    logger.debug("Telegram: removed reaction from message {}", original_message_id)
+                except Exception as e:
+                    logger.warning("Failed to remove reaction: {}", e)
 
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
@@ -584,6 +614,22 @@ class TelegramChannel(BaseChannel):
 
         # Download media if present
         if media_file and self._app:
+            # Send download progress if streaming is enabled
+            if self.config.streaming:
+                try:
+                    from sarathy.bus.events import OutboundMessage
+
+                    await self._send_progress(
+                        OutboundMessage(
+                            channel="telegram",
+                            chat_id=str(chat_id),
+                            content="📥 Downloading...",
+                            metadata={"_progress": True},
+                        )
+                    )
+                except Exception as e:
+                    logger.debug("Failed to send download progress: {}", e)
+
             try:
                 file = await self._app.bot.get_file(media_file.file_id)
                 ext = self._get_extension(media_type, getattr(media_file, "mime_type", None))
@@ -614,6 +660,40 @@ class TelegramChannel(BaseChannel):
 
         # Start typing indicator before processing
         self._start_typing(str_chat_id)
+
+        # Track active message count
+        chat_id_int = int(str_chat_id)
+        self._active_message_count[chat_id_int] = self._active_message_count.get(chat_id_int, 0) + 1
+
+        # Add reaction to the user's message if enabled
+        if self.config.react_to_message and self._app:
+            try:
+                emoji = self.config.reaction_emoji or "👀"
+                await self._app.bot.set_message_reaction(
+                    chat_id=chat_id_int,
+                    message_id=message.message_id,
+                    reaction=[ReactionTypeEmoji(emoji=emoji)],
+                )
+                logger.debug("Telegram: added {} reaction to message {}", emoji, message.message_id)
+            except Exception as e:
+                logger.warning("Failed to set reaction: {}", e)
+
+        # Send "Sending to sarathy..." progress if media was attached and streaming is enabled
+        if media_paths and self.config.streaming:
+            try:
+                from sarathy.bus.events import OutboundMessage
+
+                user_name = user.first_name or "you"
+                await self._send_progress(
+                    OutboundMessage(
+                        channel="telegram",
+                        chat_id=str_chat_id,
+                        content=f"📬 {user_name}, sending to sarathy...",
+                        metadata={"_progress": True},
+                    )
+                )
+            except Exception as e:
+                logger.debug("Failed to send processing progress: {}", e)
 
         # Forward to the message bus
         await self._handle_message(
@@ -647,7 +727,7 @@ class TelegramChannel(BaseChannel):
         """Repeatedly send 'typing' action until cancelled. Includes TTL safety net."""
         import time
 
-        typing_ttl_seconds = 120  # 2 minutes TTL safety net
+        typing_ttl_seconds = 600  # 10 minutes TTL safety net
         start_time = time.monotonic()
         try:
             while self._app:

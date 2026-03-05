@@ -50,6 +50,8 @@ While nanobot served as the initial inspiration, Sarathy has evolved significant
 - **Progress updates**: Tool execution progress shown in channels
 - **Verbose mode**: Detailed stats (token count, speed) in responses
 - **Streaming mode**: Real-time response streaming in Telegram (uses sendMessageDraft API)
+- **Message reactions**: Emoji reaction on user's message while processing (configurable)
+- **Media progress**: Download and processing progress shown for images/attachments
 
 ### Built-in Commands
 - `/think` - Enable reasoning mode
@@ -286,9 +288,15 @@ Key configuration sections in `~/.sarathy/config.json`:
     }
   },
   "channels": {
+    "sendProgress": true,
+    "sendToolHints": false,
     "telegram": {
       "enabled": false,
-      "token": "YOUR_BOT_TOKEN"
+      "token": "YOUR_BOT_TOKEN",
+      "replyToMessage": true,
+      "streaming": true,
+      "reactToMessage": true,
+      "reactionEmoji": "👀"
     },
     "discord": {
       "enabled": false,
@@ -329,6 +337,31 @@ The web search tool can be configured under `tools.web.search`:
 | `provider` | string | `"firecrawl"` | Search provider: `"firecrawl"` or `"brave"` |
 | `api_key` | string | `""` | Provider API key (falls back to env var if empty) |
 | `max_results` | integer | `5` | Maximum number of results to return (1-10) |
+
+**Environment Variables:**
+- Firecrawl: `FIRECRAWL_API_KEY`
+- Brave: `BRAVE_API_KEY`
+
+If `api_key` is empty in config, the corresponding environment variable will be used.
+
+### Telegram Configuration
+
+The Telegram channel supports additional options under `channels.telegram`:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable Telegram channel |
+| `token` | string | `""` | Bot token from @BotFather |
+| `replyToMessage` | boolean | `false` | Reply inline to user's message |
+| `streaming` | boolean | `false` | Stream responses in real-time via drafts |
+| `reactToMessage` | boolean | `false` | Add emoji reaction to user's message while processing |
+| `reactionEmoji` | string | `"👀"` | Emoji to use for reaction |
+
+**Features:**
+- `replyToMessage`: When enabled, bot responses appear as inline replies to user's messages
+- `streaming`: Shows real-time progress as draft messages (requires `sendProgress: true` in channels)
+- `reactToMessage`: Adds an emoji reaction to user's message while processing, removes when done
+- Media attachments show download and processing progress via drafts
 
 **Environment Variables:**
 - Firecrawl: `FIRECRAWL_API_KEY`

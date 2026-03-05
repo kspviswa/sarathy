@@ -23,6 +23,8 @@ class TelegramConfig(Base):
     )
     reply_to_message: bool = False  # If true, bot replies quote the original message
     streaming: bool = False  # Stream responses in progress
+    react_to_message: bool = False  # Add emoji reaction to user's message while processing
+    reaction_emoji: str = "👀"  # Emoji to use for reaction
 
 
 class DiscordConfig(Base):

@@ -361,6 +361,13 @@ class AgentLoop:
                         )
                 else:
                     # No tool calls found - regular response
+                    # Don't persist error responses to session history — they can
+                    # poison the context and cause permanent 400 loops (#1303).
+                    if response.finish_reason == "error":
+                        logger.error("LLM returned error: {}", (response.content or "")[:200])
+                        final_content = response.content or "Sorry, I encountered an error calling the AI model."
+                        break
+
                     self.context.add_assistant_message(
                         messages,
                         response.content,

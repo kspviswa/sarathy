@@ -6,6 +6,9 @@ from typing import Any
 
 from sarathy.agent.tools.base import Tool
 
+# ~512KB limit to prevent OOM - guide agent to use exec with head/tail/grep for large files
+MAX_FILE_SIZE = 512 * 1024
+
 
 def _resolve_path(path: str, workspace: Path | None = None, allowed_dir: Path | None = None) -> Path:
     """Resolve path against workspace (if relative) and enforce directory restriction."""
@@ -56,6 +59,11 @@ class ReadFileTool(Tool):
                 return f"Error: File not found: {path}"
             if not file_path.is_file():
                 return f"Error: Not a file: {path}"
+
+            # Check file size to prevent OOM
+            file_size = file_path.stat().st_size
+            if file_size > MAX_FILE_SIZE:
+                return f"Error: File too large ({file_size} bytes). Max size is {MAX_FILE_SIZE} bytes. Use exec tool with head/tail/grep to read large files."
 
             content = file_path.read_text(encoding="utf-8")
             return content

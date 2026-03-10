@@ -32,8 +32,11 @@ class Session:
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated to files
 
-    def add_message(self, role: str, content: str, **kwargs: Any) -> None:
+    def add_message(self, role: str, content: str | None, **kwargs: Any) -> None:
         """Add a message to the session."""
+        # Sanitize None content to prevent session poisoning
+        if content is None:
+            content = "(empty)"
         msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat(), **kwargs}
         self.messages.append(msg)
         self.updated_at = datetime.now()

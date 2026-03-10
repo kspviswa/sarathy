@@ -15,7 +15,6 @@ from sarathy.channels.base import BaseChannel
 from sarathy.channels.utils import detect_and_convert_tables
 from sarathy.config.schema import DiscordConfig
 
-
 DISCORD_API_BASE = "https://discord.com/api/v10"
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_MESSAGE_LEN = 2000  # Discord message character limit
@@ -121,6 +120,19 @@ class DiscordChannel(BaseChannel):
                 content = f"{content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
 
         try:
+            # Send media attachments first
+            media_attachments = msg.media or []
+            reply_to = msg.reply_to
+
+            for media_path in media_attachments:
+                success = await self._send_file(url, headers, media_path, reply_to)
+                # Let the first successful attachment carry the reply if present
+                if success and reply_to:
+                    reply_to = None
+                if not success:
+                    # Fall back to including path in content
+                    content += f"\n[attachment: {Path(media_path).name}]"
+
             chunks = _split_message(content)
             if not chunks:
                 return
@@ -129,8 +141,8 @@ class DiscordChannel(BaseChannel):
                 payload: dict[str, Any] = {"content": chunk}
 
                 # Only set reply reference on the first chunk
-                if i == 0 and msg.reply_to:
-                    payload["message_reference"] = {"message_id": msg.reply_to}
+                if i == 0 and reply_to:
+                    payload["message_reference"] = {"message_id": reply_to}
                     payload["allowed_mentions"] = {"replied_user": False}
 
                 if not await self._send_payload(url, headers, payload):
@@ -159,6 +171,59 @@ class DiscordChannel(BaseChannel):
             except Exception as e:
                 if attempt == 2:
                     logger.error("Error sending Discord message: {}", e)
+                else:
+                    await asyncio.sleep(1)
+        return False
+
+    async def _send_file(
+        self, url: str, headers: dict[str, str], file_path: str, reply_to: str | None
+    ) -> bool:
+        """Send a file attachment via Discord API. Returns True on success."""
+        path = Path(file_path)
+        if not path.exists():
+            logger.warning("Discord attachment file not found: {}", file_path)
+            return False
+
+        file_size = path.stat().st_size
+        if file_size > MAX_ATTACHMENT_BYTES:
+            logger.warning(
+                "Discord attachment too large: {} bytes (max {})", file_size, MAX_ATTACHMENT_BYTES
+            )
+            return False
+
+        for attempt in range(3):
+            try:
+                # Upload file using multipart/form-data
+                with open(path, "rb") as f:
+                    files = {"file": (path.name, f)}
+                    data = {}
+                    if reply_to:
+                        data["message_reference"] = json.dumps({"message_id": reply_to})
+                        data["allowed_mentions"] = json.dumps({"replied_user": False})
+                        reply_to = None  # Only first attachment carries reply
+
+                    response = await self._http.post(
+                        url,
+                        headers=headers,
+                        files=files,
+                        data=data,
+                    )
+
+                if response.status_code == 429:
+                    response_data = response.json()
+                    retry_after = float(response_data.get("retry_after", 1.0))
+                    logger.warning(
+                        "Discord rate limited on file upload, retrying in {}s", retry_after
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
+
+                response.raise_for_status()
+                logger.info("Discord attachment sent: {}", path.name)
+                return True
+            except Exception as e:
+                if attempt == 2:
+                    logger.error("Error sending Discord file {}: {}", path.name, e)
                 else:
                     await asyncio.sleep(1)
         return False

@@ -14,6 +14,7 @@ from email.parser import BytesParser
 from email.utils import parseaddr
 from typing import Any
 
+import markdown
 from loguru import logger
 
 from sarathy.bus.events import OutboundMessage
@@ -134,10 +135,17 @@ class EmailChannel(BaseChannel):
                 subject = override
 
         email_msg = EmailMessage()
-        email_msg["From"] = self.config.from_address or self.config.smtp_username or self.config.imap_username
+        email_msg["From"] = (
+            self.config.from_address or self.config.smtp_username or self.config.imap_username
+        )
         email_msg["To"] = to_addr
         email_msg["Subject"] = subject
-        email_msg.set_content(msg.content or "")
+
+        content = msg.content or ""
+        if content:
+            html_content = markdown.markdown(content, extensions=["extra", "nl2br"])
+            email_msg.set_content(content, subtype="plain")
+            email_msg.add_alternative(html_content, subtype="html")
 
         in_reply_to = self._last_message_id_by_chat.get(to_addr)
         if in_reply_to:
@@ -166,7 +174,7 @@ class EmailChannel(BaseChannel):
             missing.append("smtp_password")
 
         if missing:
-            logger.error("Email channel not configured, missing: {}", ', '.join(missing))
+            logger.error("Email channel not configured, missing: {}", ", ".join(missing))
             return False
         return True
 
@@ -249,7 +257,7 @@ class EmailChannel(BaseChannel):
             if status != "OK" or not data:
                 return messages
 
-            ids = data[0].split()
+            ids = data[0].split() if data[0] else []
             if limit > 0 and len(ids) > limit:
                 ids = ids[-limit:]
             for imap_id in ids:
@@ -268,6 +276,16 @@ class EmailChannel(BaseChannel):
                 parsed = BytesParser(policy=policy.default).parsebytes(raw_bytes)
                 sender = parseaddr(parsed.get("From", ""))[1].strip().lower()
                 if not sender:
+                    continue
+
+                # Skip emails sent by ourselves (to avoid processing our own sent emails from same inbox)
+                from_address = (
+                    self.config.from_address
+                    or self.config.smtp_username
+                    or self.config.imap_username
+                )
+                if from_address and from_address.lower() == sender:
+                    logger.debug("Skipping email sent by self: {}", sender)
                     continue
 
                 subject = self._decode_header_value(parsed.get("Subject", ""))
@@ -309,7 +327,9 @@ class EmailChannel(BaseChannel):
                     # mark_seen is the primary dedup; this set is a safety net
                     if len(self._processed_uids) > self._MAX_PROCESSED_UIDS:
                         # Evict a random half to cap memory; mark_seen is the primary dedup
-                        self._processed_uids = set(list(self._processed_uids)[len(self._processed_uids) // 2:])
+                        self._processed_uids = set(
+                            list(self._processed_uids)[len(self._processed_uids) // 2 :]
+                        )
 
                 if mark_seen:
                     client.store(imap_id, "+FLAGS", "\\Seen")
@@ -330,7 +350,11 @@ class EmailChannel(BaseChannel):
     @staticmethod
     def _extract_message_bytes(fetched: list[Any]) -> bytes | None:
         for item in fetched:
-            if isinstance(item, tuple) and len(item) >= 2 and isinstance(item[1], (bytes, bytearray)):
+            if (
+                isinstance(item, tuple)
+                and len(item) >= 2
+                and isinstance(item[1], (bytes, bytearray))
+            ):
                 return bytes(item[1])
         return None
 

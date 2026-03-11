@@ -7,7 +7,7 @@ import json
 import re
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from loguru import logger
 
@@ -137,7 +137,11 @@ class AgentLoop:
                 )
             )
         self.tools.register(WebFetchTool())
-        self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
+        self.tools.register(
+            MessageTool(
+                send_callback=self.bus.publish_outbound, channels_config=self.channels_config
+            )
+        )
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
@@ -187,7 +191,9 @@ class AgentLoop:
         """
         if not text:
             if reasoning_content:
-                cleaned = re.sub(r"<tool_call>[\s\S]*?</tool_call>\s*", "", reasoning_content).strip()
+                cleaned = re.sub(
+                    r"<tool_call>[\s\S]*?</tool_call>\s*", "", reasoning_content
+                ).strip()
                 return cleaned if cleaned else None
             return None
         stripped = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
@@ -230,17 +236,18 @@ class AgentLoop:
                 arguments[key] = value.strip()
 
             if arguments:
-                tool_calls.append({
-                    "id": f"reasoning_{len(tool_calls)}",
-                    "type": "function",
-                    "function": {
-                        "name": func_name,
-                        "arguments": json.dumps(arguments),
-                    },
-                })
+                tool_calls.append(
+                    {
+                        "id": f"reasoning_{len(tool_calls)}",
+                        "type": "function",
+                        "function": {
+                            "name": func_name,
+                            "arguments": json.dumps(arguments),
+                        },
+                    }
+                )
 
         return tool_calls if tool_calls else None
-
 
     async def _run_agent_loop(
         self,
@@ -327,18 +334,32 @@ class AgentLoop:
                     )
             else:
                 # Check if tool calls are embedded in reasoning_content (Ollama/Qwen3 bug)
-                extracted_tool_calls = self._extract_tool_calls_from_reasoning(response.reasoning_content)
+                extracted_tool_calls = self._extract_tool_calls_from_reasoning(
+                    response.reasoning_content
+                )
 
                 if extracted_tool_calls:
                     # Found tool calls in reasoning_content - execute them!
-                    logger.info("Found {} tool call(s) in reasoning_content", len(extracted_tool_calls))
+                    logger.info(
+                        "Found {} tool call(s) in reasoning_content", len(extracted_tool_calls)
+                    )
 
                     if on_progress:
                         clean = self._strip_think(response.content, response.reasoning_content)
                         if clean:
                             await on_progress(clean)
                         # Create fake tool call objects for _tool_hint
-                        fake_tcs = [type('obj', (object,), {'name': tc['function']['name'], 'arguments': json.loads(tc['function']['arguments'])})() for tc in extracted_tool_calls]
+                        fake_tcs = [
+                            type(
+                                "obj",
+                                (object,),
+                                {
+                                    "name": tc["function"]["name"],
+                                    "arguments": json.loads(tc["function"]["arguments"]),
+                                },
+                            )()
+                            for tc in extracted_tool_calls
+                        ]
                         await on_progress(self._tool_hint(fake_tcs), tool_hint=True)
 
                     # Add assistant message with tool calls
@@ -354,7 +375,11 @@ class AgentLoop:
                         func_name = tc["function"]["name"]
                         func_args = json.loads(tc["function"]["arguments"])
                         tools_used.append(func_name)
-                        logger.info("Tool call (from reasoning): {}({})", func_name, json.dumps(func_args)[:200])
+                        logger.info(
+                            "Tool call (from reasoning): {}({})",
+                            func_name,
+                            json.dumps(func_args)[:200],
+                        )
                         result = await self.tools.execute(func_name, func_args)
                         messages = self.context.add_tool_result(
                             messages, tc["id"], func_name, result
@@ -365,7 +390,10 @@ class AgentLoop:
                     # poison the context and cause permanent 400 loops (#1303).
                     if response.finish_reason == "error":
                         logger.error("LLM returned error: {}", (response.content or "")[:200])
-                        final_content = response.content or "Sorry, I encountered an error calling the AI model."
+                        final_content = (
+                            response.content
+                            or "Sorry, I encountered an error calling the AI model."
+                        )
                         break
 
                     self.context.add_assistant_message(
@@ -705,20 +733,19 @@ Assistant response: {assistant_response[:500]}"""
         metadata["_stats"] = stats
         metadata["_verbose"] = verbose_flag
 
-        # Only suppress final reply if message tool sent to DIFFERENT target
+        # Only suppress final reply if message tool sent to SAME target
+        # Different targets = send to both (e.g., email + telegram)
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 sent_targets = message_tool.get_turn_sends()
                 logger.info("Message tool sent to: {}", sent_targets)
                 if (msg.channel, msg.chat_id) in sent_targets:
-                    logger.info("Message tool sent to SAME target - not suppressing final response")
-                    # Message tool sent to same target - don't suppress, let it through
-                elif sent_targets:
                     logger.info(
-                        "Message tool sent to DIFFERENT target - suppressing final response"
+                        "Message tool sent to SAME target - suppressing final response to avoid duplicate"
                     )
-                    # Message tool sent to different target - suppress final
+                    # Message tool sent to same target - suppress to avoid duplicate
                     return None
+                # Different target - don't suppress, let both responses through
 
         # Mark as final response so typing indicator knows to stop
         metadata["_final"] = True

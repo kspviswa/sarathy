@@ -15,11 +15,13 @@ class MessageTool(Tool):
         default_channel: str = "",
         default_chat_id: str = "",
         default_message_id: str | None = None,
+        channels_config: Any = None,
     ):
         self._send_callback = send_callback
         self._default_channel = default_channel
         self._default_chat_id = default_chat_id
         self._default_message_id = default_message_id
+        self._channels_config = channels_config
         self._turn_sends: list[
             tuple[str, str]
         ] = []  # List of (channel, chat_id) tuples sent this turn
@@ -52,21 +54,50 @@ class MessageTool(Tool):
     def name(self) -> str:
         return "message"
 
+    def _get_enabled_channels(self) -> list[str]:
+        """Get list of enabled channel names from config."""
+        if not self._channels_config:
+            return []
+        channels = []
+        config = self._channels_config
+        if getattr(getattr(config, "telegram", None), "enabled", False):
+            channels.append("telegram")
+        if getattr(getattr(config, "discord", None), "enabled", False):
+            channels.append("discord")
+        if getattr(getattr(config, "email", None), "enabled", False):
+            channels.append("email")
+        return channels
+
     @property
     def description(self) -> str:
+        enabled_channels = self._get_enabled_channels()
+        if enabled_channels:
+            channel_list = ", ".join(enabled_channels)
+            return f"Send a message to the user. Use this when you want to communicate something. Available channels: {channel_list}"
         return "Send a message to the user. Use this when you want to communicate something."
 
     @property
     def parameters(self) -> dict[str, Any]:
+        enabled_channels = self._get_enabled_channels()
+        has_email = "email" in enabled_channels
+
+        chat_id_desc = "Required for email channel (must be email address like user@example.com). For telegram/discord, use numeric user/chat ID."
+        if enabled_channels:
+            chat_id_desc = (
+                f"Target {'email address' if has_email else 'chat/user ID'}. " + chat_id_desc
+            )
+
         return {
             "type": "object",
             "properties": {
                 "content": {"type": "string", "description": "The message content to send"},
                 "channel": {
                     "type": "string",
-                    "description": "Optional: target channel (telegram, discord, etc.)",
+                    "description": f"Target channel ({', '.join(enabled_channels)})"
+                    if enabled_channels
+                    else "Target channel (telegram, discord, email, etc.)",
                 },
-                "chat_id": {"type": "string", "description": "Optional: target chat/user ID"},
+                "chat_id": {"type": "string", "description": chat_id_desc},
                 "media": {
                     "type": "array",
                     "items": {"type": "string"},

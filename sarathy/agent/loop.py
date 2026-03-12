@@ -793,7 +793,7 @@ Assistant response: {assistant_response[:500]}"""
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
-            content=f"✨ Saved to memory and started a new session.\n\n🆔 Session ID: `{session.key}`\n\nReady for a fresh conversation!",
+            content=f"✨ Saved to memory and started a new session.\n\nReady for a fresh conversation!",
         )
 
     def _handle_clear_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
@@ -804,7 +804,7 @@ Assistant response: {assistant_response[:500]}"""
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
-            content=f"🗑️ Session cleared (discarded without saving to memory).\n\n🆔 New Session ID: `{session.key}`\n\nReady for a fresh conversation!",
+            content=f"🗑️ Session cleared (discarded without saving to memory).\n\nReady for a fresh conversation!",
         )
 
     def _handle_think_command(

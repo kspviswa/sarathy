@@ -570,9 +570,33 @@ class TelegramChannel(BaseChannel):
         ):
             return
 
+        chat_id_str = str(update.message.chat_id)
+
+        # Start typing indicator before processing
+        self._start_typing(chat_id_str)
+
+        # Track active message count
+        chat_id_int = int(chat_id_str)
+        self._active_message_count[chat_id_int] = self._active_message_count.get(chat_id_int, 0) + 1
+
+        # Add reaction to the user's message if enabled
+        if self.config.react_to_message and self._app:
+            try:
+                emoji = self.config.reaction_emoji or "👀"
+                await self._app.bot.set_message_reaction(
+                    chat_id=chat_id_int,
+                    message_id=update.message.message_id,
+                    reaction=[ReactionTypeEmoji(emoji=emoji)],
+                )
+                logger.debug(
+                    "Telegram: added {} reaction to message {}", emoji, update.message.message_id
+                )
+            except Exception as e:
+                logger.warning("Failed to set reaction: {}", e)
+
         await self._handle_message(
             sender_id=self._sender_id(update.effective_user),
-            chat_id=str(update.message.chat_id),
+            chat_id=chat_id_str,
             content=update.message.text,
         )
 

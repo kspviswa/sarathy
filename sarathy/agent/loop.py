@@ -912,7 +912,7 @@ Assistant response: {assistant_response[:500]}"""
         msg_count = len(session.messages)
         unconsolidated = msg_count - session.last_consolidated
         context_length = self.context_length
-        estimated_tokens = sum(len(m.get("content", "")) for m in session.messages) // 4
+        estimated_tokens = sum(len(m.get("content") or "") for m in session.messages) // 4
         estimated_tokens = min(estimated_tokens, unconsolidated * 500)
         usage_pct = (
             (min(unconsolidated, context_length) / context_length * 100) if context_length else 0

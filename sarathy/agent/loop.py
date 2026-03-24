@@ -648,6 +648,8 @@ Assistant response: {assistant_response[:500]}"""
                 elif cmd_name == "stop":
                     # Stop is handled in the message loop, not here
                     pass
+                elif cmd_name == "restart":
+                    return await self._handle_restart_command(session, msg)
 
         unconsolidated = len(session.messages) - session.last_consolidated
         if unconsolidated >= self.memory_window and session.key not in self._consolidating:
@@ -960,6 +962,42 @@ Model context length: {self.context_length:,}
             chat_id=msg.chat_id,
             content="\n".join(lines),
         )
+
+    async def _handle_restart_command(
+        self, session: Session, msg: InboundMessage
+    ) -> OutboundMessage:
+        """Handle /restart command - restart the gateway service."""
+        import json
+        import subprocess
+
+        from sarathy.utils.helpers import get_data_path
+
+        restart_flag_path = get_data_path() / "restart_pending.json"
+
+        restart_data = {
+            "channel": msg.channel,
+            "chat_id": msg.chat_id,
+            "sender_id": msg.sender_id,
+        }
+        restart_flag_path.write_text(json.dumps(restart_data), encoding="utf-8")
+
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="🔄 Gateway restart requested. Saving state and restarting...",
+            )
+        )
+
+        subprocess.Popen(
+            ["sarathy", "gateway", "restart"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+        return None
 
     _TOOL_RESULT_MAX_CHARS = 500
 

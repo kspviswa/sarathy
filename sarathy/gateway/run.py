@@ -202,12 +202,76 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
         enabled=hb_cfg.enabled,
     )
 
+    async def _check_restart_flag() -> None:
+        import json
+        import os as _os
+
+        from sarathy import __version__
+        from sarathy.bus.events import OutboundMessage
+        from sarathy.utils.helpers import get_data_path
+
+        restart_flag_path = get_data_path() / "restart_pending.json"
+        if not restart_flag_path.exists():
+            return
+
+        try:
+            data = json.loads(restart_flag_path.read_text(encoding="utf-8"))
+            channel = data.get("channel", "cli")
+            chat_id = data.get("chat_id", "direct")
+
+            from sarathy.providers.registry import PROVIDERS
+
+            status_lines = ["✅ Gateway restarted successfully!", "", "📊 Sarathy Status:", ""]
+            status_lines.append(f"Version: {__version__}")
+            status_lines.append(f"Model: {config.agents.defaults.model}")
+            status_lines.append(f"Provider: {config.get_provider_name()}")
+
+            for spec in PROVIDERS:
+                p = getattr(config.providers, spec.name, None)
+                if p is None:
+                    continue
+                if spec.is_oauth:
+                    status_lines.append(f"{spec.label}: ✓ (OAuth)")
+                elif spec.is_local:
+                    if p.api_base:
+                        status_lines.append(f"{spec.label}: ✓ {p.api_base}")
+                    else:
+                        status_lines.append(f"{spec.label}: not set")
+                else:
+                    has_key = bool(p.api_key)
+                    status_lines.append(f"{spec.label}: {'✓' if has_key else 'not set'}")
+
+            ws = config.tools.web.search
+            if ws.enabled:
+                env_key = "FIRECRAWL_API_KEY" if ws.provider == "firecrawl" else "BRAVE_API_KEY"
+                has_key = bool(ws.api_key or _os.environ.get(env_key))
+                status_lines.append(
+                    f"Web Search ({ws.provider}): {'✓' if has_key else '⚠ no API key'}"
+                )
+            else:
+                status_lines.append("Web Search: disabled")
+
+            await bus.publish_outbound(
+                OutboundMessage(channel=channel, chat_id=chat_id, content="\n".join(status_lines))
+            )
+        except Exception:
+            pass
+        finally:
+            try:
+                restart_flag_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    channels_task = asyncio.create_task(channels.start_all())
+    await asyncio.sleep(0.1)
+    await _check_restart_flag()
+
     try:
         await cron.start()
         await heartbeat.start()
         await asyncio.gather(
             agent.run(),
-            channels.start_all(),
+            channels_task,
         )
     except KeyboardInterrupt:
         pass

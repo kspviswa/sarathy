@@ -62,6 +62,11 @@ BUILTIN_COMMANDS = {
         description="Show available commands",
         subcommands=[],
     ),
+    "restart": BuiltinCommand(
+        name="restart",
+        description="Restart the gateway service",
+        subcommands=[],
+    ),
 }
 
 

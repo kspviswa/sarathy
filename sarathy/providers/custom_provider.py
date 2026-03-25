@@ -71,7 +71,12 @@ class CustomProvider(LLMProvider):
                 # Different providers use different field names:
                 # - Ollama /v1: delta.reasoning
                 # - Ollama raw: delta.thinking
-                reasoning = getattr(delta, "reasoning", None) or getattr(delta, "thinking", None)
+                # - LM Studio / DeepSeek / Kimi: delta.reasoning_content
+                reasoning = (
+                    getattr(delta, "reasoning", None)
+                    or getattr(delta, "thinking", None)
+                    or getattr(delta, "reasoning_content", None)
+                )
                 if reasoning:
                     accumulated_reasoning += reasoning
 

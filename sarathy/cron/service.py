@@ -17,7 +17,7 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
+def _compute_next_run(schedule: CronSchedule, now_ms: int, last_run_at_ms: int | None = None) -> int | None:
     """Compute next run time in ms."""
     if schedule.kind == "at":
         return schedule.at_ms if schedule.at_ms and schedule.at_ms > now_ms else None
@@ -25,8 +25,9 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
     if schedule.kind == "every":
         if not schedule.every_ms or schedule.every_ms <= 0:
             return None
-        # Next interval from now
-        return now_ms + schedule.every_ms
+        # Use last_run_at_ms to prevent drift, fallback to now_ms if never run
+        last_run = last_run_at_ms or now_ms
+        return last_run + schedule.every_ms
     
     if schedule.kind == "cron" and schedule.expr:
         try:
@@ -34,7 +35,8 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
             from zoneinfo import ZoneInfo
             # Use caller-provided reference time for deterministic scheduling
             base_time = now_ms / 1000
-            tz = ZoneInfo(schedule.tz) if schedule.tz else datetime.now().astimezone().tzinfo
+            # Default to EST (America/New_York) when timezone not specified
+            tz = ZoneInfo(schedule.tz) if schedule.tz else ZoneInfo("America/New_York")
             base_dt = datetime.fromtimestamp(base_time, tz=tz)
             cron = croniter(schedule.expr, base_dt)
             next_dt = cron.get_next(datetime)
@@ -168,6 +170,15 @@ class CronService:
         """Start the cron service."""
         self._running = True
         self._load_store()
+        
+        # Execute any missed runs immediately on startup
+        now = _now_ms()
+        for job in self._store.jobs:
+            if job.enabled and job.state.next_run_at_ms and job.state.next_run_at_ms < now:
+                logger.info("Cron: executing missed job '{}' ({}) at startup", job.name, job.id)
+                await self._execute_job(job)
+        
+        # Recompute next run times for recurring jobs
         self._recompute_next_runs()
         self._save_store()
         self._arm_timer()
@@ -186,8 +197,12 @@ class CronService:
             return
         now = _now_ms()
         for job in self._store.jobs:
-            if job.enabled:
-                job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+            if job.enabled and job.state.last_run_at_ms is not None:
+                # Only recompute for recurring jobs (not one-shot "at" schedules)
+                if job.schedule.kind != "at":
+                    job.state.next_run_at_ms = _compute_next_run(
+                        job.schedule, now, job.state.last_run_at_ms
+                    )
     
     def _get_next_wake_ms(self) -> int | None:
         """Get the earliest next run time across all jobs."""
@@ -263,8 +278,8 @@ class CronService:
                 job.enabled = False
                 job.state.next_run_at_ms = None
         else:
-            # Compute next run
-            job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+            # Compute next run using last_run_at_ms to prevent drift
+            job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms(), job.state.last_run_at_ms)
     
     # ========== Public API ==========
     

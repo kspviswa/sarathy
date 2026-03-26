@@ -1,7 +1,8 @@
 """Configuration schema using Pydantic."""
 
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -102,10 +103,21 @@ class AgentDefaults(Base):
     )
 
 
+class MemoryArchivalConfig(Base):
+    """Memory archival configuration for background thread-based session archival."""
+
+    enabled: bool = True
+    interval_seconds: int = 1800
+    max_session_size: int = 1000
+    auto_create_new_session: bool = True
+    extract_facts_for_memory: bool = True
+
+
 class AgentsConfig(Base):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    memory_archival: MemoryArchivalConfig = Field(default_factory=MemoryArchivalConfig)
 
 
 class ProviderConfig(Base):

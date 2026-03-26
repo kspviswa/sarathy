@@ -71,7 +71,8 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
         )
 
     session_manager = SessionManager(
-        config.workspace_path,
+        config=config,
+        workspace=config.workspace_path,
         max_cache_size=config.agents.defaults.session_cache_size,
         max_session_messages=config.agents.defaults.max_session_messages,
     )
@@ -143,6 +144,11 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
 
     # Start skill manager watching
     await skill_manager.start_watching()
+
+    # Initialize archival manager (Phase 2: background thread)
+    from sarathy.session.archival import SessionArchivalManager
+    archival_manager = SessionArchivalManager(config, session_manager)
+    archival_manager.start()
 
     # Update commands when skills change
     async def on_skills_updated():

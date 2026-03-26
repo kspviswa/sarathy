@@ -763,39 +763,25 @@ Assistant response: {assistant_response[:500]}"""
         )
 
     async def _handle_new_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
-        """Handle /new command - start new conversation (saves to memory)."""
-        lock = self._get_consolidation_lock(session.key)
-        self._consolidating.add(session.key)
+        """Handle /new command - archive session and start fresh."""
         try:
-            async with lock:
-                snapshot = session.messages[session.last_consolidated :]
-                if snapshot:
-                    temp = Session(key=session.key)
-                    temp.messages = list(snapshot)
-                    if not await self._consolidate_memory(temp, archive_all=True):
-                        return OutboundMessage(
-                            channel=msg.channel,
-                            chat_id=msg.chat_id,
-                            content="Memory archival failed, session not cleared. Please try again.",
-                        )
-        except Exception:
-            logger.exception("/new archival failed for {}", session.key)
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="Memory archival failed, session not cleared. Please try again.",
-            )
-        finally:
-            self._consolidating.discard(session.key)
-            self._prune_consolidation_lock(session.key, lock)
+            # Archive session to archived_sessions/ before clearing
+            if session.messages:
+                session.archive_session()
+                logger.info("Archived session {} to archived_sessions/", session.key)
+        except Exception as e:
+            logger.error("Failed to archive session {}: {}", session.key, e)
+            # Continue anyway - best effort archival
 
+        # Clear session and start fresh
         session.clear()
         self.sessions.save(session)
         self.sessions.invalidate(session.key)
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
-            content=f"✨ Saved to memory and started a new session.\n\nReady for a fresh conversation!",
+            content="✨ Session archived and started a new one.\n\nReady for a fresh conversation!",
         )
 
     def _handle_clear_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
@@ -806,7 +792,7 @@ Assistant response: {assistant_response[:500]}"""
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
-            content=f"🗑️ Session cleared (discarded without saving to memory).\n\nReady for a fresh conversation!",
+            content="🗑️ Session cleared (discarded without saving to memory).\n\nReady for a fresh conversation!",
         )
 
     def _handle_think_command(

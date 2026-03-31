@@ -67,6 +67,11 @@ BUILTIN_COMMANDS = {
         description="Restart the gateway service",
         subcommands=[],
     ),
+    "shell": BuiltinCommand(
+        name="shell",
+        description="Execute shell command directly",
+        subcommands=[],
+    ),
 }
 
 

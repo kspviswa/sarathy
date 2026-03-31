@@ -650,6 +650,8 @@ Assistant response: {assistant_response[:500]}"""
                     pass
                 elif cmd_name == "restart":
                     return await self._handle_restart_command(session, msg)
+                elif cmd_name == "shell":
+                    return await self._handle_shell_command(session, msg, args)
 
         unconsolidated = len(session.messages) - session.last_consolidated
         if unconsolidated >= self.memory_window and session.key not in self._consolidating:
@@ -984,6 +986,25 @@ Model context length: {self.context_length:,}
         )
 
         return None
+
+    async def _handle_shell_command(
+        self, session: Session, msg: InboundMessage, args: str
+    ) -> OutboundMessage:
+        if not args:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Usage: /shell <command>\n\nExecute a shell command and return raw output.",
+            )
+
+        result = await self.tools.execute("exec", {"command": args})
+
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=result,
+            metadata={"_shell_raw": True},
+        )
 
     _TOOL_RESULT_MAX_CHARS = 500
 

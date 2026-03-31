@@ -451,23 +451,34 @@ class TelegramChannel(BaseChannel):
 
         # Send text content (skip if draft was already finalized)
         if msg.content and msg.content != "[empty message]" and not draft_finalized:
-            for chunk in _split_message(msg.content):
-                try:
-                    html = _markdown_to_telegram_html(chunk)
-                    await self._app.bot.send_message(
-                        chat_id=chat_id_int,
-                        text=html,
-                        parse_mode="HTML",
-                        reply_parameters=reply_params,
-                    )
-                except Exception as e:
-                    logger.warning("HTML parse failed, falling back to plain text: {}", e)
+            if msg.metadata.get("_shell_raw"):
+                for chunk in _split_message(msg.content):
                     try:
                         await self._app.bot.send_message(
-                            chat_id=chat_id_int, text=chunk, reply_parameters=reply_params
+                            chat_id=chat_id_int,
+                            text=chunk,
+                            reply_parameters=reply_params,
                         )
-                    except Exception as e2:
-                        logger.error("Error sending Telegram message: {}", e2)
+                    except Exception as e:
+                        logger.error("Error sending raw shell output: {}", e)
+            else:
+                for chunk in _split_message(msg.content):
+                    try:
+                        html = _markdown_to_telegram_html(chunk)
+                        await self._app.bot.send_message(
+                            chat_id=chat_id_int,
+                            text=html,
+                            parse_mode="HTML",
+                            reply_parameters=reply_params,
+                        )
+                    except Exception as e:
+                        logger.warning("HTML parse failed, falling back to plain text: {}", e)
+                        try:
+                            await self._app.bot.send_message(
+                                chat_id=chat_id_int, text=chunk, reply_parameters=reply_params
+                            )
+                        except Exception as e2:
+                            logger.error("Error sending Telegram message: {}", e2)
 
         # Remove reaction from the user's message if enabled
         if is_final and self.config.react_to_message and self._app:

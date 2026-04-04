@@ -97,13 +97,14 @@ class Session:
         set archived=True after processing.
         """
         from pathlib import Path
+        from datetime import datetime
 
         from sarathy.utils.helpers import ensure_dir
 
         archive_dir = Path(self._get_archive_dir())
         ensure_dir(archive_dir)
 
-        timestamp = self.created_at.strftime("%Y-%m-%dT%H-%M")
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M")
         filename = f"session-{timestamp}.jsonl"
         filepath = archive_dir / filename
 

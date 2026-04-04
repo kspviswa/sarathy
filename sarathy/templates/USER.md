@@ -1,49 +1,25 @@
 # User Profile
 
 Information about the user to help personalize interactions.
+Edit this file to customize Sarathy's behavior for your needs.
 
 ## Basic Information
-
 - **Name**: (your name)
-- **Timezone**: (your timezone, e.g., UTC+8)
-- **Language**: (preferred language)
-
-## Preferences
-
-### Communication Style
-
-- [ ] Casual
-- [ ] Professional
-- [ ] Technical
-
-### Response Length
-
-- [ ] Brief and concise
-- [ ] Detailed explanations
-- [ ] Adaptive based on question
-
-### Technical Level
-
-- [ ] Beginner
-- [ ] Intermediate
-- [ ] Expert
+- **Timezone**: (e.g., America/Toronto)
+- **Language**: (preferred language, e.g., English)
+- **Technical Level**: (beginner / intermediate / expert)
 
 ## Work Context
+- **Primary Role**: (e.g., software developer, researcher)
+- **Main Projects**: (what you're currently working on)
+- **Tools & Stack**: (IDEs, languages, frameworks, platforms)
 
-- **Primary Role**: (your role, e.g., developer, researcher)
-- **Main Projects**: (what you're working on)
-- **Tools You Use**: (IDEs, languages, frameworks)
+## Communication Preferences
+- **Response Style**: (casual / technical / brief / detailed)
+- **Tone**: (what kind of interaction you prefer)
 
 ## Topics of Interest
-
-- 
-- 
-- 
+- (list topics Sarathy should know you care about)
 
 ## Special Instructions
-
-(Any specific instructions for how the assistant should behave)
-
----
-
-*Edit this file to customize sarathy's behavior for your needs.*
+(Any specific rules for how Sarathy should behave — these override defaults)

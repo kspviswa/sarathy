@@ -13,7 +13,6 @@ from loguru import logger
 
 from sarathy.agent.builtin_commands import BUILTIN_COMMANDS, get_help_text
 from sarathy.agent.context import ContextBuilder
-from sarathy.agent.memory import MemoryStore
 from sarathy.agent.subagent import SubagentManager
 from sarathy.agent.tools.cron import CronTool
 from sarathy.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
@@ -108,9 +107,6 @@ class AgentLoop:
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
         self._mcp_connecting = False
-        self._consolidating: set[str] = set()  # Session keys with consolidation in progress
-        self._consolidation_tasks: set[asyncio.Task] = set()  # Strong refs to in-flight tasks
-        self._consolidation_locks: dict[str, asyncio.Lock] = {}
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._processing_lock = asyncio.Lock()
         self._register_default_tools()
@@ -427,42 +423,6 @@ class AgentLoop:
 
         return final_content, tools_used, messages, stats
 
-    async def _suggest_memory_save(
-        self,
-        user_message: str,
-        assistant_response: str,
-    ) -> str | None:
-        """Ask LLM if there's anything important to remember from this exchange."""
-        prompt = f"""Did the user share any important information that should be saved to memory?
-Examples: preferences, API keys, important facts, personal details, project context.
-
-Respond with EXACTLY one of:
-- If important: "SAVE: <what to remember>"
-- If nothing important: "NO"
-
-User message: {user_message}
-Assistant response: {assistant_response[:500]}"""
-
-        try:
-            response = await self.provider.chat(
-                messages=[
-                    {"role": "user", "content": prompt},
-                ],
-                model=self.model,
-                temperature=0.1,
-                max_tokens=200,
-            )
-            content = response.content.strip() if response.content else ""
-            if content.startswith("SAVE:"):
-                memory_text = content[5:].strip()
-                current_memory = self.context.memory.read_long_term()
-                new_memory = f"{current_memory}\n- {memory_text}".strip()
-                self.context.memory.write_long_term(new_memory)
-                return memory_text
-        except Exception:
-            logger.exception("Failed to get memory suggestion")
-        return None
-
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
@@ -550,18 +510,6 @@ Assistant response: {assistant_response[:500]}"""
         """Stop the agent loop."""
         self._running = False
         logger.info("Agent loop stopping")
-
-    def _get_consolidation_lock(self, session_key: str) -> asyncio.Lock:
-        lock = self._consolidation_locks.get(session_key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._consolidation_locks[session_key] = lock
-        return lock
-
-    def _prune_consolidation_lock(self, session_key: str, lock: asyncio.Lock) -> None:
-        """Drop lock entry if no longer in use."""
-        if not lock.locked():
-            self._consolidation_locks.pop(session_key, None)
 
     async def _process_message(
         self,
@@ -653,25 +601,6 @@ Assistant response: {assistant_response[:500]}"""
                 elif cmd_name == "shell":
                     return await self._handle_shell_command(session, msg, args)
 
-        unconsolidated = len(session.messages) - session.last_consolidated
-        if unconsolidated >= self.memory_window and session.key not in self._consolidating:
-            self._consolidating.add(session.key)
-            lock = self._get_consolidation_lock(session.key)
-
-            async def _consolidate_and_unlock():
-                try:
-                    async with lock:
-                        await self._consolidate_memory(session)
-                finally:
-                    self._consolidating.discard(session.key)
-                    self._prune_consolidation_lock(session.key, lock)
-                    _task = asyncio.current_task()
-                    if _task is not None:
-                        self._consolidation_tasks.discard(_task)
-
-            _task = asyncio.create_task(_consolidate_and_unlock())
-            self._consolidation_tasks.add(_task)
-
         self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
@@ -685,6 +614,26 @@ Assistant response: {assistant_response[:500]}"""
             channel=msg.channel,
             chat_id=msg.chat_id,
         )
+
+        if len(session.messages) > 0 and len(session.messages) % 15 == 0:
+            nudge = {
+                "role": "system",
+                "content": (
+                    "[PERIODIC SELF-REFLECTION] Silently review the last 15 exchanges. "
+                    "Take action only if signal is clear — default is to do nothing.\n\n"
+                    "1. Did Viswa explicitly correct a mistake you made, or set a rule "
+                    "('never do X', 'always do Y')?\n"
+                    "   → Append one bullet per lesson to tasks/pending-lessons.md\n"
+                    "   → Format: '- Never/Always <specific rule>'\n\n"
+                    "2. Did you complete a non-obvious multi-step workflow (5+ steps) "
+                    "that is likely to recur?\n"
+                    "   → Append one bullet per workflow to tasks/pending-skills.md\n"
+                    "   → Format: '- <workflow name>: step1 → step2 → step3'\n\n"
+                    "If nothing significant happened, do nothing. "
+                    "Do NOT write research results, task outputs, or conversational facts."
+                ),
+            }
+            initial_messages.insert(-1, nudge)
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})
@@ -725,10 +674,6 @@ Assistant response: {assistant_response[:500]}"""
             tokens = stats.get("total_tokens", 0)
             if tps > 0 and tokens > 0:
                 final_content = f"{final_content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
-
-        suggested = await self._suggest_memory_save(msg.content, final_content or "")
-        if suggested:
-            logger.info("Auto-saved to memory: {}", suggested[:50])
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
@@ -931,9 +876,9 @@ Model context length: {self.context_length:,}
                 chat_id=msg.chat_id,
                 content="Usage: /remember <text to save>\nExample: /remember My API key is abc123",
             )
-        current_memory = self.context.memory.read_long_term()
+        current_memory = self.context.memory.read_memory()
         new_memory = f"{current_memory}\n- {args}".strip()
-        self.context.memory.write_long_term(new_memory)
+        self.context.memory.write_memory(new_memory)
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
@@ -1029,16 +974,6 @@ Model context length: {self.context_length:,}
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
         session.updated_at = datetime.now()
-
-    async def _consolidate_memory(self, session, archive_all: bool = False) -> bool:
-        """Delegate to MemoryStore.consolidate(). Returns True on success."""
-        return await MemoryStore(self.workspace).consolidate(
-            session,
-            self.provider,
-            self.model,
-            archive_all=archive_all,
-            memory_window=self.memory_window,
-        )
 
     async def process_direct(
         self,

@@ -3,15 +3,22 @@
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
+
+from loguru import logger
 
 
 class MemoryStore:
     """Manages MEMORY.md with facts-only approach."""
 
-    def __init__(self, max_size: int = 2000):
+    def __init__(self, workspace: Optional[Path] = None, max_size: int = 2000):
         self.max_size = max_size
-        self.memory_file = Path("/root/.sarathy/workspace/memory/MEMORY.md")
-        self.history_file = Path("/root/.sarathy/workspace/memory/HISTORY.md")
+        if workspace is None:
+            workspace = Path("/root/.sarathy/workspace")
+            logger.warning("MemoryStore using fallback workspace: {}", workspace)
+        self.workspace = workspace
+        self.memory_file = self.workspace / "memory" / "MEMORY.md"
+        self.history_file = self.workspace / "memory" / "HISTORY.md"
 
     def read_memory(self) -> str:
         """Read current MEMORY.md content."""
@@ -26,6 +33,11 @@ class MemoryStore:
         ensure_dir(self.memory_file.parent)
         self.memory_file.write_text(content, encoding="utf-8")
 
+    def get_memory_context(self) -> str:
+        """Return formatted memory context for system prompt."""
+        long_term = self.read_memory()
+        return f"## Long-term Memory\n{long_term}" if long_term else ""
+
     def read_history(self) -> str:
         """Read HISTORY.md content (for migration)."""
         if self.history_file.exists():
@@ -34,7 +46,6 @@ class MemoryStore:
 
     def migrate_history_to_memory(self, history_content: str) -> None:
         """Migrate key facts from HISTORY.md to MEMORY.md."""
-        # Extract key facts from history (can use regex or simple parsing)
         facts = self._extract_facts_from_history(history_content)
 
         current_memory = self.read_memory()
@@ -47,7 +58,6 @@ class MemoryStore:
 
     def _extract_facts_from_history(self, history_content: str) -> list[str]:
         """Extract key facts from HISTORY.md."""
-        # Simple fact extraction (can be enhanced)
         facts = []
 
         for line in history_content.split("\n"):
@@ -61,13 +71,33 @@ class MemoryStore:
         return facts
 
     def enforce_max_size(self, content: str) -> str:
-        """Enforce max size on MEMORY.md."""
-        if len(content) > self.max_size:
-            # Keep most recent facts (last 80%)
+        """Enforce max size on MEMORY.md, protecting HARD LESSONS."""
+        if len(content) <= self.max_size:
+            return content
+
+        sections = content.split("\n\n## ")
+        hard_lessons = [s for s in sections if "HARD LESSONS" in s]
+        others = [s for s in sections if "HARD LESSONS" not in s]
+
+        if hard_lessons:
+            protected = "\n\n## ".join(hard_lessons)
+            protected_len = len(protected)
+            remaining = self.max_size - protected_len - 50
+            if remaining > 0 and others:
+                recent = others[-3:] if len(others) > 3 else others
+                result = "\n\n## ".join([others[0]] + recent + hard_lessons)
+            else:
+                result = protected
+        else:
             lines = content.split("\n")
             cutoff = int(len(lines) * 0.8)
-            return "\n".join(lines[-cutoff:])
-        return content
+            result = "\n".join(lines[-cutoff:])
+
+        return (
+            result
+            if len(result) <= self.max_size
+            else "\n\n## ".join(hard_lessons + [others[-1]] if others else hard_lessons)
+        )
 
     def clean_conversation_logs(self, content: str) -> str:
         """Remove conversation logs from MEMORY.md, keep only facts/rules."""
@@ -75,13 +105,10 @@ class MemoryStore:
         cleaned_lines = []
 
         for line in lines:
-            # Skip conversation log markers
             if "## Session" in line or "## Conversation" in line:
                 continue
-            # Skip timestamped sections that look like logs
             if re.match(r"^## \d{4}-\d{2}-\d{2}", line):
                 continue
-            # Keep everything else (facts, rules, preferences)
             cleaned_lines.append(line)
 
         return "\n".join(cleaned_lines)

@@ -1,23 +1,23 @@
 # Long-term Memory
 
-This file stores important information that should persist across sessions.
+> Sections are fixed. Only write within existing sections.
+> No new top-level sections. Deduplicate before writing. Max ~2000 chars.
 
-## User Information
-
-(Important facts about the user)
+## User Profile
+<!-- Name, timezone, language, technical level -->
 
 ## Preferences
+<!-- Tools, response style, workflow preferences learned over time -->
 
-(User preferences learned over time)
+## Project Contexts
+<!-- Active projects with key decisions and current state -->
 
-## Project Context
+## HARD LESSONS
+<!-- Explicit corrections and rules. Start each with "Never" or "Always".
+     These are NEVER trimmed — protected from size enforcement. -->
 
-(Information about ongoing projects)
-
-## Important Notes
-
-(Things to remember)
+## Standing Instructions
+<!-- Persistent behavioral rules the user has explicitly set -->
 
 ---
-
-*This file is automatically updated by sarathy when important information should be remembered.*
+*Managed automatically by Sarathy's archival system. Edit with care.*

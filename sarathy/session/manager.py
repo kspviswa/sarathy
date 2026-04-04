@@ -34,6 +34,8 @@ class Session:
     last_consolidated: int = 0  # Number of messages already consolidated to files
     max_size: int | None = None  # Auto-create new session when messages >= this count
     archived: bool = False  # False when newly created, True after background thread processes
+    pending_lessons: list[str] = field(default_factory=list)
+    pending_skills: list[str] = field(default_factory=list)
 
     def add_message(self, role: str, content: str | None, **kwargs: Any) -> None:
         """Add a message and auto-create new session if full."""
@@ -117,6 +119,8 @@ class Session:
                 "metadata": self.metadata,
                 "last_consolidated": self.last_consolidated,
                 "archived": False,
+                "pending_lessons": self.pending_lessons,
+                "pending_skills": self.pending_skills,
             }
             f.write(json.dumps(metadata, ensure_ascii=False) + "\n")
             for msg in self.messages:
@@ -381,6 +385,8 @@ class SessionManager:
                             metadata=metadata.get("metadata", {}),
                             last_consolidated=metadata.get("last_consolidated", 0),
                             archived=False,
+                            pending_lessons=metadata.get("pending_lessons", []),
+                            pending_skills=metadata.get("pending_skills", []),
                         )
                         session._manager = self
                         unarchived.append(session)

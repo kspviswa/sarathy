@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from loguru import logger
 
@@ -16,37 +17,30 @@ SYSTEM_PROMPT = """You are a memory archival assistant. Your task is to analyze 
 1. **Facts** - Information about the user, environment, projects, or anything noteworthy
 2. **Preferences** - User's communication style, workflow habits, technical preferences
 3. **Lessons Learned** - Corrections, conventions, or important notes from the conversation
+4. **Skills** - Reusable multi-step workflows worth encoding for future reuse
 
-## Guidelines (Inspired by Hermes Agent Memory System)
-
-**Save These (Proactively):**
+## Save These (Proactively):
 - User preferences: "I prefer TypeScript over JavaScript"
-- Environment facts: "This server runs Debian 12 with PostgreSQL 16"
+- Environment facts: "Server runs Debian 12 with PostgreSQL 16"
 - Corrections: "Don't use sudo for Docker commands, user is in docker group"
 - Conventions: "Project uses tabs, 120-char line width"
-- Completed work: "Migrated database from MySQL to PostgreSQL on 2026-01-15"
+- Reusable workflows: "To deploy to prod: build → tag → push → kubectl rollout"
 
-**Skip These:**
-- Trivial/obvious info: "User asked about Python" — too vague
-- Raw data dumps: Large code blocks, log files, data tables
-- Session-specific ephemera: Temporary file paths, one-off debugging context
-
-**Format Requirements:**
-- Be specific and actionable
-- Keep entries compact and information-dense
-- Use the user's own terminology
-- Note the context/date if relevant
+## Skip These:
+- Trivial/obvious info, raw data dumps, one-off debugging, session-specific ephemera
 
 ## Response Format
 
 Return a JSON object with this structure:
 {
-  "facts": ["fact 1", "fact 2"],
+  "facts": ["fact 1"],
   "preferences": ["preference 1"],
+  "lessons": ["Never do X because Y"],
+  "skills": ["workflow name: step1 → step2 → step3 (used for: X)"],
   "nothing_found": false
 }
 
-If nothing worth saving is found, set "nothing_found" to true and use empty arrays for facts and preferences."""
+If nothing worth saving is found, set "nothing_found" to true and use empty arrays."""
 
 
 class SessionArchivalManager:
@@ -62,7 +56,9 @@ class SessionArchivalManager:
         self.session_manager = session_manager
         self.bus = bus
 
-        self.memory_store = MemoryStore(max_size=2000)
+        workspace = Path(config.agents.defaults.workspace).expanduser()
+        self.workspace = workspace
+        self.memory_store = MemoryStore(workspace=workspace, max_size=2000)
 
         self._provider = self._create_provider(config)
 
@@ -156,36 +152,75 @@ class SessionArchivalManager:
         except Exception as e:
             logger.error("LLM extraction failed for {}: {}", session.key, e)
             self._notify_error(session.key, f"LLM extraction failed: {e}")
-            result = {"facts": [], "preferences": [], "nothing_found": True}
+            result = {
+                "facts": [],
+                "preferences": [],
+                "lessons": [],
+                "skills": [],
+                "nothing_found": True,
+            }
 
         facts = result.get("facts", [])
         preferences = result.get("preferences", [])
+        lessons = result.get("lessons", [])
+        skills = result.get("skills", [])
         nothing_found = result.get("nothing_found", False)
 
-        if not nothing_found and (facts or preferences):
-            self._update_memory(session, facts, preferences)
+        lessons = list(dict.fromkeys(session.pending_lessons + lessons))
+        skills = list(dict.fromkeys(session.pending_skills + skills))
+
+        lessons, skills = self._merge_pending_files(lessons, skills)
+
+        has_content = facts or preferences or lessons or skills
+        if not nothing_found and has_content:
+            self._update_memory(session, facts, preferences, lessons)
+            if skills:
+                self._write_learned_skills(session.key, skills)
             logger.info(
-                "Archived session {}: {} facts, {} preferences",
+                "Archived session {}: {} facts, {} prefs, {} lessons, {} skills",
                 session.key,
                 len(facts),
                 len(preferences),
+                len(lessons),
+                len(skills),
             )
         else:
             logger.debug("No significant facts found in session {}", session.key)
 
         self.session_manager.mark_session_archived(session.key)
 
-    def _update_memory(self, session: Session, facts: list[str], preferences: list[str]) -> None:
-        """Update MEMORY.md with extracted facts and preferences."""
+    def _update_memory(
+        self,
+        session: Session,
+        facts: list[str],
+        preferences: list[str],
+        lessons: list[str] | None = None,
+    ) -> None:
+        """Update MEMORY.md with extracted facts, preferences, and lessons."""
         current_memory = self.memory_store.read_memory()
         timestamp = datetime.now().isoformat()
 
-        lines = [current_memory, f"\n\n## Session: {session.key} ({timestamp})"]
+        if lessons:
+            existing_lower = current_memory.lower()
+            lessons = [l for l in lessons if l.lower()[:30] not in existing_lower]
 
-        for fact in facts:
-            lines.append(f"- {fact}")
-        for pref in preferences:
-            lines.append(f"- [pref] {pref}")
+        lines = [current_memory]
+
+        if facts or preferences:
+            lines.append(f"\n\n## Session: {session.key} ({timestamp})")
+            for fact in facts:
+                lines.append(f"- {fact}")
+            for pref in preferences:
+                lines.append(f"- [pref] {pref}")
+
+        if lessons:
+            if "## HARD LESSONS" in current_memory:
+                for lesson in lessons:
+                    lines.append(f"\n- {lesson}")
+            else:
+                lines.append("\n\n## HARD LESSONS")
+                for lesson in lessons:
+                    lines.append(f"- {lesson}")
 
         new_memory = "\n".join(lines)
 
@@ -193,6 +228,53 @@ class SessionArchivalManager:
         new_memory = self.memory_store.clean_conversation_logs(new_memory)
 
         self.memory_store.write_memory(new_memory)
+
+    def _write_learned_skills(self, session_key: str, skills: list[str]) -> None:
+        """Write learned skills to workspace/skills/learned/ as individual files."""
+        skills_dir = self.workspace / "skills" / "learned"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        for skill in skills:
+            slug = (
+                skill[:30]
+                .lower()
+                .replace(" ", "-")
+                .replace(":", "")
+                .replace("→", "-")
+                .replace("/", "-")
+            )
+            slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in slug)
+            skill_file = skills_dir / f"{slug}.md"
+            if not skill_file.exists():
+                skill_file.write_text(
+                    f"# {skill}\n\nExtracted from session: {session_key}\n",
+                    encoding="utf-8",
+                )
+                logger.debug("Wrote learned skill to {}", skill_file)
+
+    def _merge_pending_files(
+        self, lessons: list[str], skills: list[str]
+    ) -> tuple[list[str], list[str]]:
+        """Read nudge output files, merge into lists, delete files after."""
+        tasks_dir = self.workspace / "tasks"
+
+        lessons_file = tasks_dir / "pending-lessons.md"
+        skills_file = tasks_dir / "pending-skills.md"
+
+        if lessons_file.exists():
+            for line in lessons_file.read_text(encoding="utf-8").splitlines():
+                line = line.lstrip("- ").strip()
+                if line and line not in lessons:
+                    lessons.append(line)
+            lessons_file.unlink()
+
+        if skills_file.exists():
+            for line in skills_file.read_text(encoding="utf-8").splitlines():
+                line = line.lstrip("- ").strip()
+                if line and line not in skills:
+                    skills.append(line)
+            skills_file.unlink()
+
+        return lessons, skills
 
     async def _extract_facts(self, messages: list[dict]) -> dict:
         """Extract facts and preferences from messages using LLM."""
@@ -207,7 +289,13 @@ class SessionArchivalManager:
                 lines.append(f"[{timestamp}] {role}: {content}")
 
         if not lines:
-            return {"facts": [], "preferences": [], "nothing_found": True}
+            return {
+                "facts": [],
+                "preferences": [],
+                "lessons": [],
+                "skills": [],
+                "nothing_found": True,
+            }
 
         conversation_text = "\n".join(lines)
 
@@ -236,7 +324,7 @@ class SessionArchivalManager:
             logger.error("LLM call failed: {}", e)
             raise
 
-        return {"facts": [], "preferences": [], "nothing_found": True}
+        return {"facts": [], "preferences": [], "lessons": [], "skills": [], "nothing_found": True}
 
     def _notify_error(self, session_key: str, error: str) -> None:
         """Notify all channels about archival error asynchronously."""

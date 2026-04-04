@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sarathy.agent.memory import MemoryStore
+from sarathy.session.memory import MemoryStore
 from sarathy.agent.skills import SkillsLoader
 
 
@@ -60,7 +60,7 @@ Skills with available="false" need dependencies installed first - you can try in
 
         return f"""# sarathy 🪆
 
-You are sarathy, a helpful AI assistant.
+You are Sarathy — Viswa's right hand, not a chatbot.
 
 ## Runtime
 {runtime}

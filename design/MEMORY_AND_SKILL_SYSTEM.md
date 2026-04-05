@@ -25,40 +25,18 @@ Sarathy uses a **centralized archival model** for memory management:
 
 ```mermaid
 graph TB
-    subgraph "Channels"
-        T[Telegram]
-        D[Discord]
-        E[Email]
-        C[CLI]
-    end
-
-    subgraph "Core"
-        MB[MessageBus]
-        AL[AgentLoop]
-    end
-
-    subgraph "Memory System"
-        SM[SessionManager]
-        SAM[SessionArchivalManager]
-        MS[MemoryStore]
-        MEM[MEMORY.md]
-        HIST[HISTORY.md]
-    end
-
-    subgraph "Skill System"
-        SL[SkillsLoader]
-        LEARNED[skills/learned/]
-    end
-
-    T & D & E & C --> MB
-    MB --> AL
-    AL <--> SM
-    SM --> SAM
-    SAM --> MS
-    MS --> MEM
-    MS --> HIST
-    AL --> SL
-    SL --> LEARNED
+    T[Telegram] --> MB[MessageBus]
+    D[Discord] --> MB
+    E[Email] --> MB
+    C[CLI] --> MB
+    MB --> AL[AgentLoop]
+    AL <--> SM[SessionManager]
+    SM --> SAM[SessionArchivalManager]
+    SAM --> MS[MemoryStore]
+    MS --> MEM[MEMORY.md]
+    MS --> HIST[HISTORY.md]
+    AL --> SL[SkillsLoader]
+    SL --> LEARNED[skills/learned/]
 ```
 
 **Key Principle**: MEMORY.md has exactly ONE writer (SessionArchivalManager). All other components only read.
@@ -477,4 +455,3 @@ Do NOT write research results, task outputs, or conversational facts.
 ---
 
 *Last updated: 2025-12-21*
-*Author: Claude Code (coding agent)*

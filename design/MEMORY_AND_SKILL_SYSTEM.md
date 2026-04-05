@@ -300,7 +300,7 @@ sequenceDiagram
 
 ## Inspiration: Hermes Agent Memory
 
-The design is inspired by the [Hermes Agent Memory System](https://github.com/Hermes-AI-Labs/hermes-agent-memory), which uses:
+The design is inspired by the [Hermes Agent Memory System](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory), which uses:
 
 ### Hermes Principles
 

@@ -13,76 +13,6 @@ class Base(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
-class TelegramConfig(Base):
-    """Telegram channel configuration."""
-
-    enabled: bool = False
-    token: str = ""  # Bot token from @BotFather
-    allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs or usernames
-    proxy: str | None = (
-        None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
-    )
-    reply_to_message: bool = False  # If true, bot replies quote the original message
-    streaming: bool = False  # Stream responses in progress
-    react_to_message: bool = False  # Add emoji reaction to user's message while processing
-    reaction_emoji: str = "👀"  # Emoji to use for reaction
-
-
-class DiscordConfig(Base):
-    """Discord channel configuration."""
-
-    enabled: bool = False
-    token: str = ""  # Bot token from Discord Developer Portal
-    allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs
-    gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
-    intents: int = 37377  # GUILDS + GUILD_MESSAGES + DIRECT_MESSAGES + MESSAGE_CONTENT
-    streaming: bool = False  # Stream responses in progress
-
-
-class EmailConfig(Base):
-    """Email channel configuration (IMAP inbound + SMTP outbound)."""
-
-    enabled: bool = False
-    consent_granted: bool = False  # Explicit owner permission to access mailbox data
-
-    # IMAP (receive)
-    imap_host: str = ""
-    imap_port: int = 993
-    imap_username: str = ""
-    imap_password: str = ""
-    imap_mailbox: str = "INBOX"
-    imap_use_ssl: bool = True
-
-    # SMTP (send)
-    smtp_host: str = ""
-    smtp_port: int = 587
-    smtp_username: str = ""
-    smtp_password: str = ""
-    smtp_use_tls: bool = True
-    smtp_use_ssl: bool = False
-    from_address: str = ""
-
-    # Behavior
-    auto_reply_enabled: bool = (
-        True  # If false, inbound email is read but no automatic reply is sent
-    )
-    poll_interval_seconds: int = 30
-    mark_seen: bool = True
-    max_body_chars: int = 12000
-    subject_prefix: str = "Re: "
-    allow_from: list[str] = Field(default_factory=list)  # Allowed sender email addresses
-
-
-class ChannelsConfig(Base):
-    """Configuration for chat channels."""
-
-    send_progress: bool = True  # stream agent's text progress to the channel
-    send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
-    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
-    discord: DiscordConfig = Field(default_factory=DiscordConfig)
-    email: EmailConfig = Field(default_factory=EmailConfig)
-
-
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -210,7 +140,6 @@ class Config(BaseSettings):
     """Root configuration for sarathy."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
-    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)

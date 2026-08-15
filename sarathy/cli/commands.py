@@ -553,44 +553,6 @@ def agent(
 
 
 # ============================================================================
-# Channel Commands
-# ============================================================================
-
-
-channels_app = typer.Typer(help="Manage channels")
-app.add_typer(channels_app, name="channels")
-
-
-@channels_app.command("status")
-def channels_status():
-    """Show channel status."""
-    from sarathy.config.loader import load_config
-
-    config = load_config()
-
-    table = Table(title="Channel Status")
-    table.add_column("Channel", style="cyan")
-    table.add_column("Enabled", style="green")
-    table.add_column("Configuration", style="yellow")
-
-    # Telegram
-    tg = config.channels.telegram
-    tg_config = f"token: {tg.token[:10]}..." if tg.token else "[dim]not configured[/dim]"
-    table.add_row("Telegram", "✓" if tg.enabled else "✗", tg_config)
-
-    # Discord
-    dc = config.channels.discord
-    table.add_row("Discord", "✓" if dc.enabled else "✗", dc.gateway_url)
-
-    # Email
-    em = config.channels.email
-    em_config = em.imap_host if em.imap_host else "[dim]not configured[/dim]"
-    table.add_row("Email", "✓" if em.enabled else "✗", em_config)
-
-    console.print(table)
-
-
-# ============================================================================
 # Cron Commands
 # ============================================================================
 

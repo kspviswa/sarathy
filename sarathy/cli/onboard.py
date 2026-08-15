@@ -11,7 +11,6 @@ from textual.widgets import (
     RadioButton,
     RadioSet,
     Static,
-    Switch,
 )
 
 LOGO = """
@@ -104,7 +103,6 @@ class WelcomeScreen(Screen):
             Static("This wizard will guide you through:"),
             Static("  1. Choosing your LLM provider"),
             Static("  2. Configuring your model"),
-            Static("  3. Setting up communication channels (optional)"),
             Static(""),
             Horizontal(
                 Button("Get Started →", variant="primary", id="start"),
@@ -234,221 +232,6 @@ class ModelScreen(Screen):
             model_name = self.query_one("#model_name").value
             if model_name:
                 self.config.agents.defaults.model = model_name
-            self.app.push_screen(ChannelsScreen(self.config, self.config_path, self.workspace))
-
-
-class ChannelsScreen(Screen):
-    """Screen for enabling channels."""
-
-    def __init__(self, config, config_path, workspace, **kwargs):
-        super().__init__(**kwargs)
-        self.config = config
-        self.config_path = config_path
-        self.workspace = workspace
-
-    def compose(self) -> ComposeResult:
-        yield Container(
-            Static("[bold cyan]Step 3: Enable Channels (Optional)[/bold cyan]", id="title"),
-            Static("Choose which platforms you want to connect:", id="subtitle"),
-            Static(""),
-            Static("[Telegram]  📱 Enable Telegram"),
-            Switch(value=False, id="telegram_switch"),
-            Static("[Discord]  💬 Enable Discord"),
-            Switch(value=False, id="discord_switch"),
-            Static("[Email]    📧 Enable Email"),
-            Switch(value=False, id="email_switch"),
-            Static(""),
-            Horizontal(
-                Button("← Back", variant="default", id="back"),
-                Button("Next →", variant="primary", id="next"),
-            ),
-            id="channels_screen",
-        )
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        else:
-            tg = self.query_one("#telegram_switch").value
-            dc = self.query_one("#discord_switch").value
-            em = self.query_one("#email_switch").value
-
-            if tg:
-                self.app.push_screen(
-                    TelegramSetupScreen(self.config, self.config_path, self.workspace)
-                )
-            elif dc:
-                self.app.push_screen(
-                    DiscordSetupScreen(self.config, self.config_path, self.workspace)
-                )
-            elif em:
-                self.app.push_screen(
-                    EmailSetupScreen(self.config, self.config_path, self.workspace)
-                )
-            else:
-                self.app.push_screen(FinishScreen(self.config, self.config_path, self.workspace))
-
-
-class TelegramSetupScreen(Screen):
-    """Telegram setup screen."""
-
-    def __init__(self, config, config_path, workspace, **kwargs):
-        super().__init__(**kwargs)
-        self.config = config
-        self.config_path = config_path
-        self.workspace = workspace
-
-    def compose(self) -> ComposeResult:
-        yield Container(
-            Static("[bold]📱 Telegram Setup[/bold]", id="title"),
-            Static("1. Open Telegram and search for @BotFather", id="step1"),
-            Static("2. Send /newbot to create a new bot", id="step2"),
-            Static("3. Get your bot token", id="step3"),
-            Static("4. Start your bot by sending /start", id="step4"),
-            Static(""),
-            Label("Bot Token:"),
-            Input(placeholder="Enter bot token", password=False, id="token"),
-            Label("Allowed Users:"),
-            Input(placeholder="Allowed users (comma-separated)", id="allowed"),
-            Static(""),
-            Horizontal(
-                Button("← Back", variant="default", id="back"),
-                Button("Save →", variant="primary", id="save"),
-            ),
-        )
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        else:
-            token = self.query_one("#token").value
-            allowed = self.query_one("#allowed").value
-
-            self.config.channels.telegram.enabled = True
-            self.config.channels.telegram.token = token
-            self.config.channels.telegram.allow_from = [
-                u.strip() for u in allowed.split(",") if u.strip()
-            ]
-
-            if self.config.channels.discord.enabled:
-                self.app.push_screen(
-                    DiscordSetupScreen(self.config, self.config_path, self.workspace)
-                )
-            elif self.config.channels.email.enabled:
-                self.app.push_screen(
-                    EmailSetupScreen(self.config, self.config_path, self.workspace)
-                )
-            else:
-                self.app.push_screen(FinishScreen(self.config, self.config_path, self.workspace))
-
-
-class DiscordSetupScreen(Screen):
-    """Discord setup screen."""
-
-    def __init__(self, config, config_path, workspace, **kwargs):
-        super().__init__(**kwargs)
-        self.config = config
-        self.config_path = config_path
-        self.workspace = workspace
-
-    def compose(self) -> ComposeResult:
-        yield Container(
-            Static("[bold]💬 Discord Setup[/bold]", id="title"),
-            Static("1. Go to discord.com/developers/applications", id="step1"),
-            Static("2. Create app → Bot → Reset Token", id="step2"),
-            Static("3. Enable MESSAGE CONTENT INTENT", id="step3"),
-            Static("4. OAuth2 → URL Generator → invite bot", id="step4"),
-            Static(""),
-            Label("Bot Token:"),
-            Input(placeholder="Enter bot token", password=False, id="token"),
-            Label("Allowed Users:"),
-            Input(placeholder="Allowed user IDs (comma-separated)", id="allowed"),
-            Static(""),
-            Horizontal(
-                Button("← Back", variant="default", id="back"),
-                Button("Save →", variant="primary", id="save"),
-            ),
-        )
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        else:
-            token = self.query_one("#token").value
-            allowed = self.query_one("#allowed").value
-
-            self.config.channels.discord.enabled = True
-            self.config.channels.discord.token = token
-            self.config.channels.discord.allow_from = [
-                u.strip() for u in allowed.split(",") if u.strip()
-            ]
-
-            if self.config.channels.email.enabled:
-                self.app.push_screen(
-                    EmailSetupScreen(self.config, self.config_path, self.workspace)
-                )
-            else:
-                self.app.push_screen(FinishScreen(self.config, self.config_path, self.workspace))
-
-
-class EmailSetupScreen(Screen):
-    """Email setup screen."""
-
-    def __init__(self, config, config_path, workspace, **kwargs):
-        super().__init__(**kwargs)
-        self.config = config
-        self.config_path = config_path
-        self.workspace = workspace
-
-    def compose(self) -> ComposeResult:
-        yield Container(
-            Static("[bold]📧 Email Setup[/bold]", id="title"),
-            Static("For Gmail: Use an App Password (not regular password)", id="hint"),
-            Label("IMAP Host:"),
-            Input(placeholder="imap.gmail.com", id="imap_host"),
-            Label("IMAP Port:"),
-            Input(placeholder="993", id="imap_port"),
-            Label("IMAP Username:"),
-            Input(placeholder="your email", id="imap_user"),
-            Label("IMAP Password:"),
-            Input(placeholder="app password", password=False, id="imap_pass"),
-            Label("SMTP Host:"),
-            Input(placeholder="smtp.gmail.com", id="smtp_host"),
-            Label("SMTP Port:"),
-            Input(placeholder="587", id="smtp_port"),
-            Label("SMTP Username:"),
-            Input(placeholder="your email", id="smtp_user"),
-            Label("SMTP Password:"),
-            Input(placeholder="app password", password=False, id="smtp_pass"),
-            Label("From Address:"),
-            Input(placeholder="your@email.com", id="from_addr"),
-            Static(""),
-            Horizontal(
-                Button("← Back", variant="default", id="back"),
-                Button("Save →", variant="primary", id="save"),
-            ),
-        )
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.app.pop_screen()
-        else:
-            self.config.channels.email.enabled = True
-            self.config.channels.email.consent_granted = True
-            self.config.channels.email.imap_host = (
-                self.query_one("#imap_host").value or "imap.gmail.com"
-            )
-            self.config.channels.email.imap_port = int(self.query_one("#imap_port").value or "993")
-            self.config.channels.email.imap_username = self.query_one("#imap_user").value
-            self.config.channels.email.imap_password = self.query_one("#imap_pass").value
-            self.config.channels.email.smtp_host = (
-                self.query_one("#smtp_host").value or "smtp.gmail.com"
-            )
-            self.config.channels.email.smtp_port = int(self.query_one("#smtp_port").value or "587")
-            self.config.channels.email.smtp_username = self.query_one("#smtp_user").value
-            self.config.channels.email.smtp_password = self.query_one("#smtp_pass").value
-            self.config.channels.email.from_address = self.query_one("#from_addr").value
-
             self.app.push_screen(FinishScreen(self.config, self.config_path, self.workspace))
 
 
@@ -462,23 +245,12 @@ class FinishScreen(Screen):
         self.workspace = workspace
 
     def compose(self) -> ComposeResult:
-        channels = []
-        if self.config.channels.telegram.enabled:
-            channels.append("Telegram")
-        if self.config.channels.discord.enabled:
-            channels.append("Discord")
-        if self.config.channels.email.enabled:
-            channels.append("Email")
-
-        channels_str = ", ".join(channels) if channels else "None"
-
         yield Container(
             Static("[bold green]🎉 Setup Complete![/bold green]", id="title"),
             Static("", id="spacer"),
             Static(f"Config saved to: {self.config_path}"),
             Static(f"Workspace: {self.workspace}"),
             Static(f"Model: {self.config.agents.defaults.model}"),
-            Static(f"Channels: {channels_str}"),
             Static("", id="spacer2"),
             Static("[bold]Next steps:[/bold]"),
             Static("  • Customize config: nano ~/.sarathy/config.json"),

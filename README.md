@@ -3,85 +3,64 @@
   <h1>Sarathy : My Personal Assistant</h1>
   <p>
     <a href="https://pypi.org/project/sarathy/"><img src="https://img.shields.io/pypi/v/sarathy" alt="PyPI"></a>
-    <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
+    <img src="https://img.shields.io/badge/python-≥3.12-blue" alt="Python">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
   </p>
 </div>
 
-## Who is Sarathy and Why ?
+## What is Sarathy?
 
-Sarathy is my own AI assistant implementation focused on **local models**. While [Openclaw](https://github.com/openclaw/openclaw) was a revolutionary idea, it’s heavily bloated and impossible for me to understand the data flow. It caters to all needs. Other similar OC variants also quickly becoming bloated even though they start small. 
-
-Inspired by [nanoclaw](https://github.com/qwibitai/nanoclaw) and [karpathy tweet](https://x.com/karpathy/status/2024987174077432126?s=20) on personalizing agents, I decided to fork an implementation in the language I’m comfortable with. I forked off [nanobot](https://github.com/HKUDS/nanobot) and I made _Sarathy_. 
-
-I built this to run 100% local with only the features I need.
+Sarathy is a **next-generation, local-first personal AI assistant**. Inspired by
+[nanoclaw](https://github.com/qwibitai/nanoclaw) and good engineering, it adopts
+[tau](https://github.com/huggingface/tau) (`tau-ai`) as its portable agentic
+core: the agent loop, sessions, tool execution and event stream all come from
+`tau_agent.AgentHarness`. Sarathy wraps that brain in a thin, understandable
+shell — a mobile-first web portal, a REPL, skills, long-term memory, cron and a
+Pi-compatible extension system.
 
 > _Sarathy_ means helper, guide, driver, mentor in both Sanskrit & Tamil.
+> It runs 100% local against your own models (Ollama, LMStudio, vLLM, or any
+> OpenAI-compatible endpoint).
 
+## Highlights
 
-## What's Different in Sarathy?
-
-While nanobot served as the initial inspiration, Sarathy has evolved significantly with many architectural changes and new features focused on local-first AI assistance.
-
-### Textual-based Interactive Onboarding
-- `sarathy onboard` launches a TUI wizard for first-time setup
-- Guided provider selection and configuration
-- Automatic workspace and skill template creation
-
-### Dynamic Skills System with Hot-Reload
-- Skills auto-discovered at runtime from `~/.sarathy/skills/` and workspace
-- File watcher monitors for changes (using **watchdog** instead of watchfiles)
-- No restart needed when adding/modifying skills
-- YAML-based skill definitions with multi-line help text support
-
-### Gateway Management
-- Full lifecycle management: `start`, `stop`, `restart`, `status`, `logs`
-- Background daemon with log rotation
-- `tail -f` style log streaming with `--follow` flag
-
-### Agent Enhancements
-- **Token usage tracking**: Real-time display of token count and generation speed
-- **Context length configuration**: Adjustable context window per session
-- **Reasoning effort**: Control model reasoning depth (low/medium/high)
-- **Session caching**: Configurable history and message limits
-
-### Channel Features
-- **Typing indicators**: Real-time typing status for Telegram and Discord
-- **Progress updates**: Tool execution progress shown in channels
-- **Verbose mode**: Detailed stats (token count, speed) in responses
-- **Streaming mode**: Real-time response streaming in Telegram (uses sendMessageDraft API)
-- **Message reactions**: Emoji reaction on user's message while processing (configurable)
-- **Media progress**: Download and processing progress shown for images/attachments
-
-### Built-in Commands
-- `/think` - Enable reasoning mode
-- `/streaming` - Toggle real-time response streaming
-- `/clear` - Clear conversation context
-- `/context` - Show conversation context
-- `/remember` - Persist information to memory
-- `/verbose` - Toggle detailed stats display
-- Unified handling across Telegram and Discord
+- **Adopts tau as its brain** (`tau_agent.AgentHarness`): stateful agent loop,
+  typed tools, JSONL session persistence, live event stream.
+- **Mobile-first web portal** (FastAPI PWA): chat, sessions, extensions, tools,
+  skills, cron — with pairing auth and SSE updates.
+- **REPL** (`sarathy agent`): interactive prompt-toolkit chat on the CLI.
+- **Pi-compatible extensions**: write plain Python (`setup(sarathy)`) to add
+  tools, slash commands, prompt guidelines and hooks.
+- **Skills with hot-reload**: SKILL.md packages discovered at runtime; no restarts.
+- **Long-term memory**: `memory/MEMORY.md` writer + background archivist that
+  summarizes sessions into durable facts.
+- **Cron**: schedule messages with cron expressions and IANA timezones.
+- **Self-extension guides** bundled under `data/docs/` and `data/examples/`.
 
 ---
 
 ## Supported Models
 
-Sarathy focuses on local models. The following providers are supported:
+Sarathy focuses on local models via `tau_ai`'s OpenAI-compatible provider. The
+following providers are supported (all are just configuration):
 
 | Provider | Endpoint | Description |
 |----------|----------|-------------|
-| **Ollama** | `http://localhost:11434` | Local models via Ollama API |
+| **Ollama** | `http://localhost:11434/v1` | Local models via Ollama API |
 | **LMStudio** | `http://localhost:1234/v1` | Local models with OpenAI-compatible API |
 | **vLLM** | `http://localhost:8000/v1` | Local models with OpenAI-compatible API |
-| **Custom** | configurable | Any OpenAI-compatible endpoint |
+| **Custom** | configurable | Any OpenAI-compatible `/v1` endpoint |
 
-## Supported Channels
+## Frontends
 
-| Channel | Description |
-|---------|-------------|
-| **Telegram** | Bot via @BotFather |
-| **Discord** | Bot via Discord Developer Portal |
-| **Email** | IMAP/SMTP |
+| Frontend | Description |
+|----------|-------------|
+| **Web portal** | Mobile-first PWA served by the gateway (chat/sessions/extensions/skills/tools/cron), pairing auth, SSE updates |
+| **REPL** | `sarathy agent` interactive CLI chat |
+
+> Legacy Telegram / Discord / Email channel adapters, the message bus and the
+> custom provider adapters were removed in v2; the web portal + REPL are the
+> two frontends.
 
 ## Installation
 
@@ -90,13 +69,7 @@ Sarathy focuses on local models. The following providers are supported:
 ```bash
 git clone https://github.com/kspviswa/sarathy.git
 cd sarathy
-pip install -e .
-```
-
-### Install with [uv](https://github.com/astral-sh/uv) (stable, fast)
-
-```bash
-uv tool install sarathy
+pip install -e ".[dev]"
 ```
 
 ### Install from PyPI (stable)
@@ -105,74 +78,49 @@ uv tool install sarathy
 pip install sarathy
 ```
 
+> Requires Python 3.12+.
+
 ## Quick Start
 
 > [!TIP]
 > Make sure you have Ollama, LMStudio, or vLLM running before starting Sarathy.
 
-**1. Initialize** (Interactive TUI wizard)
+**1. Set up** — non-interactive (generate a config from args):
+
+```bash
+sarathy setup --provider ollama --model llama3.2
+```
+
+or the interactive TUI wizard:
 
 ```bash
 sarathy onboard
 ```
 
-**2. Configure** (`~/.sarathy/config.json`)
+Both create `~/.sarathy/config.json`, the workspace, memory files, and starter
+skills. Override anything later with flags:
 
-Example for **Ollama**:
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": "llama3"
-    }
-  },
-  "providers": {
-    "ollama": {}
-  }
-}
+```bash
+sarathy setup --provider custom --model llama-3-70b-instruct \
+  --api-base http://localhost:8000/v1 --api-key sk-... --force
 ```
 
-Example for **LMStudio**:
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": "llama-3-8b"
-    }
-  },
-  "providers": {
-    "lmstudio": {}
-  }
-}
-```
-
-Example for **Custom** (e.g., local vLLM or other OpenAI-compatible):
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": "llama-3-70b-instruct"
-    }
-  },
-  "providers": {
-    "custom": {
-      "apiBase": "http://localhost:8000/v1"
-    }
-  }
-}
-```
-
-**3. Chat**
+**2. Chat (REPL)**
 
 ```bash
 sarathy agent -m "Hello!"
+# or drop the flag for interactive mode, exit with exit / /quit / Ctrl+D
 ```
 
-Or start the **gateway** for multi-channel support:
+**3. Start the web portal**
 
 ```bash
 sarathy gateway start
 ```
+
+Then open `http://localhost:18790`. On first run the gateway prints a
+**pairing token** — log in with it to get a signed cookie (and you can use it as
+a Bearer token for HTTP clients).
 
 ---
 
@@ -182,84 +130,55 @@ sarathy gateway start
 
 | Command | Description |
 |---------|-------------|
-| `sarathy onboard` | Interactive TUI wizard for initial setup |
-| `sarathy agent [OPTIONS]` | Chat with the agent |
-| `sarathy status` | Show sarathy status |
-| `sarathy version` | Show version information |
+| `sarathy setup` | Generate a config file non-interactively from args |
+| `sarathy onboard` | Interactive TUI wizard for setup |
+| `sarathy agent [OPTIONS]` | Chat with the agent (REPL or one-shot) |
+| `sarathy status` | Show sarathy status / config |
+| `sarathy provider` | Manage providers (`list`, `login`) |
+| `sarathy gateway` | Manage the web gateway (`start/stop/restart/status/logs`) |
+| `sarathy cron` | Manage scheduled tasks (`list/add/remove/enable/run`) |
 
-#### Agent Options
+#### `setup` Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-p, --provider` | `ollama` | Provider: ollama, lmstudio, vllm, custom |
+| `-m, --model` | per-provider | Model name |
+| `--api-base` | provider default | Provider base URL (`.../v1`) |
+| `--api-key` | — | API key for remote/custom providers |
+| `--host` | `0.0.0.0` | Gateway bind host |
+| `--port` | `18790` | Gateway port |
+| `-w, --workspace` | `<SARATHY_HOME>/workspace` | Workspace dir |
+| `-c, --config` | `~/.sarathy/config.json` | Where to write the config |
+| `-f, --force` | — | Overwrite an existing config |
+
+#### `agent` Options
 
 | Option | Description |
 |--------|-------------|
-| `-m, --message TEXT` | Message to send to the agent |
-| `-s, --session TEXT` | Session ID (default: `cli:direct`) |
-| `--markdown / --no-markdown` | Render output as Markdown (default: true) |
+| `-m, --message TEXT` | Message to send to the agent (one-shot) |
+| `-s, --session TEXT` | Session ID |
+| `--markdown / --no-markdown` | Render assistant output as Markdown (default: on) |
 | `--logs / --no-logs` | Show runtime logs during chat |
 
-#### Interactive Mode
-
-When running `sarathy agent` without `-m`:
-- Type messages to chat with the agent
-- Exit with: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`
-
----
-
-### Gateway Management
+#### `gateway` subcommands
 
 | Command | Description |
 |---------|-------------|
-| `sarathy gateway start [OPTIONS]` | Start the gateway in background |
-| `sarathy gateway stop` | Stop the running gateway |
-| `sarathy gateway restart [OPTIONS]` | Restart the gateway |
-| `sarathy gateway status` | Show gateway status |
-| `sarathy gateway logs [OPTIONS]` | Show gateway logs |
+| `gateway start [-p PORT] [-F]` | Start the gateway (`--foreground` for Docker/systemd) |
+| `gateway stop` / `restart` | Stop / restart the gateway |
+| `gateway status` | Show gateway status |
+| `gateway logs [-n N] [-f]` | Show gateway logs (`--follow` to tail) |
 
-#### Gateway Options
-
-| Option | Description |
-|--------|-------------|
-| `-p, --port INTEGER` | Gateway port (default: 18790) |
-| `-v, --verbose` | Verbose output |
-| `-n, --lines INTEGER` | Number of log lines (default: 50) |
-| `-f, --follow` | Follow log output (like `tail -f`) |
-
----
-
-### Channel Management
+#### `cron` subcommands
 
 | Command | Description |
 |---------|-------------|
-| `sarathy channels status` | Show channel status (Telegram, Discord, Email) |
-
----
-
-### Scheduled Tasks (Cron)
-
-| Command | Description |
-|---------|-------------|
-| `sarathy cron list [OPTIONS]` | List scheduled jobs |
-| `sarathy cron add [OPTIONS]` | Add a new scheduled job |
-| `sarathy cron remove JOB_ID` | Remove a scheduled job |
-| `sarathy cron enable JOB_ID` | Enable a job |
-| `sarathy cron disable JOB_ID` | Disable a job |
-| `sarathy cron run JOB_ID` | Manually run a job |
-
-#### Cron Options
-
-| Option | Description |
-|--------|-------------|
-| `-a, --all` | Include disabled jobs in list |
-| `-n, --name TEXT` | Job name (required for add) |
-| `-m, --message TEXT` | Message for agent (required for add) |
-| `-e, --every INTEGER` | Run every N seconds |
-| `-c, --cron TEXT` | Cron expression (e.g., `0 9 * * *`) |
-| `--tz TEXT` | IANA timezone (e.g., `America/Vancouver`) |
-| `--at TEXT` | Run once at time (ISO format) |
-| `-d, --deliver` | Deliver response to channel |
-| `--to TEXT` | Recipient for delivery |
-| `--channel TEXT` | Channel for delivery |
-
----
+| `cron list [-a]` | List scheduled jobs (`--all` includes disabled) |
+| `cron add --name N --message M --cron "0 9 * * *" [--tz TZ]` | Add a job |
+| `cron remove JOB_ID` | Remove a job |
+| `cron enable JOB_ID` / `cron disable JOB_ID` | Enable / disable a job |
+| `cron run JOB_ID` | Manually run a job |
 
 ## Configuration Schema
 
@@ -269,135 +188,192 @@ Key configuration sections in `~/.sarathy/config.json`:
 {
   "agents": {
     "defaults": {
-      "model": "llama3",
-      "temperature": 0.7,
-      "max_tokens": 4096,
-      "max_tool_iterations": 10,
-      "memory_window": 10,
-      "session_cache_size": 100,
-      "max_session_messages": 50,
-      "context_length": 8192,
-      "reasoning_effort": "low"
+      "provider": "ollama",
+      "model": "llama3.2",
+      "workspace": "~/.sarathy/workspace",
+      "maxTokens": 4096,
+      "temperature": 0.1,
+      "contextLength": 8192
+    },
+    "memoryArchival": {
+      "enabled": true,
+      "intervalSeconds": 1800
     }
   },
   "providers": {
-    "ollama": {},
+    "ollama": { "apiBase": "http://localhost:11434/v1" },
     "lmstudio": {},
-    "custom": {
-      "apiBase": "http://localhost:8000/v1"
-    }
+    "vllm": {},
+    "custom": { "apiBase": "http://localhost:8000/v1" }
   },
-  "channels": {
-    "sendProgress": true,
-    "sendToolHints": false,
-    "telegram": {
-      "enabled": false,
-      "token": "YOUR_BOT_TOKEN",
-      "replyToMessage": true,
-      "streaming": true,
-      "reactToMessage": true,
-      "reactionEmoji": "👀"
-    },
-    "discord": {
-      "enabled": false,
-      "gateway_url": "YOUR_WEBHOOK_URL"
-    },
-    "email": {
-      "enabled": false,
-      "imap_host": "imap.example.com",
-      "smtp_host": "smtp.example.com"
-    }
+  "gateway": {
+    "host": "0.0.0.0",
+    "port": 18790
   },
   "tools": {
-    "exec": {
-      "enabled": true
-    },
+    "restrictToWorkspace": false,
+    "exec": { "timeout": 60 },
     "web": {
       "search": {
         "enabled": true,
         "provider": "firecrawl",
-        "api_key": "",
-        "max_results": 5
+        "apiKey": "",
+        "maxResults": 5
       }
     },
-    "restrict_to_workspace": true,
-    "mcp_servers": {}
+    "mcpServers": {}
   },
-  "workspace_path": "~/sarathy-workspace"
+  "web": {
+    "auth": { "enabled": true }
+  }
 }
 ```
 
+### Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `SARATHY_HOME` | Data directory (sessions, memory, cron, extensions). Default `~/.sarathy` |
+| `SARATHY_CONFIG` | Config file path (used by Docker). Default `~/.sarathy/config.json` |
+
 ### Web Search Configuration
 
-The web search tool can be configured under `tools.web.search`:
+Set `tools.web.search`: `enabled`, `provider` (`firecrawl` or `brave`),
+`api_key` (falls back to env `FIRECRAWL_API_KEY` / `BRAVE_API_KEY`), and
+`max_results`.
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | boolean | `true` | Enable/disable web search tool |
-| `provider` | string | `"firecrawl"` | Search provider: `"firecrawl"` or `"brave"` |
-| `api_key` | string | `""` | Provider API key (falls back to env var if empty) |
-| `max_results` | integer | `5` | Maximum number of results to return (1-10) |
+### MCP Servers
 
-**Environment Variables:**
-- Firecrawl: `FIRECRAWL_API_KEY`
-- Brave: `BRAVE_API_KEY`
+Configure Model Context Protocol servers under `tools.mcpServers`:
 
-If `api_key` is empty in config, the corresponding environment variable will be used.
+```json
+"mcpServers": {
+  "my-server": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+    "env": {}
+  }
+}
+```
 
-### Telegram Configuration
+---
 
-The Telegram channel supports additional options under `channels.telegram`:
+## Architecture
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | boolean | `false` | Enable Telegram channel |
-| `token` | string | `""` | Bot token from @BotFather |
-| `replyToMessage` | boolean | `false` | Reply inline to user's message |
-| `streaming` | boolean | `false` | Stream responses in real-time via drafts |
-| `reactToMessage` | boolean | `false` | Add emoji reaction to user's message while processing |
-| `reactionEmoji` | string | `"👀"` | Emoji to use for reaction |
+```
+iPhone PWA (SPA) ──REST / SSE / polling──► FastAPI portal (inside gateway)
+                                                  │
+                                  SarathyEngine (sarathy/engine/)
+                                    ├─ AgentHarness (tau_agent) per session
+                                    ├─ tools: fs / shell / web / cron / MCP → AgentTool
+                                    ├─ skills: SKILL.md loader + hot reload
+                                    ├─ memory: MEMORY.md writer + archivist
+                                    └─ ExtensionHost (sarathy/extensions/)
+                                          │  tools · commands · events · guidelines
+                                          ▼
+                                  tau_ai (OpenAI-compatible providers)
+```
 
-**Features:**
-- `replyToMessage`: When enabled, bot responses appear as inline replies to user's messages
-- `streaming`: Shows real-time progress as draft messages (requires `sendProgress: true` in channels)
-- `reactToMessage`: Adds an emoji reaction to user's message while processing, removes when done
-- Media attachments show download and processing progress via drafts
+Data flows: a message arrives via the web portal or REPL → the engine routes it
+to the session → `AgentHarness` runs the loop (calling tools) → events stream to
+the portal (SSE) and the REPL → the archivist periodically summarizes sessions
+into `memory/MEMORY.md`.
 
-**Environment Variables:**
-- Firecrawl: `FIRECRAWL_API_KEY`
-- Brave: `BRAVE_API_KEY`
+---
 
-If `api_key` is empty in config, the corresponding environment variable will be used.
+## Extending Sarathy
+
+Sarathy can extend itself with **plain Python** — no knowledge of the engine
+internals required. Read the bundled guides at runtime:
+
+- `docs/EXTENSIONS.md` — the extension reference
+- `docs/SKILLS.md` — how to author skills
+- `examples/extensions/` — runnable example extensions
+
+An extension is a module with a `setup(sarathy)` entry point:
+
+```python
+from tau_agent.messages import TextContent
+from tau_agent.tools import AgentTool, AgentToolResult
+
+def setup(sarathy):
+    async def greet(tool_call_id, arguments, signal=None, on_update=None):
+        return AgentToolResult(content=[TextContent(text=f"Hello, {arguments.get('who', 'world')}!")])
+
+    sarathy.register_tool(AgentTool(
+        name="greet", label="Greet", description="Greet someone.",
+        parameters={"type": "object", "properties": {"who": {"type": "string"}}},
+        execute_fn=greet,
+    ))
+```
+
+Place it in `~/.sarathy/extensions/greet.py` and it is available on the next
+reload. Extensions can also register slash commands (`register_command`),
+prompt guidelines (`add_prompt_guideline`) and event hooks (`on("input" |
+"tool_call" | "tool_result")`).
 
 ---
 
 ## Workspace Structure
 
 ```
-~/sarathy-workspace/
-├── memory/
-│   ├── MEMORY.md      # Persistent memory
-│   └── HISTORY.md     # Conversation history
-├── skills/            # Workspace-specific skills
-└── ...                # Your files and projects
+~/sarathy/.sarathy/
+├── config.json         # configuration
+├── workspace/
+│   ├── memory/
+│   │   ├── MEMORY.md   # long-term memory (archived facts)
+│   │   └── HISTORY.md
+│   ├── skills/         # YOUR skills (SKILL.md) — hot-reloaded
+│   └── sessions/tau/   # JSONL session transcripts
+├── extensions/         # YOUR extensions (*.py)
+└── cron/               # scheduled jobs
 ```
+
+With `SARATHY_HOME` set (e.g. in Docker), all of this lives under that dir.
 
 ---
 
 ## Built-in Skills
 
-Sarathy includes several built-in skills:
-
 | Skill | Description |
 |-------|-------------|
-| `memory` | Read/write persistent memory |
-| `github` | GitHub repository operations |
 | `cron` | Schedule and manage tasks |
+| `github` | GitHub repository operations |
+| `summarize` | Summarize URLs, files, and videos |
 | `tmux` | Terminal multiplexer control |
-| `summarize` | Summarize long content |
 | `weather` | Get weather information |
-| `clawhub` | ClawHub integration |
+| `clawhub` | Search/install skills from ClawHub |
 | `skill-creator` | Create new skills |
+| `extension-creator` | Create or update Sarathy extensions |
+
+---
+
+## Running with Docker
+
+Build and run with volumes so **data, config and extensions live outside the
+container**:
+
+```bash
+docker build -t sarathy .
+docker run -d --rm --name sarathy \
+  -p 18790:18790 \
+  -v sarathy-config:/config -v sarathy-data:/data \
+  -e SARATHY_CONFIG=/config/config.json -e SARATHY_HOME=/data \
+  sarathy
+```
+
+The default entrypoint runs `sarathy gateway start --foreground`. Generate a
+config inside the container first (or mount one in):
+
+```bash
+docker run --rm --entrypoint sarathy \
+  -v sarathy-config:/config -v sarathy-data:/data \
+  -e SARATHY_HOME=/data \
+  sarathy setup --provider ollama --model llama3.2 --config /config/config.json
+```
+
+`docker compose up` (and `docker compose --profile apple up` for the Apple
+Containers / arm64 variant) orchestrate the same flow.
 
 ---
 
@@ -416,23 +392,27 @@ ruff check sarathy/
 
 ## Contribution Guidelines
 
-As you can probably guess, I'm NOT interested (at the moment) to accept either feature requests or contributions to Sarathy. It is just for my own purposes. I have opened it to the public for others to get motivated (just like nanoclaw did). But if you find some security flaws and wanna be a good samaritan to point out, by all means do it.
-
-At some point in future, I might consider making sarathy as a general purpose tool ^[Although the chance is pretty slim since there are tons of such claws out there.].
+As you can probably guess, I'm NOT interested (at the moment) to accept either
+feature requests or contributions to Sarathy. It is just for my own purposes. I
+have opened it to the public for others to get motivated (just like nanoclaw
+did). But if you find some security flaws and wanna be a good samaritan to
+point out, by all means do it..
 
 ---
 
 ## Changelog
 
-### 2026-03-05
-- **Fix**: Extract tool calls from reasoning_content for Ollama/Qwen3 models
-  - Some backends (like Ollama) put tool calls in reasoning_content instead of structured tool_calls field
-  - Added `_extract_tool_calls_from_reasoning()` to parse `<tool_call>` XML patterns from thinking
-  - Tool calls in reasoning are now executed just like structured tool calls
-  - Strips tool_call XML from display to avoid leaking raw XML to users
-
-### 2026-03-04
-- **Fix**: Handle thinking/reasoning tokens from models like Qwen3, DeepSeek-R1, Kimi K2.5
-  - Updated `_strip_think()` to fall back to `reasoning_content` when content becomes empty after stripping thinking blocks
-  - Added `thinking_blocks` field to `LLMResponse` for Anthropic Claude thinking
-  - Preserved `reasoning_content` in session history for multi-turn conversations with reasoning models 
+### 0.2.0a1 (2026-08-14) — v2 "tau-core" rewrite
+- Adopt `tau_agent.AgentHarness` as the portable agentic core; sarathy becomes
+  a thin shell (web portal + REPL + skills + memory + extensions).
+- Add a **mobile-first web portal** (FastAPI PWA) with pairing auth, sessions,
+  extensions, skills, tools, cron, and SSE event streaming.
+- Add a **Pi-compatible extension system**: plain-Python `setup(sarathy)`
+  modules adding tools, slash commands, prompt guidelines and lifecycle hooks.
+- Add **self-extension guides** bundled under `data/docs/` and
+  `data/examples/extensions/`, plus an `extension-creator` skill.
+- Add a non-interactive `sarathy setup` command to generate config from args.
+- Remove legacy v1 channel adapters (Telegram/Discord/Email), the message bus,
+  custom providers and the old agent loop.
+- Rewrite the test suite (87 passing) and add containerized e2e checks via
+  `tests/test_docker.sh`.

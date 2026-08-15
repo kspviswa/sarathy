@@ -55,6 +55,7 @@ class SarathyEngine:
 
         self.provider, self.provider_name = build_provider(self.config)
         defaults = self.config.agents.defaults
+        self.configured = self.provider is not None
         self.model = defaults.model
         self.max_turns = defaults.max_tool_iterations or 40
         self.window = session_window or defaults.memory_window
@@ -231,6 +232,12 @@ class SarathyEngine:
         content, handled = await self.extensions.run_input_hooks(content)
         if handled:
             return False
+        if not self.configured:
+            await self.notify(
+                "Sarathy is not configured yet. Run `sarathy setup` or `sarathy onboard` to configure it.",
+                "warning",
+            )
+            return False
         app = await self.ensure_session(session_id)
         self.active_session_id = session_id
         return await app.send(content)
@@ -309,6 +316,7 @@ class SarathyEngine:
     def health(self) -> dict[str, Any]:
         return {
             "ok": True,
+            "configured": self.configured,
             "model": self.model,
             "provider": self.provider_name,
             "workspace": str(self.workspace),

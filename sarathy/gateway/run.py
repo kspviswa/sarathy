@@ -44,11 +44,19 @@ async def run_gateway(port: int = 18790, verbose: bool = False) -> None:
         if config.web.auth.enabled
         else "(auth disabled)"
     )
+
     print("\n┌──────────────────────────────────────────────┐")
     print(f"│  Sarathy portal:  http://{config.gateway.host}:{port}")
-    print(f"│  Pairing token:   {pairing}")
+    if engine.configured:
+        print(f"│  Pairing token:   {pairing}")
     print("│  (data/config/extensions live in volumes)   │")
-    print("└──────────────────────────────────────────────┘\n")
+    print("└──────────────────────────────────────────────┘")
+    if not engine.configured:
+        print(
+            "\n⚠  Sarathy is not configured yet — please configure it to start chatting.\n"
+            "   Run `sarathy setup` (non-interactive) or `sarathy onboard` (wizard),\n"
+            "   or edit the config file directly, then restart the gateway.\n"
+        )
 
     restart_watcher = asyncio.create_task(_watch_restart(engine))
 

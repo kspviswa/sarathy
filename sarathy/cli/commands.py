@@ -30,16 +30,6 @@ console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
 
-def _require_config():
-    """Check that config exists. If not, exit with onboarding message."""
-    from sarathy.config.loader import get_config_path
-
-    if not get_config_path().exists():
-        console.print("[red]Config not found at ~/.sarathy/config.json[/red]")
-        console.print("Please run [cyan]sarathy onboard[/cyan] first to set up sarathy.")
-        raise typer.Exit(1)
-
-
 # ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
 # ---------------------------------------------------------------------------
@@ -395,8 +385,6 @@ def gateway_start(
     ),
 ):
     """Start the sarathy gateway (background, or foreground with -F)."""
-    _require_config()
-
     if foreground:
         import asyncio
 

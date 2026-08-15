@@ -29,8 +29,12 @@ def resolve_api_base(config: Config, provider_name: str) -> str:
 def build_provider(config: Config):
     """Build a tau_ai OpenAI-compatible provider from sarathy config.
 
-    Returns ``(provider, provider_name)``.
+    Returns ``(provider, provider_name)``. When the config does not select a
+    provider (unconfigured), returns ``(None, None)`` so a gateway can still
+    boot and prompt the user to configure it.
     """
+    if not config.agents.defaults.provider:
+        return None, None
     provider_name = config.get_provider_name() or "custom"
     p = config.get_provider()
     api_base = resolve_api_base(config, provider_name)

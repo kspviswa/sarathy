@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
-from tau_agent.events import MessageEndEvent, MessageUpdateEvent, ToolExecutionStartEvent
+from tau_agent.events import (
+    MessageEndEvent,
+    MessageStartEvent,
+    MessageUpdateEvent,
+    ToolExecutionStartEvent,
+)
 from tau_agent.messages import TextContent
 
 from sarathy.engine.events import NotifyEvent, RunEnd
@@ -130,21 +135,31 @@ async def run_agent(
 
         console.print("[dim]Sarathy is working… (first request loads the model)[/dim]")
 
+        last_len = 0
+
         async def on_event(session_id: str, event: object) -> None:
+            nonlocal last_len
             if session_id != sid:
                 return
-            if isinstance(event, MessageUpdateEvent):
+            if isinstance(event, MessageStartEvent):
+                last_len = 0
+            elif isinstance(event, MessageUpdateEvent):
                 text = _text_of(event)
                 if text:
-                    console.print(Text(text, style="cyan"), end="", soft_wrap=True)
+                    delta = text[last_len:]
+                    last_len += len(delta)
+                    console.print(Text(delta, style="cyan"), end="", soft_wrap=True)
             elif isinstance(event, MessageEndEvent):
                 message = getattr(event, "message", None)
                 error_text = getattr(message, "error_message", None) if message else None
                 stop_reason = getattr(message, "stop_reason", None) if message else None
                 text = _text_of(event)
                 if text:
-                    console.print(Text(text, style="cyan"), end="", soft_wrap=True)
-                    console.print()
+                    delta = text[last_len:]
+                    last_len += len(delta)
+                    if delta:
+                        console.print(Text(delta, style="cyan"), end="", soft_wrap=True)
+                        console.print()
                 if stop_reason in {"error", "aborted"} or error_text:
                     console.print(
                         f"\n[red]Error: {error_text or ('aborted' if stop_reason == 'aborted' else 'model stream failed')}[/red]"

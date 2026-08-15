@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e13">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/static/style.css">
+  <title>Sarathy</title>
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form id="login-form">
+      <div class="logoid">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      </div>
+      <h1>Sarathy</h1>
+      <p>Pair this device with your sarathy gateway using the pairing token shown when it started.</p>
+      <input id="pairing-token" type="password" autocomplete="current-password" placeholder="Pairing token" required>
+      <button type="submit">Pair</button>
+      <div id="login-error" class="error hidden"></div>
+    </form>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <h1>Sarathy</h1>
+      <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </header>
+
+    <main id="view-chat" class="view active">
+      <div class="session-bar">
+        <button id="btn-sessions" class="ghost" aria-label="Sessions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+        </button>
+        <span id="session-title" class="session-title">…</span>
+        <button id="btn-new" class="ghost" title="New session" aria-label="New session">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+        </button>
+      </div>
+      <div id="messages" class="messages"></div>
+      <form id="chat-form" class="composer">
+        <textarea id="input" rows="1" placeholder="Message…" autocomplete="off"></textarea>
+        <button type="submit" id="send-btn" aria-label="Send">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+        </button>
+        <button type="button" id="stop-btn" class="hidden" aria-label="Stop">
+          <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect width="14" height="14" x="5" y="5" rx="2"/></svg>
+        </button>
+      </form>
+    </main>
+
+    <main id="view-sessions" class="view">
+      <h2>Sessions</h2>
+      <ul id="session-list" class="session-list"></ul>
+    </main>
+
+    <main id="view-settings" class="view">
+      <h2>Settings</h2>
+      <section>
+        <h3>Agent</h3>
+        <label>Model
+          <input id="cfg-model">
+        </label>
+        <label>Provider
+          <select id="cfg-provider">
+            <option value="custom">custom</option>
+            <option value="ollama">ollama</option>
+            <option value="lmstudio">lmstudio</option>
+            <option value="vllm">vllm</option>
+          </select>
+        </label>
+        <label>API base
+          <input id="cfg-api-base">
+        </label>
+        <label>API key
+          <input id="cfg-api-key" placeholder="(unchanged)">
+        </label>
+        <label>Web auth
+          <select id="cfg-web-auth">
+            <option value="true">on</option>
+            <option value="false">off</option>
+          </select>
+        </label>
+        <div class="row">
+          <button id="btn-save" class="primary">Save</button>
+          <button id="btn-restart" class="danger">Restart gateway</button>
+        </div>
+      </section>
+
+      <section>
+        <h3>Extensions</h3>
+        <div id="extension-list" class="list"></div>
+        <div class="row">
+          <input id="ext-url" placeholder="git URL to install">
+          <button id="btn-install-ext">Install</button>
+          <button id="btn-reload-ext" class="ghost">Reload</button>
+        </div>
+      </section>
+
+      <section>
+        <h3>Skills</h3>
+        <div id="skills-list" class="list"></div>
+      </section>
+
+      <section>
+        <h3>Cron</h3>
+        <form id="cron-form" class="cron-form">
+          <input id="cron-body" placeholder="message for the agent">
+          <input id="cron-schedule" placeholder="cron expr (e.g. 0 9 * * *)" value="0 9 * * *">
+          <button type="submit">Schedule</button>
+        </form>
+        <div id="cron-list" class="list"></div>
+      </section>
+
+      <section>
+        <h3>Memory</h3>
+        <button id="btn-consolidate" class="ghost">Consolidate now</button>
+      </section>
+    </main>
+
+    <nav class="tabs">
+      <button data-view="chat" class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>
+        <span>Chat</span>
+      </button>
+      <button data-view="sessions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
+        <span>Sessions</span>
+      </button>
+      <button data-view="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>Settings</span>
+      </button>
+    </nav>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

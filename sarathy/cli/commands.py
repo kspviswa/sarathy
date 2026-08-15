@@ -2,24 +2,22 @@
 
 import asyncio
 import os
-import signal
-from pathlib import Path
 import select
 import sys
+from pathlib import Path
 
 import typer
+from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.patch_stdout import patch_stdout
-
-from sarathy import __version__, __logo__
+from sarathy import __logo__, __version__
 from sarathy.config.schema import Config
 
 app = typer.Typer(
@@ -37,7 +35,7 @@ def _require_config():
     from sarathy.config.loader import get_config_path
 
     if not get_config_path().exists():
-        console.print(f"[red]Config not found at ~/.sarathy/config.json[/red]")
+        console.print("[red]Config not found at ~/.sarathy/config.json[/red]")
         console.print("Please run [cyan]sarathy onboard[/cyan] first to set up sarathy.")
         raise typer.Exit(1)
 
@@ -169,7 +167,6 @@ def main(
 def onboard():
     """Interactive wizard to set up sarathy."""
     from sarathy.config.loader import get_config_path
-    from sarathy.config.schema import Config
     from sarathy.utils.helpers import get_workspace_path
 
     config_path = get_config_path()
@@ -185,6 +182,86 @@ def onboard():
     from sarathy.cli.onboard import run_onboarding
 
     run_onboarding(config, config_path, workspace)
+
+
+@app.command("setup")
+def setup(
+    provider: str = typer.Option(
+        "ollama", "--provider", "-p", help="Provider: ollama, lmstudio, vllm or custom"
+    ),
+    model: str = typer.Option("", "--model", "-m", help="Model name"),
+    api_base: str = typer.Option("", "--api-base", help="Provider base URL (auto-defaults if empty)"),
+    api_key: str = typer.Option("", "--api-key", help="API key for remote/custom providers"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Gateway bind host"),
+    port: int = typer.Option(18790, "--port", help="Gateway port"),
+    workspace: str = typer.Option(
+        "", "--workspace", "-w", help="Workspace dir (defaults to <SARATHY_HOME>/workspace when set, else ~/.sarathy/workspace)"
+    ),
+    config_path: Path = typer.Option(
+        None, "--config", "-c", help="Where to write the config file (default: ~/.sarathy/config.json)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite an existing config file"
+    ),
+):
+    """Generate a config file non-interactively from CLI args."""
+    from sarathy.config.loader import get_config_path as default_config_path
+    from sarathy.config.loader import save_config
+    from sarathy.engine.provider import _LOCAL_ENDPOINTS
+    from sarathy.utils.helpers import get_data_path, get_workspace_path
+
+    key = provider.replace("-", "_").lower()
+    if key not in _LOCAL_ENDPOINTS:
+        names = ", ".join(sorted(_LOCAL_ENDPOINTS))
+        console.print(f"[red]Unknown provider '{provider}'.[/red] Available: {names}")
+        raise typer.Exit(1)
+
+    default_models = {
+        "ollama": "llama3",
+        "lmstudio": "qwen2.5",
+        "vllm": "qwen2.5",
+        "custom": "gpt-4",
+    }
+    final_model = model or default_models[key]
+
+    target = config_path or default_config_path()
+    if target.exists() and not force:
+        console.print(
+            f"[yellow]Config already exists at {target}.[/yellow] "
+            f"Use --force to overwrite it."
+        )
+        raise typer.Exit(1)
+
+    cfg = Config()
+    cfg.agents.defaults.provider = key
+    cfg.agents.defaults.model = final_model
+    if workspace:
+        cfg.agents.defaults.workspace = workspace
+    else:
+        data_dir = get_data_path()
+        if data_dir != Path.home() / ".sarathy":
+            cfg.agents.defaults.workspace = str(data_dir / "workspace")
+        else:
+            cfg.agents.defaults.workspace = str(get_workspace_path())
+    cfg.gateway.host = host
+    cfg.gateway.port = port
+
+    provider_cfg = getattr(cfg.providers, key)
+    provider_cfg.api_base = api_base or _LOCAL_ENDPOINTS[key]
+    provider_cfg.api_key = api_key or "dummy"
+
+    save_config(cfg, target)
+    ws_dir = Path(cfg.agents.defaults.workspace).expanduser()
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    _create_workspace_templates(ws_dir)
+    _create_global_skills()
+
+    console.print(f"[green]✓ Config written to {target}[/green]")
+    console.print(
+        f"  Provider: [cyan]{key}[/cyan]  Model: [cyan]{final_model}[/cyan]  "
+        f"Base: [cyan]{provider_cfg.api_base}[/cyan]"
+    )
+    console.print("  Start the gateway with: [cyan]sarathy gateway start[/cyan]")
 
 
 def _create_workspace_templates(workspace: Path):
@@ -237,7 +314,6 @@ def _create_workspace_templates(workspace: Path):
 
 def _create_global_skills():
     """Create ~/.sarathy/skills/ with built-in skills from the package."""
-    from importlib.resources import files as pkg_files
 
     global_skills_dir = Path.home() / ".sarathy" / "skills"
     global_skills_dir.mkdir(parents=True, exist_ok=True)
@@ -260,45 +336,45 @@ def _create_global_skills():
                 console.print(f"  [dim]Copied built-in skill: {skill_dir.name}[/dim]")
 
 
-def _make_provider(config: Config):
-    """Create the appropriate LLM provider from config."""
-    from sarathy.providers.litellm_provider import LiteLLMProvider
-    from sarathy.providers.custom_provider import CustomProvider
+# ============================================================================
+# Provider Management
+# ============================================================================
 
-    model = config.agents.defaults.model
-    provider_name = config.get_provider_name()
-    if not provider_name:
-        console.print("[red]Error: No provider configured.[/red]")
-        console.print("Set 'provider' in agents.defaults in ~/.sarathy/config.json")
+provider_app = typer.Typer(help="Manage providers")
+app.add_typer(provider_app, name="provider")
+
+
+@provider_app.command("list")
+def provider_list():
+    """List known providers and their default endpoints."""
+    from sarathy.engine.provider import _LOCAL_ENDPOINTS
+
+    table = Table(title="Providers")
+    table.add_column("Provider", style="cyan")
+    table.add_column("Default endpoint", style="yellow")
+    for name, base in _LOCAL_ENDPOINTS.items():
+        table.add_row(name, base)
+    console.print(table)
+
+
+@provider_app.command("login")
+def provider_login(
+    provider: str = typer.Argument(..., help="Provider name (e.g. 'ollama', 'lmstudio', 'vllm')"),
+):
+    """Authenticate with a provider (not needed for local providers)."""
+    from sarathy.engine.provider import _LOCAL_ENDPOINTS
+
+    key = provider.replace("-", "_")
+    if key not in _LOCAL_ENDPOINTS:
+        names = ", ".join(sorted(_LOCAL_ENDPOINTS))
+        console.print(f"[red]Unknown provider: {provider}[/red]  Available: {names}")
         raise typer.Exit(1)
-    p = config.get_provider()
 
-    # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM
-    if provider_name == "custom":
-        return CustomProvider(
-            api_key=p.api_key if p else "no-key",
-            api_base=config.get_api_base() or "http://localhost:8000/v1",
-            default_model=model,
-        )
-
-    from sarathy.providers.registry import find_by_name
-
-    spec = find_by_name(provider_name)
-    if spec and spec.is_local:
-        pass
-    elif (
-        not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and spec.is_oauth)
-    ):
-        console.print("[red]Error: No API key configured.[/red]")
-        console.print("Set one in ~/.sarathy/config.json under providers section")
-        raise typer.Exit(1)
-
-    return LiteLLMProvider(
-        api_key=p.api_key if p else None,
-        api_base=config.get_api_base(),
-        default_model=model,
-        extra_headers=p.extra_headers if p else None,
-        provider_name=provider_name,
+    console.print(
+        f"[green]✓ {provider} is a local provider - no authentication needed.[/green]"
+    )
+    console.print(
+        f"  Make sure {provider} is running and accessible at the configured endpoint."
     )
 
 
@@ -314,9 +390,20 @@ app.add_typer(gateway_app, name="gateway")
 def gateway_start(
     port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    foreground: bool = typer.Option(
+        False, "--foreground", "-F", help="Run in the foreground (Docker/systemd)"
+    ),
 ):
-    """Start the sarathy gateway in the background."""
+    """Start the sarathy gateway (background, or foreground with -F)."""
     _require_config()
+
+    if foreground:
+        import asyncio
+
+        from sarathy.gateway.run import run_gateway
+
+        asyncio.run(run_gateway(port=port, verbose=verbose))
+        return
 
     from sarathy.gateway.manager import get_log_file_path, is_gateway_running, start_gateway
 
@@ -330,7 +417,7 @@ def gateway_start(
 
     try:
         start_gateway(port=port, verbose=verbose)
-        console.print(f"[green]✓[/green] Gateway started (PID will be saved)")
+        console.print("[green]✓[/green] Gateway started (PID will be saved)")
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -379,7 +466,7 @@ def gateway_restart(
 
     try:
         start_gateway(port=port, verbose=verbose)
-        console.print(f"[green]✓[/green] Gateway started")
+        console.print("[green]✓[/green] Gateway started")
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -393,7 +480,7 @@ def gateway_status():
     status = get_gateway_status()
 
     if status["running"]:
-        console.print(f"[green]✓[/green] Gateway is [bold]running[/bold]")
+        console.print("[green]✓[/green] Gateway is [bold]running[/bold]")
         console.print(f"  PID: {status['pid']}")
         console.print(f"  Log: {status['log_file']}")
     else:
@@ -406,15 +493,15 @@ def gateway_logs(
     follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output (like tail -f)"),
 ):
     """Show gateway logs."""
-    from sarathy.gateway.manager import get_recent_logs, get_log_file_path, is_gateway_running
+    from sarathy.gateway.manager import get_recent_logs, is_gateway_running
 
     if not is_gateway_running():
         console.print("[yellow]Gateway is not running. No logs available.[/yellow]")
         raise typer.Exit(1)
 
     if follow:
-        import subprocess
         import signal
+        import subprocess
 
         from sarathy.gateway.manager import get_latest_log_file
 
@@ -449,7 +536,7 @@ def gateway_logs(
 @app.command()
 def agent(
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
-    session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
+    session_id: str = typer.Option(None, "--session", "-s", help="Session ID"),
     markdown: bool = typer.Option(
         True, "--markdown/--no-markdown", help="Render assistant output as Markdown"
     ),
@@ -457,176 +544,24 @@ def agent(
         False, "--logs/--no-logs", help="Show sarathy runtime logs during chat"
     ),
 ):
-    """Interact with the agent directly."""
-    from sarathy.config.loader import load_config, get_data_dir
-    from sarathy.bus.queue import MessageBus
-    from sarathy.agent.loop import AgentLoop
-    from sarathy.cron.service import CronService
+    """Interact with the agent directly (engine-backed REPL or one-shot)."""
+
     from loguru import logger
 
-    config = load_config()
-
-    bus = MessageBus()
-    provider = _make_provider(config)
-
-    # Create cron service for tool usage (no callback needed for CLI unless running)
-    cron_store_path = get_data_dir() / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
+    from sarathy.engine.repl import run_agent
 
     if logs:
         logger.enable("sarathy")
     else:
         logger.disable("sarathy")
 
-    agent_loop = AgentLoop(
-        bus=bus,
-        provider=provider,
-        workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        temperature=config.agents.defaults.temperature,
-        max_tokens=config.agents.defaults.max_tokens,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        memory_window=config.agents.defaults.memory_window,
-        web_search_config=config.tools.web.search,
-        exec_config=config.tools.exec,
-        cron_service=cron,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
-        session_cache_size=config.agents.defaults.session_cache_size,
-        max_session_messages=config.agents.defaults.max_session_messages,
-        context_length=config.agents.defaults.context_length,
-        mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
-        reasoning_effort=config.agents.defaults.reasoning_effort,
-    )
-
-    # Show spinner when logs are off (no output to miss); skip when logs are on
-    def _thinking_ctx():
-        if logs:
-            from contextlib import nullcontext
-
-            return nullcontext()
-        # Animated spinner is safe to use with prompt_toolkit input handling
-        return console.status("[dim]sarathy is thinking...[/dim]", spinner="dots")
-
-    async def _cli_progress(content: str, *, tool_hint: bool = False) -> None:
-        ch = agent_loop.channels_config
-        if ch and tool_hint and not ch.send_tool_hints:
-            return
-        if ch and not tool_hint and not ch.send_progress:
-            return
-        console.print(f"  [dim]↳ {content}[/dim]")
-
-    if message:
-        # Single message mode — direct call, no bus needed
-        async def run_once():
-            with _thinking_ctx():
-                response = await agent_loop.process_direct(
-                    message, session_id, on_progress=_cli_progress
-                )
-            _print_agent_response(response, render_markdown=markdown)
-            await agent_loop.close_mcp()
-
-        asyncio.run(run_once())
-    else:
-        # Interactive mode — route through bus like other channels
-        from sarathy.bus.events import InboundMessage
-
-        _init_prompt_session()
-        console.print(
-            f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n"
+    asyncio.run(
+        run_agent(
+            message=message,
+            session_id=session_id,
+            markdown=markdown,
         )
-
-        if ":" in session_id:
-            cli_channel, cli_chat_id = session_id.split(":", 1)
-        else:
-            cli_channel, cli_chat_id = "cli", session_id
-
-        def _exit_on_sigint(signum, frame):
-            _restore_terminal()
-            console.print("\nGoodbye!")
-            os._exit(0)
-
-        signal.signal(signal.SIGINT, _exit_on_sigint)
-
-        async def run_interactive():
-            bus_task = asyncio.create_task(agent_loop.run())
-            turn_done = asyncio.Event()
-            turn_done.set()
-            turn_response: list[str] = []
-
-            async def _consume_outbound():
-                while True:
-                    try:
-                        msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
-                        if msg.metadata.get("_progress"):
-                            is_tool_hint = msg.metadata.get("_tool_hint", False)
-                            ch = agent_loop.channels_config
-                            if ch and is_tool_hint and not ch.send_tool_hints:
-                                pass
-                            elif ch and not is_tool_hint and not ch.send_progress:
-                                pass
-                            else:
-                                console.print(f"  [dim]↳ {msg.content}[/dim]")
-                        elif not turn_done.is_set():
-                            if msg.content:
-                                turn_response.append(msg.content)
-                            turn_done.set()
-                        elif msg.content:
-                            console.print()
-                            _print_agent_response(msg.content, render_markdown=markdown)
-                    except asyncio.TimeoutError:
-                        continue
-                    except asyncio.CancelledError:
-                        break
-
-            outbound_task = asyncio.create_task(_consume_outbound())
-
-            try:
-                while True:
-                    try:
-                        _flush_pending_tty_input()
-                        user_input = await _read_interactive_input_async()
-                        command = user_input.strip()
-                        if not command:
-                            continue
-
-                        if _is_exit_command(command):
-                            _restore_terminal()
-                            console.print("\nGoodbye!")
-                            break
-
-                        turn_done.clear()
-                        turn_response.clear()
-
-                        await bus.publish_inbound(
-                            InboundMessage(
-                                channel=cli_channel,
-                                sender_id="user",
-                                chat_id=cli_chat_id,
-                                content=user_input,
-                            )
-                        )
-
-                        with _thinking_ctx():
-                            await turn_done.wait()
-
-                        if turn_response:
-                            _print_agent_response(turn_response[0], render_markdown=markdown)
-                    except KeyboardInterrupt:
-                        _restore_terminal()
-                        console.print("\nGoodbye!")
-                        break
-                    except EOFError:
-                        _restore_terminal()
-                        console.print("\nGoodbye!")
-                        break
-            finally:
-                agent_loop.stop()
-                outbound_task.cancel()
-                await asyncio.gather(bus_task, outbound_task, return_exceptions=True)
-                await agent_loop.close_mcp()
-
-        asyncio.run(run_interactive())
+    )
 
 
 # ============================================================================
@@ -834,64 +769,26 @@ def cron_run(
     force: bool = typer.Option(False, "--force", "-f", help="Run even if disabled"),
 ):
     """Manually run a job."""
+
     from loguru import logger
-    from sarathy.config.loader import load_config, get_data_dir
-    from sarathy.cron.service import CronService
-    from sarathy.cron.types import CronJob
-    from sarathy.bus.queue import MessageBus
-    from sarathy.agent.loop import AgentLoop
+
+    from sarathy.config.loader import load_config
+    from sarathy.engine.engine import SarathyEngine
 
     logger.disable("sarathy")
 
-    config = load_config()
-    provider = _make_provider(config)
-    bus = MessageBus()
-    agent_loop = AgentLoop(
-        bus=bus,
-        provider=provider,
-        workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        temperature=config.agents.defaults.temperature,
-        max_tokens=config.agents.defaults.max_tokens,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        memory_window=config.agents.defaults.memory_window,
-        web_search_config=config.tools.web.search,
-        exec_config=config.tools.exec,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
-        session_cache_size=config.agents.defaults.session_cache_size,
-        max_session_messages=config.agents.defaults.max_session_messages,
-        context_length=config.agents.defaults.context_length,
-        mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
-        reasoning_effort=config.agents.defaults.reasoning_effort,
-    )
+    async def run() -> None:
+        engine = SarathyEngine(load_config())
+        await engine.start()
+        try:
+            if await engine.cron_service.run_job(job_id, force=force):
+                console.print("[green]✓[/green] Job executed")
+            else:
+                console.print(f"[red]Failed to run job {job_id}[/red]")
+        finally:
+            await engine.stop()
 
-    store_path = get_data_dir() / "cron" / "jobs.json"
-    service = CronService(store_path)
-
-    result_holder = []
-
-    async def on_job(job: CronJob) -> str | None:
-        response = await agent_loop.process_direct(
-            job.payload.message,
-            session_key=f"cron:{job.id}",
-            channel=job.payload.channel or "cli",
-            chat_id=job.payload.to or "direct",
-        )
-        result_holder.append(response)
-        return response
-
-    service.on_job = on_job
-
-    async def run():
-        return await service.run_job(job_id, force=force)
-
-    if asyncio.run(run()):
-        console.print("[green]✓[/green] Job executed")
-        if result_holder:
-            _print_agent_response(result_holder[0], render_markdown=True)
-    else:
-        console.print(f"[red]Failed to run job {job_id}[/red]")
+    asyncio.run(run())
 
 
 # ============================================================================
@@ -902,7 +799,7 @@ def cron_run(
 @app.command()
 def status():
     """Show sarathy status."""
-    from sarathy.config.loader import load_config, get_config_path
+    from sarathy.config.loader import get_config_path, load_config
 
     config_path = get_config_path()
     config = load_config()
@@ -918,7 +815,12 @@ def status():
     )
 
     if config_path.exists():
-        from sarathy.providers.registry import PROVIDERS
+        label = {  # provider field name -> display label
+            "custom": "Custom (OpenAI-compatible)",
+            "ollama": "Ollama",
+            "lmstudio": "LMStudio",
+            "vllm": "vLLM",
+        }
 
         console.print(f"Model: {config.agents.defaults.model}")
 
@@ -926,23 +828,17 @@ def status():
         provider_name = config.agents.defaults.provider
         console.print(f"Provider: {provider_name}")
 
-        # Check API keys from registry
-        for spec in PROVIDERS:
-            p = getattr(config.providers, spec.name, None)
-            if p is None:
+        # Check API keys per configured provider
+        for name, cfg in vars(config.providers).items():
+            if not isinstance(cfg, type(config.providers.custom)):
                 continue
-            if spec.is_oauth:
-                console.print(f"{spec.label}: [green]✓ (OAuth)[/green]")
-            elif spec.is_local:
-                # Local deployments show api_base instead of api_key
-                if p.api_base:
-                    console.print(f"{spec.label}: [green]✓ {p.api_base}[/green]")
-                else:
-                    console.print(f"{spec.label}: [dim]not set[/dim]")
+            api_base = cfg.api_base
+            if api_base:
+                console.print(f"{label.get(name, name)}: [green]✓ {api_base}[/green]")
             else:
-                has_key = bool(p.api_key)
+                has_key = bool(cfg.api_key) and cfg.api_key != "dummy"
                 console.print(
-                    f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
+                    f"{label.get(name, name)}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
                 )
 
         # Web search status
@@ -955,42 +851,6 @@ def status():
             )
         else:
             console.print("Web Search: [dim]disabled[/dim]")
-
-
-# ============================================================================
-# Provider Management
-# ============================================================================
-# Provider Management
-# ============================================================================
-
-provider_app = typer.Typer(help="Manage providers")
-app.add_typer(provider_app, name="provider")
-
-
-@provider_app.command("login")
-def provider_login(
-    provider: str = typer.Argument(..., help="Provider name (e.g. 'ollama', 'lmstudio', 'vllm')"),
-):
-    """Authenticate with a provider (not needed for local providers)."""
-    from sarathy.providers.registry import PROVIDERS
-
-    key = provider.replace("-", "_")
-    spec = next((s for s in PROVIDERS if s.name == key), None)
-    if not spec:
-        names = ", ".join(s.name for s in PROVIDERS)
-        console.print(f"[red]Unknown provider: {provider}[/red]  Available: {names}")
-        raise typer.Exit(1)
-
-    if spec.is_local:
-        console.print(
-            f"[green]✓ {spec.label} is a local provider - no authentication needed.[/green]"
-        )
-        console.print(
-            f"  Make sure {spec.label} is running and accessible at the configured endpoint."
-        )
-    else:
-        console.print(f"[yellow]For {spec.label}, set API key in config:[/yellow]")
-        console.print(f"  providers.{spec.name}.apiKey = 'your-api-key'")
 
 
 if __name__ == "__main__":

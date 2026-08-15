@@ -7,7 +7,7 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from loguru import logger
 
@@ -165,7 +165,7 @@ class SkillsLoader:
                 if missing:
                     lines.append(f"    <requires>{escape_xml(missing)}</requires>")
 
-            lines.append(f"  </skill>")
+            lines.append("  </skill>")
         lines.append("</skills>")
 
         return "\n".join(lines)
@@ -331,7 +331,6 @@ class SkillManager:
         # Find the closing ---
         lines = content.split("\n")
         frontmatter_lines = []
-        in_frontmatter = False
         for i, line in enumerate(lines):
             if line.strip() == "---" and i > 0:
                 break
@@ -390,9 +389,10 @@ class SkillManager:
     async def _watch_loop(self):
         """Main watch loop using watchdog."""
         try:
-            from watchdog.observers import Observer
-            from watchdog.events import FileSystemEventHandler
             import time
+
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
 
             # Use a queue to communicate between watchdog thread and asyncio
             event_queue = self._event_queue

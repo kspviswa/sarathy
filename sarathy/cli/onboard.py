@@ -1,7 +1,7 @@
 """Textual-based onboarding wizard for sarathy."""
 
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -13,7 +13,6 @@ from textual.widgets import (
     Static,
     Switch,
 )
-
 
 LOGO = """
 ╔═══════════════════════════════════════════════════════════╗
@@ -31,41 +30,41 @@ class OnboardingApp(App):
     Screen {
         align: center middle;
     }
-    
+
     Container {
         width: 70;
         border: solid $primary;
         padding: 2 4;
     }
-    
+
     #title {
         text-align: center;
         text-style: bold;
         color: $accent;
     }
-    
+
     #subtitle {
         color: $text-muted;
         margin-bottom: 2;
     }
-    
+
     RadioSet {
         margin: 2 0;
     }
-    
+
     Input {
         margin: 1 0;
     }
-    
+
     Switch {
         margin: 1 0;
     }
-    
+
     #buttons {
         align: right middle;
         margin-top: 2;
     }
-    
+
     .spacer {
         height: 1;
     }
@@ -475,12 +474,12 @@ class FinishScreen(Screen):
 
         yield Container(
             Static("[bold green]🎉 Setup Complete![/bold green]", id="title"),
-            Static(f"", id="spacer"),
+            Static("", id="spacer"),
             Static(f"Config saved to: {self.config_path}"),
             Static(f"Workspace: {self.workspace}"),
             Static(f"Model: {self.config.agents.defaults.model}"),
             Static(f"Channels: {channels_str}"),
-            Static(f"", id="spacer2"),
+            Static("", id="spacer2"),
             Static("[bold]Next steps:[/bold]"),
             Static("  • Customize config: nano ~/.sarathy/config.json"),
             Static('  • Chat: sarathy agent -m "Hello!"'),

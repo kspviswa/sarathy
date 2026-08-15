@@ -203,7 +203,7 @@ class WebFetchTool(Tool):
         self.max_chars = max_chars
 
     async def execute(
-        self, url: str, extractMode: str = "markdown", maxChars: int | None = None, **kwargs: Any
+        self, url: str, extractMode: str = "markdown", maxChars: int | None = None, **kwargs: Any  # noqa: N803 - args mirror JSON schema keys
     ) -> str:
         from readability import Document
 

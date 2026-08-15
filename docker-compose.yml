@@ -1,31 +1,60 @@
-x-common-config: &common-config
-  build:
-    context: .
-    dockerfile: Dockerfile
-  volumes:
-    - ~/.sarathy:/root/.sarathy
+# Sarathy gateway — run with any setup: `docker compose up -d`
+#
+# Standard containers (Linux):   docker compose up -d
+# Apple Containers (macOS):      docker compose --profile apple up -d
+#
+# The apple service reuses the SAME `sarathy:latest` image built (or pulled)
+# for the standard service — only runtime/resource settings differ.
 
 services:
-  sarathy-gateway:
-    container_name: sarathy-gateway
-    <<: *common-config
-    command: ["gateway"]
+  sarathy:
+    image: sarathy:latest
+    build: .
+    container_name: sarathy
     restart: unless-stopped
     ports:
-      - 18790:18790
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-  
-  sarathy-cli:
-    <<: *common-config
-    profiles:
-      - cli
-    command: ["status"]
-    stdin_open: true
-    tty: true
+      - "18790:18790"
+    volumes:
+      - sarathy-data:/data
+      - sarathy-config:/config
+    environment:
+      - SARATHY_HOME=/data
+      - SARATHY_CONFIG=/config/config.json
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:18790/api/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Apple Containers variant — same sarathy image, tuned for Apple Silicon.
+  # Needs `docker compose --profile apple` so it only starts when requested.
+  sarathy-apple:
+    image: sarathy:latest                # same image as the standard service
+    profiles: ["apple"]
+    container_name: sarathy-apple
+    restart: unless-stopped
+    platform: linux/arm64/v8             # Apple Silicon (arm64)
+    ports:
+      - "18791:18790"                    # distinct host port to avoid clashes
+    volumes:
+      - sarathy-data-apple:/data         # separate data/config so both never collide
+      - sarathy-config-apple:/config
+    environment:
+      - SARATHY_HOME=/data
+      - SARATHY_CONFIG=/config/config.json
+      - SARATHY_APPLE_CONTAINER=1
+    mem_limit: 8g                        # cap in bytes; Apple Silicon VM default sweet spot
+    cpus: 4
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:18790/api/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  sarathy-data:
+  sarathy-config:
+  sarathy-data-apple:
+  sarathy-config-apple:

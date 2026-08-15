@@ -1,7 +1,7 @@
 """Utility functions for sarathy."""
 
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 
 def ensure_dir(path: Path) -> Path:
@@ -11,17 +11,22 @@ def ensure_dir(path: Path) -> Path:
 
 
 def get_data_path() -> Path:
-    """Get the sarathy data directory (~/.sarathy)."""
+    """Get the sarathy data directory ($SARATHY_HOME or ~/.sarathy)."""
+    import os
+
+    home = os.environ.get("SARATHY_HOME")
+    if home:
+        return ensure_dir(Path(home).expanduser())
     return ensure_dir(Path.home() / ".sarathy")
 
 
 def get_workspace_path(workspace: str | None = None) -> Path:
     """
     Get the workspace path.
-    
+
     Args:
         workspace: Optional workspace path. Defaults to ~/.sarathy/workspace.
-    
+
     Returns:
         Expanded and ensured workspace path.
     """
@@ -67,10 +72,10 @@ def safe_filename(name: str) -> str:
 def parse_session_key(key: str) -> tuple[str, str]:
     """
     Parse a session key into channel and chat_id.
-    
+
     Args:
         key: Session key in format "channel:chat_id"
-    
+
     Returns:
         Tuple of (channel, chat_id)
     """

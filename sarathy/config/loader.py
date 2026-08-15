@@ -7,7 +7,12 @@ from sarathy.config.schema import Config
 
 
 def get_config_path() -> Path:
-    """Get the default configuration file path."""
+    """Get the default configuration file path ($SARATHY_CONFIG or ~/.sarathy/config.json)."""
+    import os
+
+    configured = os.environ.get("SARATHY_CONFIG")
+    if configured:
+        return Path(configured).expanduser()
     return Path.home() / ".sarathy" / "config.json"
 
 

@@ -1,9 +1,9 @@
 [project]
 name = "sarathy"
-version = "0.1.20"
-description = "Sarathy : My Personal _claw style_ Assistant"
+version = "0.2.0a1"
+description = "Sarathy : My Personal AI Assistant (tau-core)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
     {name = "Viswa Kumar"}
@@ -19,20 +19,17 @@ classifiers = [
 
 dependencies = [
     "typer>=0.20.0,<1.0.0",
-    "litellm>=1.81.5,<2.0.0",
+    "tau-ai>=0.3.9,<1.0.0",
+    "fastapi>=0.115.0,<1.0.0",
+    "uvicorn>=0.30.0,<1.0.0",
     "pydantic>=2.12.0,<3.0.0",
     "pydantic-settings>=2.12.0,<3.0.0",
-    "websockets>=16.0,<17.0",
-    "websocket-client>=1.9.0,<2.0.0",
     "httpx>=0.28.0,<1.0.0",
-    "oauth-cli-kit>=0.1.3,<1.0.0",
     "loguru>=0.7.3,<1.0.0",
     "readability-lxml>=0.8.4,<1.0.0",
     "rich>=14.0.0,<15.0.0",
-    "textual>=1.0.0,<2.0.0",
+    "textual>=8.2.8,<9.0.0",
     "croniter>=6.0.0,<7.0.0",
-    "python-telegram-bot[socks]>=22.0,<23.0",
-    "socksio>=1.0.0,<2.0.0",
     "prompt-toolkit>=3.0.50,<4.0.0",
     "mcp>=1.26.0,<2.0.0",
     "json-repair>=0.57.0,<1.0.0",
@@ -62,7 +59,7 @@ packages = ["sarathy"]
 [tool.hatch.build.targets.wheel.sources]
 "sarathy" = "sarathy"
 
-# Include non-Python files in skills and templates
+# Include non-Python files in skills, templates, web static assets and docs
 [tool.hatch.build]
 include = [
     "sarathy/**/*.py",
@@ -70,6 +67,8 @@ include = [
     "sarathy/templates/skills/**/*.md",
     "sarathy/skills/**/*.md",
     "sarathy/skills/**/*.sh",
+    "sarathy/web/static/**/*",
+    "sarathy/data/**/*",
 ]
 
 [tool.hatch.build.targets.sdist]

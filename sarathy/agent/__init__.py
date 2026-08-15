@@ -1,12 +1,8 @@
-"""Agent core module."""
+"""Agent core module (migrating to tau; legacy loop removed)."""
 
-from sarathy.agent.loop import AgentLoop
-from sarathy.agent.context import ContextBuilder
-from sarathy.agent.skills import SkillsLoader, SkillManager, SkillCommand, SkillInfo
+from sarathy.agent.skills import SkillCommand, SkillInfo, SkillManager, SkillsLoader  # noqa: F401
 
 __all__ = [
-    "AgentLoop",
-    "ContextBuilder",
     "SkillsLoader",
     "SkillManager",
     "SkillCommand",

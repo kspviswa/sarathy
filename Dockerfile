@@ -1,22 +1,26 @@
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+# Sarathy gateway — python:3.12-slim, non-root, volumes for data/config/extensions
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install Python dependencies first (cached layer)
+# Install dependencies first (cached layer)
 COPY pyproject.toml README.md LICENSE ./
-RUN mkdir -p sarathy && touch sarathy/__init__.py && \
-    uv pip install --system --system --no-cache . && \
-    rm -rf sarathy
-
-# Copy the full source and install
 COPY sarathy/ sarathy/
-RUN uv pip install --system --no-cache .
+RUN pip install --no-cache-dir .
 
-# Create config directory
-RUN mkdir -p /root/.sarathy
+# Runtime user (non-root)
+RUN useradd --create-home --uid 1000 sarathy
+RUN mkdir -p /data /config && chown -R sarathy:sarathy /app /data /config
+USER sarathy
 
-# Gateway default port
+# Volumes: data (sessions/memory/cron), config, extensions under data
+ENV SARATHY_HOME=/data
+ENV SARATHY_CONFIG=/config/config.json
+
 EXPOSE 18790
 
-ENTRYPOINT ["sarathy"]
-CMD ["status"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:18790/api/health', timeout=4).status==200 else 1)" || exit 1
+
+ENTRYPOINT ["sarathy", "gateway"]
+CMD ["start", "--foreground"]

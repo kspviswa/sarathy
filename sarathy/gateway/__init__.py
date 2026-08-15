@@ -3,8 +3,8 @@
 from sarathy.gateway.manager import (
     clear_pid,
     get_gateway_status,
-    get_logs_dir,
     get_log_file_path,
+    get_logs_dir,
     get_pid_file_path,
     get_recent_logs,
     is_gateway_running,

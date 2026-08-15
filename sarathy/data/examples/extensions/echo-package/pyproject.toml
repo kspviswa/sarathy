@@ -1,0 +1,2 @@
+[tool.tau]
+extensions = ["extension.py"]

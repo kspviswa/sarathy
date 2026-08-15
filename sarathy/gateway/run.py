@@ -1,295 +1,81 @@
-"""Entry point for running the gateway directly (not via CLI)."""
+"""Gateway process: SarathyEngine + FastAPI portal in one process.
+
+Entry point for ``python -m sarathy.gateway.run`` (spawned by the gateway
+manager) and for running the server in the foreground.
+"""
+
+from __future__ import annotations
 
 import asyncio
+import sys
+from contextlib import suppress
+from pathlib import Path
 
-from sarathy.config.loader import load_config, get_data_dir
-from sarathy.bus.queue import MessageBus
-from sarathy.agent.loop import AgentLoop
-from sarathy.channels.manager import ChannelManager
-from sarathy.session.manager import SessionManager
-from sarathy.cron.service import CronService
-from sarathy.cron.types import CronJob
-from sarathy.heartbeat.service import HeartbeatService
+from loguru import logger
+
+from sarathy.config.loader import load_config
+from sarathy.engine.engine import SarathyEngine
+from sarathy.web.app import create_app
+from sarathy.web.auth import Auth
+from sarathy.web.notifier import Notifier
 
 
-async def run_gateway(port: int = 18790, verbose: bool = False):
-    """Run the gateway (non-CLI entry point)."""
+async def run_gateway(port: int = 18790, verbose: bool = False) -> None:
+    """Run the sarathy portal until interrupted or a restart is requested."""
     if verbose:
-        import logging
-
-        logging.basicConfig(level=logging.DEBUG)
+        logger.enable("sarathy")
 
     config = load_config()
+    engine = SarathyEngine(config, verbose=verbose)
+    await engine.start()
 
-    # Ensure global skills are created on first run
-    from sarathy.cli.commands import _create_global_skills
+    auth = Auth(data_dir=engine.data_dir, enabled=config.web.auth.enabled)
+    notifier = Notifier(engine)
+    app = create_app(engine, auth=auth, notifier=notifier)
 
-    _create_global_skills()
+    import uvicorn
 
-    bus = MessageBus()
-    from sarathy.providers.litellm_provider import LiteLLMProvider
-    from sarathy.providers.custom_provider import CustomProvider
-    from sarathy.providers.registry import find_by_name
-
-    model = config.agents.defaults.model
-    provider_name = config.get_provider_name()
-    p = config.get_provider()
-    api_base = config.get_api_base()
-
-    # Use CustomProvider for OpenAI-compatible endpoints (/v1) because:
-    # 1. LiteLLM strips reasoning content from streaming deltas with OpenAI provider
-    # 2. CustomProvider properly extracts reasoning/thinking from Ollama, LMStudio, vLLM
-    if api_base and api_base.endswith("/v1"):
-        provider = CustomProvider(
-            api_key=p.api_key if p else "no-key",
-            api_base=api_base,
-            default_model=model,
-        )
-    elif provider_name == "custom":
-        provider = CustomProvider(
-            api_key=p.api_key if p else "no-key",
-            api_base=api_base or "http://localhost:8000/v1",
-            default_model=model,
-        )
-    else:
-        spec = find_by_name(provider_name)
-        if spec and spec.is_local:
-            pass
-        elif (
-            not model.startswith("bedrock/")
-            and not (p and p.api_key)
-            and not (spec and spec.is_oauth)
-        ):
-            raise RuntimeError("No API key configured")
-
-        provider = LiteLLMProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            provider_name=provider_name,
-        )
-
-    session_manager = SessionManager(
-        config=config,
-        workspace=config.workspace_path,
-        max_cache_size=config.agents.defaults.session_cache_size,
-        max_session_messages=config.agents.defaults.max_session_messages,
+    server = uvicorn.Server(
+        uvicorn.Config(app, host=config.gateway.host, port=port, log_level="info")
     )
 
-    cron_store_path = get_data_dir() / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
-
-    agent = AgentLoop(
-        bus=bus,
-        provider=provider,
-        workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        temperature=config.agents.defaults.temperature,
-        max_tokens=config.agents.defaults.max_tokens,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        memory_window=config.agents.defaults.memory_window,
-        web_search_config=config.tools.web.search,
-        exec_config=config.tools.exec,
-        cron_service=cron,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
-        session_manager=session_manager,
-        session_cache_size=config.agents.defaults.session_cache_size,
-        context_length=config.agents.defaults.context_length,
-        mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
-        reasoning_effort=config.agents.defaults.reasoning_effort,
+    pairing = (
+        auth.token
+        if config.web.auth.enabled
+        else "(auth disabled)"
     )
+    print("\n┌──────────────────────────────────────────────┐")
+    print(f"│  Sarathy portal:  http://{config.gateway.host}:{port}")
+    print(f"│  Pairing token:   {pairing}")
+    print("│  (data/config/extensions live in volumes)   │")
+    print("└──────────────────────────────────────────────┘\n")
 
-    async def on_cron_job(job: CronJob) -> str | None:
-        response = await agent.process_direct(
-            job.payload.message,
-            session_key=f"cron:{job.id}",
-            channel=job.payload.channel or "cli",
-            chat_id=job.payload.to or "direct",
-        )
-        if job.payload.deliver and job.payload.to:
-            from sarathy.bus.events import OutboundMessage
-
-            await bus.publish_outbound(
-                OutboundMessage(
-                    channel=job.payload.channel or "cli",
-                    chat_id=job.payload.to,
-                    content=response or "",
-                )
-            )
-        return response
-
-    cron.on_job = on_cron_job
-
-    # Initialize skill manager and command manager
-    from sarathy.agent.skills import SkillManager
-    from sarathy.core.commands import CommandManager
-
-    skill_manager = SkillManager(config.workspace_path)
-    command_manager = CommandManager()
-    command_manager.sync_from_skill_manager(skill_manager)
-
-    # Register built-in commands
-    from sarathy.agent.builtin_commands import BUILTIN_COMMANDS
-
-    for cmd in BUILTIN_COMMANDS.values():
-        command_manager.register_command(
-            name=cmd.name,
-            description=cmd.description,
-            skill_name="builtin",
-            help_text=f"{cmd.description}\n\nUsage: /{cmd.name}"
-            + (f" <{', '.join(cmd.subcommands)}>" if cmd.subcommands else ""),
-        )
-
-    # Start skill manager watching
-    await skill_manager.start_watching()
-
-    # Initialize archival manager (Phase 2: background thread)
-    from sarathy.session.archival import SessionArchivalManager
-    archival_manager = SessionArchivalManager(config, session_manager)
-    archival_manager.start()
-
-    # Update commands when skills change
-    async def on_skills_updated():
-        command_manager.sync_from_skill_manager(skill_manager)
-        await command_manager.notify_update()
-
-    skill_manager.on_reload(on_skills_updated)
-
-    # Initialize channels with command manager
-    channels = ChannelManager(config, bus, command_manager=command_manager)
-
-    def _pick_heartbeat_target() -> tuple[str, str]:
-        enabled = set(channels.enabled_channels)
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        return "cli", "direct"
-
-    async def on_heartbeat_execute(tasks: str) -> str:
-        channel, chat_id = _pick_heartbeat_target()
-
-        async def _silent(*_args, **_kwargs):
-            pass
-
-        return await agent.process_direct(
-            tasks,
-            session_key="heartbeat",
-            channel=channel,
-            chat_id=chat_id,
-            on_progress=_silent,
-        )
-
-    async def on_heartbeat_notify(response: str) -> None:
-        from sarathy.bus.events import OutboundMessage
-
-        channel, chat_id = _pick_heartbeat_target()
-        if channel == "cli":
-            return
-        await bus.publish_outbound(
-            OutboundMessage(channel=channel, chat_id=chat_id, content=response)
-        )
-
-    hb_cfg = config.gateway.heartbeat
-    heartbeat = HeartbeatService(
-        workspace=config.workspace_path,
-        provider=provider,
-        model=agent.model,
-        on_execute=on_heartbeat_execute,
-        on_notify=on_heartbeat_notify,
-        interval_s=hb_cfg.interval_s,
-        enabled=hb_cfg.enabled,
-    )
-
-    async def _check_restart_flag() -> None:
-        import json
-        import os as _os
-
-        from sarathy import __version__
-        from sarathy.bus.events import OutboundMessage
-        from sarathy.utils.helpers import get_data_path
-
-        restart_flag_path = get_data_path() / "restart_pending.json"
-        if not restart_flag_path.exists():
-            return
-
-        try:
-            data = json.loads(restart_flag_path.read_text(encoding="utf-8"))
-            channel = data.get("channel", "cli")
-            chat_id = data.get("chat_id", "direct")
-
-            from sarathy.providers.registry import PROVIDERS
-
-            status_lines = ["✅ Gateway restarted successfully!", "", "📊 Sarathy Status:", ""]
-            status_lines.append(f"Version: {__version__}")
-            status_lines.append(f"Model: {config.agents.defaults.model}")
-            status_lines.append(f"Provider: {config.get_provider_name()}")
-
-            for spec in PROVIDERS:
-                p = getattr(config.providers, spec.name, None)
-                if p is None:
-                    continue
-                if spec.is_oauth:
-                    status_lines.append(f"{spec.label}: ✓ (OAuth)")
-                elif spec.is_local:
-                    if p.api_base:
-                        status_lines.append(f"{spec.label}: ✓ {p.api_base}")
-                    else:
-                        status_lines.append(f"{spec.label}: not set")
-                else:
-                    has_key = bool(p.api_key)
-                    status_lines.append(f"{spec.label}: {'✓' if has_key else 'not set'}")
-
-            ws = config.tools.web.search
-            if ws.enabled:
-                env_key = "FIRECRAWL_API_KEY" if ws.provider == "firecrawl" else "BRAVE_API_KEY"
-                has_key = bool(ws.api_key or _os.environ.get(env_key))
-                status_lines.append(
-                    f"Web Search ({ws.provider}): {'✓' if has_key else '⚠ no API key'}"
-                )
-            else:
-                status_lines.append("Web Search: disabled")
-
-            await bus.publish_outbound(
-                OutboundMessage(channel=channel, chat_id=chat_id, content="\n".join(status_lines))
-            )
-        except Exception:
-            pass
-        finally:
-            try:
-                restart_flag_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-    channels_task = asyncio.create_task(channels.start_all())
-    await asyncio.sleep(0.1)
-    await _check_restart_flag()
+    restart_watcher = asyncio.create_task(_watch_restart(engine))
 
     try:
-        await cron.start()
-        await heartbeat.start()
-        await asyncio.gather(
-            agent.run(),
-            channels_task,
-        )
+        await server.serve()
     except KeyboardInterrupt:
         pass
     finally:
-        await agent.close_mcp()
-        heartbeat.stop()
-        cron.stop()
-        agent.stop()
-        await channels.stop_all()
+        restart_watcher.cancel()
+        with suppress(Exception):
+            await engine.stop()
+    logger.info("gateway shutdown complete")
 
 
-def main():
+async def _watch_restart(engine) -> None:
+    """Watch for the restart flag (written by the web UI) and exit cleanly."""
+    flag = Path(engine.data_dir) / "restart.flag"
+    while True:
+        await asyncio.sleep(2)
+        if flag.exists():
+            logger.info("restart flag detected — shutting down for restart")
+            with suppress(Exception):
+                flag.unlink()
+            sys.exit(0)
+
+
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser()

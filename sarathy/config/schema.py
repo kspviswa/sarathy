@@ -194,6 +194,18 @@ class ToolsConfig(Base):
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
+class WebAuthConfig(Base):
+    """Pairing-token authentication for the web portal."""
+
+    enabled: bool = True  # False disables auth (local/dev use)
+
+
+class WebConfig(Base):
+    """Web portal configuration (served inside the gateway process)."""
+
+    auth: WebAuthConfig = Field(default_factory=WebAuthConfig)
+
+
 class Config(BaseSettings):
     """Root configuration for sarathy."""
 
@@ -202,6 +214,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
     @property
     def workspace_path(self) -> Path:
@@ -215,11 +228,11 @@ class Config(BaseSettings):
 
         Requires agents.defaults.provider to be set and must match a configured provider.
         """
-        from sarathy.providers.registry import PROVIDERS
+        from sarathy.engine.provider import _LOCAL_ENDPOINTS
 
         provider_name = self.agents.defaults.provider
         if not provider_name:
-            available = [s.name for s in PROVIDERS if hasattr(self.providers, s.name)]
+            available = list(_LOCAL_ENDPOINTS.keys())
             raise ValueError(
                 f"Missing required 'provider' in agents.defaults. "
                 f"Available providers: {', '.join(available)}"
@@ -228,7 +241,7 @@ class Config(BaseSettings):
         # Get the provider config directly by name
         p = getattr(self.providers, provider_name, None)
         if not p:
-            available = [s.name for s in PROVIDERS if hasattr(self.providers, s.name)]
+            available = list(_LOCAL_ENDPOINTS.keys())
             raise ValueError(
                 f"Unknown provider '{provider_name}' in agents.defaults.provider. "
                 f"Available providers: {', '.join(available)}"
@@ -253,15 +266,13 @@ class Config(BaseSettings):
 
     def get_api_base(self) -> str | None:
         """Get API base URL for the configured provider."""
-        from sarathy.providers.registry import find_by_name
+        from sarathy.engine.provider import _LOCAL_ENDPOINTS
 
         p, name = self._match_provider()
         if p and p.api_base:
             return p.api_base
         if name:
-            spec = find_by_name(name)
-            if spec and spec.is_gateway and spec.default_api_base:
-                return spec.default_api_base
+            return _LOCAL_ENDPOINTS.get(name)
         return None
 
     model_config = ConfigDict(env_prefix="NANOBOT_", env_nested_delimiter="__")

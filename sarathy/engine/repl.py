@@ -6,12 +6,12 @@ import asyncio
 from datetime import datetime, timezone
 
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 from tau_agent.events import MessageEndEvent, MessageUpdateEvent, ToolExecutionStartEvent
 from tau_agent.messages import TextContent
 
+from sarathy.engine.events import NotifyEvent, RunEnd
 from sarathy.utils.helpers import ensure_dir
 
 
@@ -125,26 +125,54 @@ async def run_agent(
     if message:
         sid = session_id or _session_id("cli-direct")
         app = engine.new_session(sid)
-        console = Console()
-        collected: list[str] = []
+        console = Console(highlight=False)
         animate = asyncio.Event()
+
+        console.print("[dim]Sarathy is working… (first request loads the model)[/dim]")
 
         async def on_event(session_id: str, event: object) -> None:
             if session_id != sid:
                 return
             if isinstance(event, MessageUpdateEvent):
-                collected.append(_text_of(event))
+                text = _text_of(event)
+                if text:
+                    console.print(Text(text, style="cyan"), end="", soft_wrap=True)
             elif isinstance(event, MessageEndEvent):
-                collected.append(_text_of(event))
+                message = getattr(event, "message", None)
+                error_text = getattr(message, "error_message", None) if message else None
+                stop_reason = getattr(message, "stop_reason", None) if message else None
+                text = _text_of(event)
+                if text:
+                    console.print(Text(text, style="cyan"), end="", soft_wrap=True)
+                    console.print()
+                if stop_reason in {"error", "aborted"} or error_text:
+                    console.print(
+                        f"\n[red]Error: {error_text or ('aborted' if stop_reason == 'aborted' else 'model stream failed')}[/red]"
+                    )
+            elif isinstance(event, ToolExecutionStartEvent):
+                call = getattr(event, "call", None)
+                name = call.name if call else getattr(event, "tool_name", "tool")
+                console.print(f"[dim]  🔧 {name}…[/dim]")
+            elif isinstance(event, NotifyEvent):
+                level = getattr(event, "level", "info")
+                style = {
+                    "error": "red",
+                    "warning": "yellow",
+                    "success": "green",
+                }.get(level, "dim")
+                console.print(f"[{style}]{event.message}[/{style}]")
+            elif isinstance(event, RunEnd):
                 animate.set()
 
         engine.hub.subscribe(on_event)
-        with console.status("[dim]sarathy is thinking…[/dim]", spinner="dots"):
+        try:
             await app.send(message)
-            await animate.wait()
-        engine.hub._listeners.clear()  # noqa: SLF001
-        text = "".join(collected)
-        console.print(Markdown(text) if markdown else Text(text))
+            try:
+                await asyncio.wait_for(animate.wait(), timeout=1200)
+            except asyncio.TimeoutError:
+                console.print("\n[red](timed out — is the model/provider reachable?)[/red]")
+        finally:
+            engine.hub._listeners.clear()  # noqa: SLF001
         await engine.stop()
         return
 

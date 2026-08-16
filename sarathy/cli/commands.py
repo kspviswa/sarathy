@@ -1038,6 +1038,8 @@ def mcp_add(
     url: str = typer.Option("", "--url", "-u", help="HTTP: streamable HTTP endpoint URL"),
     env: list[str] = typer.Option([], "--env", "-e", help="Extra env vars as KEY=VALUE (repeatable)"),
     headers: list[str] = typer.Option([], "--header", help="HTTP headers as KEY=VALUE (repeatable)"),
+    bearer_token: str = typer.Option("", "--bearer-token", help="HTTP: Bearer token for Authorization header"),
+    api_key: str = typer.Option("", "--api-key", help="HTTP: API key (adds X-API-Key header)"),
     timeout: int = typer.Option(30, "--timeout", help="Tool call timeout in seconds"),
 ):
     """Add an MCP server to configuration."""
@@ -1077,6 +1079,19 @@ def mcp_add(
         key, _, value = h.partition("=")
         headers_dict[key] = value
 
+    # Add auth convenience headers
+    if bearer_token:
+        if "Authorization" in headers_dict:
+            console.print("[red]Cannot use --bearer-token with explicit Authorization header.[/red]")
+            raise typer.Exit(1)
+        headers_dict["Authorization"] = f"Bearer {bearer_token}"
+
+    if api_key:
+        if "X-API-Key" in headers_dict:
+            console.print("[red]Cannot use --api-key with explicit X-API-Key header.[/red]")
+            raise typer.Exit(1)
+        headers_dict["X-API-Key"] = api_key
+
     server_cfg = MCPServerConfig(
         command=command,
         args=args,
@@ -1096,6 +1111,12 @@ def mcp_add(
     else:
         console.print("  Mode: HTTP (streamable)")
         console.print(f"  URL: {url}")
+        if "Authorization" in headers_dict:
+            console.print("  Auth: [green]bearer token[/green] ✓")
+        if "X-API-Key" in headers_dict:
+            console.print("  Auth: [green]API key[/green] ✓")
+        if headers_dict and "Authorization" not in headers_dict and "X-API-Key" not in headers_dict:
+            console.print(f"  Headers: {', '.join(headers_dict.keys())}")
     console.print(f"  Tool timeout: {timeout}s")
 
 

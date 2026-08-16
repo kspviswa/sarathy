@@ -7,7 +7,7 @@ import json
 import re
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
@@ -16,9 +16,11 @@ from sarathy.agent.context import ContextBuilder
 from sarathy.agent.subagent import SubagentManager
 from sarathy.agent.tools.cron import CronTool
 from sarathy.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from sarathy.agent.tools.memory import MemoryTool
 from sarathy.agent.tools.message import MessageTool
 from sarathy.agent.tools.registry import ToolRegistry
 from sarathy.agent.tools.shell import ExecTool
+from sarathy.agent.tools.skill_manage import SkillManageTool
 from sarathy.agent.tools.spawn import SpawnTool
 from sarathy.agent.tools.web import WebFetchTool, create_web_search_tool
 from sarathy.bus.events import InboundMessage, OutboundMessage
@@ -64,6 +66,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
         reasoning_effort: str | None = None,
+        reviewer: Any | None = None,
     ):
         from sarathy.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -84,11 +87,14 @@ class AgentLoop:
         self.restrict_to_workspace = restrict_to_workspace
 
         self.context = ContextBuilder(workspace)
-        self.sessions = session_manager or SessionManager(
-            workspace,
-            max_cache_size=session_cache_size,
-            max_session_messages=max_session_messages,
-        )
+        if session_manager is None:
+            raise ValueError(
+                "session_manager is required. Create one with SessionManager(config=config, ...) "
+                "and pass it to AgentLoop."
+            )
+        self.sessions = session_manager
+        self.memory_store = self.context.memory
+        self.reviewer = reviewer
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
             provider=provider,
@@ -141,6 +147,8 @@ class AgentLoop:
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+        self.tools.register(MemoryTool(memory_store=self.memory_store))
+        self.tools.register(SkillManageTool(workspace=self.workspace))
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -279,16 +287,22 @@ class AgentLoop:
 
             start_time = time.perf_counter()
             should_stream = streaming_enabled and on_progress is not None
-            response = await self.provider.chat(
-                messages=messages,
-                tools=self.tools.get_definitions(),
-                model=self.model,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                reasoning_effort=reasoning_effort or self.reasoning_effort,
-                stream=should_stream,
-                on_progress=on_progress if should_stream else None,
-            )
+            if self.reviewer:
+                self.reviewer.mark_busy()
+            try:
+                response = await self.provider.chat(
+                    messages=messages,
+                    tools=self.tools.get_definitions(),
+                    model=self.model,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning_effort or self.reasoning_effort,
+                    stream=should_stream,
+                    on_progress=on_progress if should_stream else None,
+                )
+            finally:
+                if self.reviewer:
+                    self.reviewer.mark_idle()
             elapsed = time.perf_counter() - start_time
 
             if response.usage:
@@ -615,26 +629,6 @@ class AgentLoop:
             chat_id=msg.chat_id,
         )
 
-        if len(session.messages) > 0 and len(session.messages) % 15 == 0:
-            nudge = {
-                "role": "system",
-                "content": (
-                    "[PERIODIC SELF-REFLECTION] Silently review the last 15 exchanges. "
-                    "Take action only if signal is clear — default is to do nothing.\n\n"
-                    "1. Did Viswa explicitly correct a mistake you made, or set a rule "
-                    "('never do X', 'always do Y')?\n"
-                    "   → Append one bullet per lesson to tasks/pending-lessons.md\n"
-                    "   → Format: '- Never/Always <specific rule>'\n\n"
-                    "2. Did you complete a non-obvious multi-step workflow (5+ steps) "
-                    "that is likely to recur?\n"
-                    "   → Append one bullet per workflow to tasks/pending-skills.md\n"
-                    "   → Format: '- <workflow name>: step1 → step2 → step3'\n\n"
-                    "If nothing significant happened, do nothing. "
-                    "Do NOT write research results, task outputs, or conversational facts."
-                ),
-            }
-            initial_messages.insert(-1, nudge)
-
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
@@ -677,6 +671,9 @@ class AgentLoop:
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
+
+        if self.reviewer and all_msgs:
+            await self.reviewer.enqueue(all_msgs, session.key)
 
         metadata = dict(msg.metadata or {})
         metadata["_stats"] = stats

@@ -10,27 +10,28 @@ import pytest
 
 def _make_loop():
     """Create a minimal AgentLoop with mocked dependencies."""
-    from sarathi.agent.loop import AgentLoop
-    from sarathi.bus.queue import MessageBus
+    from sarathy.agent.loop import AgentLoop
+    from sarathy.bus.queue import MessageBus
+    from sarathy.session.manager import SessionManager
 
     bus = MessageBus()
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     workspace = MagicMock()
     workspace.__truediv__ = MagicMock(return_value=MagicMock())
+    sm = MagicMock(spec=SessionManager)
 
-    with patch("sarathi.agent.loop.ContextBuilder"), \
-         patch("sarathi.agent.loop.SessionManager"), \
-         patch("sarathi.agent.loop.SubagentManager") as MockSubMgr:
+    with patch("sarathy.agent.loop.ContextBuilder"), \
+         patch("sarathy.agent.loop.SubagentManager") as MockSubMgr:
         MockSubMgr.return_value.cancel_by_session = AsyncMock(return_value=0)
-        loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
+        loop = AgentLoop(bus=bus, provider=provider, workspace=workspace, session_manager=sm)
     return loop, bus
 
 
 class TestHandleStop:
     @pytest.mark.asyncio
     async def test_stop_no_active_task(self):
-        from sarathi.bus.events import InboundMessage
+        from sarathy.bus.events import InboundMessage
 
         loop, bus = _make_loop()
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/stop")
@@ -40,7 +41,7 @@ class TestHandleStop:
 
     @pytest.mark.asyncio
     async def test_stop_cancels_active_task(self):
-        from sarathi.bus.events import InboundMessage
+        from sarathy.bus.events import InboundMessage
 
         loop, bus = _make_loop()
         cancelled = asyncio.Event()
@@ -65,7 +66,7 @@ class TestHandleStop:
 
     @pytest.mark.asyncio
     async def test_stop_cancels_multiple_tasks(self):
-        from sarathi.bus.events import InboundMessage
+        from sarathy.bus.events import InboundMessage
 
         loop, bus = _make_loop()
         events = [asyncio.Event(), asyncio.Event()]
@@ -92,7 +93,7 @@ class TestHandleStop:
 class TestDispatch:
     @pytest.mark.asyncio
     async def test_dispatch_processes_and_publishes(self):
-        from sarathi.bus.events import InboundMessage, OutboundMessage
+        from sarathy.bus.events import InboundMessage, OutboundMessage
 
         loop, bus = _make_loop()
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="hello")
@@ -105,7 +106,7 @@ class TestDispatch:
 
     @pytest.mark.asyncio
     async def test_processing_lock_serializes(self):
-        from sarathi.bus.events import InboundMessage, OutboundMessage
+        from sarathy.bus.events import InboundMessage, OutboundMessage
 
         loop, bus = _make_loop()
         order = []
@@ -129,8 +130,8 @@ class TestDispatch:
 class TestSubagentCancellation:
     @pytest.mark.asyncio
     async def test_cancel_by_session(self):
-        from sarathi.agent.subagent import SubagentManager
-        from sarathi.bus.queue import MessageBus
+        from sarathy.agent.subagent import SubagentManager
+        from sarathy.bus.queue import MessageBus
 
         bus = MessageBus()
         provider = MagicMock()
@@ -157,8 +158,8 @@ class TestSubagentCancellation:
 
     @pytest.mark.asyncio
     async def test_cancel_by_session_no_tasks(self):
-        from sarathi.agent.subagent import SubagentManager
-        from sarathi.bus.queue import MessageBus
+        from sarathy.agent.subagent import SubagentManager
+        from sarathy.bus.queue import MessageBus
 
         bus = MessageBus()
         provider = MagicMock()

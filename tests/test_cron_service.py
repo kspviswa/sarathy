@@ -1,7 +1,7 @@
 import pytest
 
-from sarathi.cron.service import CronService
-from sarathi.cron.types import CronSchedule
+from sarathy.cron.service import CronService
+from sarathy.cron.types import CronSchedule
 
 
 def test_add_job_rejects_unknown_timezone(tmp_path) -> None:

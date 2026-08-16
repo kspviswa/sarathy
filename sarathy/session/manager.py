@@ -22,8 +22,8 @@ class Session:
     Stores messages in JSONL format for easy reading and persistence.
 
     Important: Messages are append-only for LLM cache efficiency.
-    The archival process saves to archived_sessions/ and the background thread
-    extracts facts to MEMORY.md. This does NOT modify the messages list.
+    Learning (memory/skill writes) is handled by the background reviewer
+    and embedded memory/skill tools. This does NOT modify the messages list.
     """
 
     key: str  # channel:chat_id
@@ -98,8 +98,8 @@ class Session:
         The session is saved with archived=False. The background thread will later
         set archived=True after processing.
         """
-        from pathlib import Path
         from datetime import datetime
+        from pathlib import Path
 
         from sarathy.utils.helpers import ensure_dir
 
@@ -287,6 +287,10 @@ class SessionManager:
                 "updated_at": session.updated_at.isoformat(),
                 "metadata": session.metadata,
                 "last_consolidated": session.last_consolidated,
+                "max_size": session.max_size,
+                "archived": session.archived,
+                "pending_lessons": session.pending_lessons,
+                "pending_skills": session.pending_skills,
             }
             f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
             for msg in messages_to_save:
@@ -315,8 +319,6 @@ class SessionManager:
 
     def mark_session_archived(self, key: str) -> None:
         """Mark a session as archived in the archived_sessions/ file."""
-        from pathlib import Path
-
         archive_dir = Path(self.workspace) / "archived_sessions"
         if not archive_dir.exists():
             return
@@ -324,21 +326,16 @@ class SessionManager:
         for filepath in archive_dir.glob("session-*.jsonl"):
             try:
                 with open(filepath, encoding="utf-8") as f:
-                    first_line = f.readline().strip()
-                    if not first_line:
-                        continue
-                    metadata = json.loads(first_line)
-                    if metadata.get("key") == key:
-                        metadata["archived"] = True
-                        f.seek(0)
-                        content = json.dumps(metadata, ensure_ascii=False) + "\n"
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                content += line + "\n"
-                        filepath.write_text(content, encoding="utf-8")
-                        logger.info("Marked session {} as archived", key)
-                        break
+                    lines = f.readlines()
+                if not lines:
+                    continue
+                metadata = json.loads(lines[0])
+                if metadata.get("key") == key:
+                    metadata["archived"] = True
+                    lines[0] = json.dumps(metadata, ensure_ascii=False) + "\n"
+                    filepath.write_text("".join(lines), encoding="utf-8")
+                    logger.info("Marked session {} as archived", key)
+                    break
             except Exception as e:
                 logger.warning("Failed to mark session {} as archived: {}", key, e)
 

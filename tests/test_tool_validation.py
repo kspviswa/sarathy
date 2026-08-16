@@ -1,7 +1,7 @@
 from typing import Any
 
-from sarathi.agent.tools.base import Tool
-from sarathi.agent.tools.registry import ToolRegistry
+from sarathy.agent.tools.base import Tool
+from sarathy.agent.tools.registry import ToolRegistry
 
 
 class SampleTool(Tool):

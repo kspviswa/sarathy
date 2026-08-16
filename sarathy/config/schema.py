@@ -104,7 +104,7 @@ class AgentDefaults(Base):
 
 
 class MemoryArchivalConfig(Base):
-    """Memory archival configuration for background thread-based session archival."""
+    """Memory archival configuration (legacy, kept for migration)."""
 
     enabled: bool = True
     interval_seconds: int = 1800
@@ -113,11 +113,31 @@ class MemoryArchivalConfig(Base):
     extract_facts_for_memory: bool = True
 
 
+class MemoryConfig(Base):
+    """Memory system configuration."""
+
+    enabled: bool = True
+    memory_char_limit: int = 2200
+    user_char_limit: int = 1375
+    max_session_size: int = 1000
+    auto_create_new_session: bool = True
+
+
+class ReviewConfig(Base):
+    """Background review configuration for idle-time learning."""
+
+    enabled: bool = True
+    cooldown_seconds: int = 5
+    max_queue_size: int = 5
+
+
 class AgentsConfig(Base):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
     memory_archival: MemoryArchivalConfig = Field(default_factory=MemoryArchivalConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    review: ReviewConfig = Field(default_factory=ReviewConfig)
 
 
 class ProviderConfig(Base):
@@ -264,4 +284,4 @@ class Config(BaseSettings):
                 return spec.default_api_base
         return None
 
-    model_config = ConfigDict(env_prefix="NANOBOT_", env_nested_delimiter="__")
+    model_config = ConfigDict(env_prefix="SARATHY_", env_nested_delimiter="__")

@@ -5,11 +5,10 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from sarathi.cli.commands import app
-from sarathi.config.schema import Config
-from sarathi.providers.litellm_provider import LiteLLMProvider
-from sarathi.providers.openai_codex_provider import _strip_model_prefix
-from sarathi.providers.registry import find_by_model
+from sarathy.cli.commands import app
+from sarathy.config.schema import Config
+from sarathy.providers.litellm_provider import LiteLLMProvider
+from sarathy.providers.registry import find_by_model
 
 runner = CliRunner()
 
@@ -17,10 +16,10 @@ runner = CliRunner()
 @pytest.fixture
 def mock_paths():
     """Mock config/workspace paths for test isolation."""
-    with patch("sarathi.config.loader.get_config_path") as mock_cp, \
-         patch("sarathi.config.loader.save_config") as mock_sc, \
-         patch("sarathi.config.loader.load_config") as mock_lc, \
-         patch("sarathi.utils.helpers.get_workspace_path") as mock_ws:
+    with patch("sarathy.config.loader.get_config_path") as mock_cp, \
+         patch("sarathy.config.loader.save_config") as mock_sc, \
+         patch("sarathy.config.loader.load_config") as mock_lc, \
+         patch("sarathy.utils.helpers.get_workspace_path") as mock_ws:
 
         base_dir = Path("./test_onboard_data")
         if base_dir.exists():
@@ -49,7 +48,7 @@ def test_onboard_fresh_install(mock_paths):
     assert result.exit_code == 0
     assert "Created config" in result.stdout
     assert "Created workspace" in result.stdout
-    assert "sarathi is ready" in result.stdout
+    assert "sarathy is ready" in result.stdout
     assert config_file.exists()
     assert (workspace_dir / "AGENTS.md").exists()
     assert (workspace_dir / "memory" / "MEMORY.md").exists()
@@ -123,8 +122,3 @@ def test_litellm_provider_canonicalizes_github_copilot_hyphen_prefix():
     resolved = provider._resolve_model("github-copilot/gpt-5.3-codex")
 
     assert resolved == "github_copilot/gpt-5.3-codex"
-
-
-def test_openai_codex_strip_prefix_supports_hyphen_and_underscore():
-    assert _strip_model_prefix("openai-codex/gpt-5.1-codex") == "gpt-5.1-codex"
-    assert _strip_model_prefix("openai_codex/gpt-5.1-codex") == "gpt-5.1-codex"

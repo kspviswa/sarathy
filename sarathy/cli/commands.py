@@ -2,24 +2,23 @@
 
 import asyncio
 import os
-import signal
-from pathlib import Path
 import select
+import signal
 import sys
+from pathlib import Path
 
 import typer
+from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.patch_stdout import patch_stdout
-
-from sarathy import __version__, __logo__
+from sarathy import __logo__, __version__
 from sarathy.config.schema import Config
 
 app = typer.Typer(
@@ -37,7 +36,7 @@ def _require_config():
     from sarathy.config.loader import get_config_path
 
     if not get_config_path().exists():
-        console.print(f"[red]Config not found at ~/.sarathy/config.json[/red]")
+        console.print("[red]Config not found at ~/.sarathy/config.json[/red]")
         console.print("Please run [cyan]sarathy onboard[/cyan] first to set up sarathy.")
         raise typer.Exit(1)
 
@@ -237,7 +236,6 @@ def _create_workspace_templates(workspace: Path):
 
 def _create_global_skills():
     """Create ~/.sarathy/skills/ with built-in skills from the package."""
-    from importlib.resources import files as pkg_files
 
     global_skills_dir = Path.home() / ".sarathy" / "skills"
     global_skills_dir.mkdir(parents=True, exist_ok=True)
@@ -262,8 +260,8 @@ def _create_global_skills():
 
 def _make_provider(config: Config):
     """Create the appropriate LLM provider from config."""
-    from sarathy.providers.litellm_provider import LiteLLMProvider
     from sarathy.providers.custom_provider import CustomProvider
+    from sarathy.providers.litellm_provider import LiteLLMProvider
 
     model = config.agents.defaults.model
     provider_name = config.get_provider_name()
@@ -330,7 +328,7 @@ def gateway_start(
 
     try:
         start_gateway(port=port, verbose=verbose)
-        console.print(f"[green]✓[/green] Gateway started (PID will be saved)")
+        console.print("[green]✓[/green] Gateway started (PID will be saved)")
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -358,6 +356,7 @@ def gateway_restart(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Restart the sarathy gateway (stop and start)."""
+    _require_config()
     from sarathy.gateway.manager import (
         get_log_file_path,
         is_gateway_running,
@@ -379,7 +378,7 @@ def gateway_restart(
 
     try:
         start_gateway(port=port, verbose=verbose)
-        console.print(f"[green]✓[/green] Gateway started")
+        console.print("[green]✓[/green] Gateway started")
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -393,7 +392,7 @@ def gateway_status():
     status = get_gateway_status()
 
     if status["running"]:
-        console.print(f"[green]✓[/green] Gateway is [bold]running[/bold]")
+        console.print("[green]✓[/green] Gateway is [bold]running[/bold]")
         console.print(f"  PID: {status['pid']}")
         console.print(f"  Log: {status['log_file']}")
     else:
@@ -406,15 +405,15 @@ def gateway_logs(
     follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output (like tail -f)"),
 ):
     """Show gateway logs."""
-    from sarathy.gateway.manager import get_recent_logs, get_log_file_path, is_gateway_running
+    from sarathy.gateway.manager import get_recent_logs, is_gateway_running
 
     if not is_gateway_running():
         console.print("[yellow]Gateway is not running. No logs available.[/yellow]")
         raise typer.Exit(1)
 
     if follow:
-        import subprocess
         import signal
+        import subprocess
 
         from sarathy.gateway.manager import get_latest_log_file
 
@@ -458,11 +457,15 @@ def agent(
     ),
 ):
     """Interact with the agent directly."""
-    from sarathy.config.loader import load_config, get_data_dir
-    from sarathy.bus.queue import MessageBus
-    from sarathy.agent.loop import AgentLoop
-    from sarathy.cron.service import CronService
+    _require_config()
     from loguru import logger
+
+    from sarathy.agent.loop import AgentLoop
+    from sarathy.bus.queue import MessageBus
+    from sarathy.config.loader import get_data_dir, load_config
+    from sarathy.cron.service import CronService
+    from sarathy.session.manager import SessionManager
+    from sarathy.session.review import BackgroundReviewer
 
     config = load_config()
 
@@ -478,6 +481,22 @@ def agent(
     else:
         logger.disable("sarathy")
 
+    session_manager = SessionManager(
+        config=config,
+        workspace=config.workspace_path,
+        max_cache_size=config.agents.defaults.session_cache_size,
+        max_session_messages=config.agents.defaults.max_session_messages,
+    )
+
+    reviewer = BackgroundReviewer(
+        provider=provider,
+        memory_store=None,
+        workspace=config.workspace_path,
+        enabled=config.agents.review.enabled,
+        cooldown_seconds=config.agents.review.cooldown_seconds,
+        max_queue_size=config.agents.review.max_queue_size,
+    )
+
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
@@ -491,12 +510,12 @@ def agent(
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
-        session_cache_size=config.agents.defaults.session_cache_size,
-        max_session_messages=config.agents.defaults.max_session_messages,
+        session_manager=session_manager,
         context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
         reasoning_effort=config.agents.defaults.reasoning_effort,
+        reviewer=reviewer,
     )
 
     # Show spinner when logs are off (no output to miss); skip when logs are on
@@ -834,18 +853,29 @@ def cron_run(
     force: bool = typer.Option(False, "--force", "-f", help="Run even if disabled"),
 ):
     """Manually run a job."""
+    _require_config()
     from loguru import logger
-    from sarathy.config.loader import load_config, get_data_dir
+
+    from sarathy.agent.loop import AgentLoop
+    from sarathy.bus.queue import MessageBus
+    from sarathy.config.loader import get_data_dir, load_config
     from sarathy.cron.service import CronService
     from sarathy.cron.types import CronJob
-    from sarathy.bus.queue import MessageBus
-    from sarathy.agent.loop import AgentLoop
+    from sarathy.session.manager import SessionManager
 
     logger.disable("sarathy")
 
     config = load_config()
     provider = _make_provider(config)
     bus = MessageBus()
+
+    session_manager = SessionManager(
+        config=config,
+        workspace=config.workspace_path,
+        max_cache_size=config.agents.defaults.session_cache_size,
+        max_session_messages=config.agents.defaults.max_session_messages,
+    )
+
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
@@ -858,8 +888,7 @@ def cron_run(
         web_search_config=config.tools.web.search,
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
-        session_cache_size=config.agents.defaults.session_cache_size,
-        max_session_messages=config.agents.defaults.max_session_messages,
+        session_manager=session_manager,
         context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
@@ -902,7 +931,7 @@ def cron_run(
 @app.command()
 def status():
     """Show sarathy status."""
-    from sarathy.config.loader import load_config, get_config_path
+    from sarathy.config.loader import get_config_path, load_config
 
     config_path = get_config_path()
     config = load_config()

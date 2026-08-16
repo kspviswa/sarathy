@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pathlib import Path
-from sarathi.session.manager import Session, SessionManager
+from sarathy.session.manager import Session, SessionManager
+
+from conftest import make_test_config
 
 # Test constants
 MEMORY_WINDOW = 50
@@ -66,7 +68,7 @@ class TestSessionLastConsolidated:
 
     def test_last_consolidated_persistence(self, tmp_path) -> None:
         """Test that last_consolidated persists across save/load."""
-        manager = SessionManager(Path(tmp_path))
+        manager = SessionManager(config=make_test_config(tmp_path), workspace=Path(tmp_path))
         session1 = create_session_with_messages("test:persist", 20)
         session1.last_consolidated = 15
         manager.save(session1)
@@ -146,7 +148,7 @@ class TestSessionPersistence:
 
     @pytest.fixture
     def temp_manager(self, tmp_path):
-        return SessionManager(Path(tmp_path))
+        return SessionManager(config=make_test_config(tmp_path), workspace=Path(tmp_path))
 
     def test_persistence_roundtrip(self, temp_manager):
         """Test that messages persist across save/load."""
@@ -483,19 +485,23 @@ class TestEmptyAndBoundarySessions:
 class TestConsolidationDeduplicationGuard:
     """Test that consolidation tasks are deduplicated and serialized."""
 
+    pytestmark = pytest.mark.skip(reason="Consolidation mechanism removed - now handled by BackgroundReviewer")
+
     @pytest.mark.asyncio
     async def test_consolidation_guard_prevents_duplicate_tasks(self, tmp_path: Path) -> None:
         """Concurrent messages above memory_window spawn only one consolidation task."""
-        from sarathi.agent.loop import AgentLoop
-        from sarathi.bus.events import InboundMessage
-        from sarathi.bus.queue import MessageBus
-        from sarathi.providers.base import LLMResponse
+        from sarathy.agent.loop import AgentLoop
+        from sarathy.bus.events import InboundMessage
+        from sarathy.bus.queue import MessageBus
+        from sarathy.providers.base import LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
+        sm = SessionManager(config=make_test_config(tmp_path), workspace=tmp_path)
         loop = AgentLoop(
-            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10
+            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10,
+            session_manager=sm,
         )
 
         loop.provider.chat = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
@@ -530,16 +536,18 @@ class TestConsolidationDeduplicationGuard:
         self, tmp_path: Path
     ) -> None:
         """/new command does not run consolidation concurrently with in-flight consolidation."""
-        from sarathi.agent.loop import AgentLoop
-        from sarathi.bus.events import InboundMessage
-        from sarathi.bus.queue import MessageBus
-        from sarathi.providers.base import LLMResponse
+        from sarathy.agent.loop import AgentLoop
+        from sarathy.bus.events import InboundMessage
+        from sarathy.bus.queue import MessageBus
+        from sarathy.providers.base import LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
+        sm = SessionManager(config=make_test_config(tmp_path), workspace=tmp_path)
         loop = AgentLoop(
-            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10
+            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10,
+            session_manager=sm,
         )
 
         loop.provider.chat = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
@@ -582,16 +590,18 @@ class TestConsolidationDeduplicationGuard:
     @pytest.mark.asyncio
     async def test_consolidation_tasks_are_referenced(self, tmp_path: Path) -> None:
         """create_task results are tracked in _consolidation_tasks while in flight."""
-        from sarathi.agent.loop import AgentLoop
-        from sarathi.bus.events import InboundMessage
-        from sarathi.bus.queue import MessageBus
-        from sarathi.providers.base import LLMResponse
+        from sarathy.agent.loop import AgentLoop
+        from sarathy.bus.events import InboundMessage
+        from sarathy.bus.queue import MessageBus
+        from sarathy.providers.base import LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
+        sm = SessionManager(config=make_test_config(tmp_path), workspace=tmp_path)
         loop = AgentLoop(
-            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10
+            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10,
+            session_manager=sm,
         )
 
         loop.provider.chat = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
@@ -627,16 +637,18 @@ class TestConsolidationDeduplicationGuard:
         self, tmp_path: Path
     ) -> None:
         """/new waits for in-flight consolidation and archives before clear."""
-        from sarathi.agent.loop import AgentLoop
-        from sarathi.bus.events import InboundMessage
-        from sarathi.bus.queue import MessageBus
-        from sarathi.providers.base import LLMResponse
+        from sarathy.agent.loop import AgentLoop
+        from sarathy.bus.events import InboundMessage
+        from sarathy.bus.queue import MessageBus
+        from sarathy.providers.base import LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
+        sm = SessionManager(config=make_test_config(tmp_path), workspace=tmp_path)
         loop = AgentLoop(
-            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10
+            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10,
+            session_manager=sm,
         )
 
         loop.provider.chat = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
@@ -685,16 +697,18 @@ class TestConsolidationDeduplicationGuard:
     @pytest.mark.asyncio
     async def test_new_does_not_clear_session_when_archive_fails(self, tmp_path: Path) -> None:
         """/new must keep session data if archive step reports failure."""
-        from sarathi.agent.loop import AgentLoop
-        from sarathi.bus.events import InboundMessage
-        from sarathi.bus.queue import MessageBus
-        from sarathi.providers.base import LLMResponse
+        from sarathy.agent.loop import AgentLoop
+        from sarathy.bus.events import InboundMessage
+        from sarathy.bus.queue import MessageBus
+        from sarathy.providers.base import LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
+        sm = SessionManager(config=make_test_config(tmp_path), workspace=tmp_path)
         loop = AgentLoop(
-            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10
+            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10,
+            session_manager=sm,
         )
 
         loop.provider.chat = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
@@ -729,16 +743,18 @@ class TestConsolidationDeduplicationGuard:
         self, tmp_path: Path
     ) -> None:
         """/new should archive only messages not yet consolidated by prior task."""
-        from sarathi.agent.loop import AgentLoop
-        from sarathi.bus.events import InboundMessage
-        from sarathi.bus.queue import MessageBus
-        from sarathi.providers.base import LLMResponse
+        from sarathy.agent.loop import AgentLoop
+        from sarathy.bus.events import InboundMessage
+        from sarathy.bus.queue import MessageBus
+        from sarathy.providers.base import LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
+        sm = SessionManager(config=make_test_config(tmp_path), workspace=tmp_path)
         loop = AgentLoop(
-            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10
+            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10,
+            session_manager=sm,
         )
 
         loop.provider.chat = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
@@ -790,16 +806,18 @@ class TestConsolidationDeduplicationGuard:
         self, tmp_path: Path
     ) -> None:
         """/new should remove lock entry for fully invalidated session key."""
-        from sarathi.agent.loop import AgentLoop
-        from sarathi.bus.events import InboundMessage
-        from sarathi.bus.queue import MessageBus
-        from sarathi.providers.base import LLMResponse
+        from sarathy.agent.loop import AgentLoop
+        from sarathy.bus.events import InboundMessage
+        from sarathy.bus.queue import MessageBus
+        from sarathy.providers.base import LLMResponse
 
         bus = MessageBus()
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
+        sm = SessionManager(config=make_test_config(tmp_path), workspace=tmp_path)
         loop = AgentLoop(
-            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10
+            bus=bus, provider=provider, workspace=tmp_path, model="test-model", memory_window=10,
+            session_manager=sm,
         )
 
         loop.provider.chat = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))

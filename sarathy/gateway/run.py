@@ -2,14 +2,14 @@
 
 import asyncio
 
-from sarathy.config.loader import load_config, get_data_dir
-from sarathy.bus.queue import MessageBus
 from sarathy.agent.loop import AgentLoop
+from sarathy.bus.queue import MessageBus
 from sarathy.channels.manager import ChannelManager
-from sarathy.session.manager import SessionManager
+from sarathy.config.loader import get_data_dir, load_config
 from sarathy.cron.service import CronService
 from sarathy.cron.types import CronJob
 from sarathy.heartbeat.service import HeartbeatService
+from sarathy.session.manager import SessionManager
 
 
 async def run_gateway(port: int = 18790, verbose: bool = False):
@@ -27,8 +27,8 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     _create_global_skills()
 
     bus = MessageBus()
-    from sarathy.providers.litellm_provider import LiteLLMProvider
     from sarathy.providers.custom_provider import CustomProvider
+    from sarathy.providers.litellm_provider import LiteLLMProvider
     from sarathy.providers.registry import find_by_name
 
     model = config.agents.defaults.model
@@ -101,6 +101,18 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
         reasoning_effort=config.agents.defaults.reasoning_effort,
     )
 
+    # Initialize background reviewer for idle-time learning
+    from sarathy.session.review import BackgroundReviewer
+    reviewer = BackgroundReviewer(
+        provider=provider,
+        workspace=config.workspace_path,
+        enabled=config.agents.review.enabled,
+        cooldown_seconds=config.agents.review.cooldown_seconds,
+        max_queue_size=config.agents.review.max_queue_size,
+    )
+    agent.reviewer = reviewer
+    await reviewer.start()
+
     async def on_cron_job(job: CronJob) -> str | None:
         response = await agent.process_direct(
             job.payload.message,
@@ -144,11 +156,6 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
 
     # Start skill manager watching
     await skill_manager.start_watching()
-
-    # Initialize archival manager (Phase 2: background thread)
-    from sarathy.session.archival import SessionArchivalManager
-    archival_manager = SessionArchivalManager(config, session_manager)
-    archival_manager.start()
 
     # Update commands when skills change
     async def on_skills_updated():

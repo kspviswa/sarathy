@@ -6,7 +6,7 @@ from datetime import datetime as real_datetime
 from pathlib import Path
 import datetime as datetime_module
 
-from sarathi.agent.context import ContextBuilder
+from sarathy.agent.context import ContextBuilder
 
 
 class _FakeDatetime(real_datetime):
@@ -54,13 +54,11 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert messages[0]["role"] == "system"
     assert "## Current Session" not in messages[0]["content"]
 
-    assert messages[-2]["role"] == "user"
-    runtime_content = messages[-2]["content"]
-    assert isinstance(runtime_content, str)
-    assert ContextBuilder._RUNTIME_CONTEXT_TAG in runtime_content
-    assert "Current Time:" in runtime_content
-    assert "Channel: cli" in runtime_content
-    assert "Chat ID: direct" in runtime_content
-
     assert messages[-1]["role"] == "user"
-    assert messages[-1]["content"] == "Return exactly: OK"
+    combined_content = messages[-1]["content"]
+    assert isinstance(combined_content, str)
+    assert ContextBuilder._RUNTIME_CONTEXT_TAG in combined_content
+    assert "Current Time:" in combined_content
+    assert "Channel: cli" in combined_content
+    assert "Chat ID: direct" in combined_content
+    assert "Return exactly: OK" in combined_content

@@ -1,6 +1,6 @@
 """Test MemoryStore.consolidate() handles non-string tool call arguments.
 
-Regression test for https://github.com/HKUDS/sarathi/issues/1042
+Regression test for https://github.com/HKUDS/sarathy/issues/1042
 When memory consolidation receives dict values instead of strings from the LLM
 tool call response, it should serialize them to JSON instead of raising TypeError.
 """
@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sarathi.agent.memory import MemoryStore
-from sarathi.providers.base import LLMResponse, ToolCallRequest
+from sarathy.session.memory import MemoryStore
+from sarathy.providers.base import LLMResponse, ToolCallRequest
 
 
 def _make_session(message_count: int = 30, memory_window: int = 50):
@@ -43,6 +43,7 @@ def _make_tool_response(history_entry, memory_update):
     )
 
 
+@pytest.mark.skip(reason="MemoryStore.consolidate() removed - now handled by BackgroundReviewer")
 class TestMemoryConsolidationTypeHandling:
     """Test that consolidation handles various argument types correctly."""
 

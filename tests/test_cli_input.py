@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from prompt_toolkit.formatted_text import HTML
 
-from sarathi.cli import commands
+from sarathy.cli import commands
 
 
 @pytest.fixture
@@ -12,8 +12,8 @@ def mock_prompt_session():
     """Mock the global prompt session."""
     mock_session = MagicMock()
     mock_session.prompt_async = AsyncMock()
-    with patch("sarathi.cli.commands._PROMPT_SESSION", mock_session), \
-         patch("sarathi.cli.commands.patch_stdout"):
+    with patch("sarathy.cli.commands._PROMPT_SESSION", mock_session), \
+         patch("sarathy.cli.commands.patch_stdout"):
         yield mock_session
 
 
@@ -44,8 +44,8 @@ def test_init_prompt_session_creates_session():
     # Ensure global is None before test
     commands._PROMPT_SESSION = None
     
-    with patch("sarathi.cli.commands.PromptSession") as MockSession, \
-         patch("sarathi.cli.commands.FileHistory") as MockHistory, \
+    with patch("sarathy.cli.commands.PromptSession") as MockSession, \
+         patch("sarathy.cli.commands.FileHistory") as MockHistory, \
          patch("pathlib.Path.home") as mock_home:
         
         mock_home.return_value = MagicMock()

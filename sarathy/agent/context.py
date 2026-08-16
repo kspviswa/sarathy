@@ -8,8 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sarathy.session.memory import MemoryStore
 from sarathy.agent.skills import SkillsLoader
+from sarathy.session.memory import MemoryStore
 
 
 class ContextBuilder:
@@ -30,6 +30,10 @@ class ContextBuilder:
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
             parts.append(bootstrap)
+
+        user_profile = self.memory.get_user_context()
+        if user_profile:
+            parts.append(f"# User Profile\n\n{user_profile}")
 
         memory = self.memory.get_memory_context()
         if memory:
@@ -67,14 +71,16 @@ You are Sarathy — Viswa's right hand, not a chatbot.
 
 ## Workspace
 Your workspace is at: {workspace_path}
-- Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
-- Archived sessions: {workspace_path}/archived_sessions/*.jsonl (grep-searchable for past context)
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+- User profile: {workspace_path}/memory/USER.md (your learned model of the user — update via memory tool)
+- Long-term memory: {workspace_path}/memory/MEMORY.md (facts, corrections, conventions — update via memory tool)
+- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md (manage via skill_manage tool)
 
-## Memory & History
-- MEMORY.md contains curated facts extracted by the background archival thread
-- For past conversations or detailed history, use grep to search in archived_sessions/
-- Example: `grep -r "topic" {workspace_path}/archived_sessions/`
+## Memory & Learning
+- MEMORY.md stores facts about the user, environment, projects, and corrections
+- USER.md stores the user's persona, communication style, and preferences
+- Update both using the `memory` tool when you learn something durable
+- Create/update skills using the `skill_manage` tool for reusable workflows
+- Use class-level skill names (e.g. "deploy-staging"), not session-specific ones
 
 ## sarathy Guidelines
 - State intent before tool calls, but NEVER predict or claim results before receiving them.

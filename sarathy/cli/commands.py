@@ -1022,5 +1022,159 @@ def provider_login(
         console.print(f"  providers.{spec.name}.apiKey = 'your-api-key'")
 
 
+# ============================================================================
+# MCP (Model Context Protocol) Server Management
+# ============================================================================
+
+mcp_app = typer.Typer(help="Manage MCP servers")
+app.add_typer(mcp_app, name="mcp")
+
+
+@mcp_app.command("add")
+def mcp_add(
+    name: str = typer.Argument(..., help="Name for this MCP server configuration"),
+    command: str = typer.Option("", "--command", "-c", help="Stdio: command to run (e.g. 'npx', 'python')"),
+    args: list[str] = typer.Option([], "--arg", "-a", help="Stdio: command argument (repeatable)"),
+    url: str = typer.Option("", "--url", "-u", help="HTTP: streamable HTTP endpoint URL"),
+    env: list[str] = typer.Option([], "--env", "-e", help="Extra env vars as KEY=VALUE (repeatable)"),
+    headers: list[str] = typer.Option([], "--header", help="HTTP headers as KEY=VALUE (repeatable)"),
+    timeout: int = typer.Option(30, "--timeout", help="Tool call timeout in seconds"),
+):
+    """Add an MCP server to configuration."""
+    _require_config()
+    from sarathy.config.loader import load_config, save_config
+    from sarathy.config.schema import MCPServerConfig
+
+    config = load_config()
+
+    if name in config.tools.mcp_servers:
+        console.print(f"[red]MCP server '{name}' already exists. Remove it first or use a different name.[/red]")
+        raise typer.Exit(1)
+
+    if not command and not url:
+        console.print("[red]Either --command (stdio mode) or --url (HTTP mode) is required.[/red]")
+        raise typer.Exit(1)
+
+    if command and url:
+        console.print("[red]Cannot use both --command (stdio) and --url (HTTP) at once.[/red]")
+        raise typer.Exit(1)
+
+    # Parse env vars
+    env_dict: dict[str, str] = {}
+    for e in env:
+        if "=" not in e:
+            console.print(f"[red]Invalid env format '{e}'. Use KEY=VALUE.[/red]")
+            raise typer.Exit(1)
+        key, _, value = e.partition("=")
+        env_dict[key] = value
+
+    # Parse headers
+    headers_dict: dict[str, str] = {}
+    for h in headers:
+        if "=" not in h:
+            console.print(f"[red]Invalid header format '{h}'. Use KEY=VALUE.[/red]")
+            raise typer.Exit(1)
+        key, _, value = h.partition("=")
+        headers_dict[key] = value
+
+    server_cfg = MCPServerConfig(
+        command=command,
+        args=args,
+        env=env_dict,
+        url=url,
+        headers=headers_dict,
+        tool_timeout=timeout,
+    )
+
+    config.tools.mcp_servers[name] = server_cfg
+    save_config(config)
+
+    console.print(f"[green]✓ Added MCP server '{name}'[/green]")
+    if command:
+        console.print("  Mode: stdio")
+        console.print(f"  Command: {command} {' '.join(args) if args else ''}")
+    else:
+        console.print("  Mode: HTTP (streamable)")
+        console.print(f"  URL: {url}")
+    console.print(f"  Tool timeout: {timeout}s")
+
+
+@mcp_app.command("list")
+def mcp_list():
+    """List configured MCP servers."""
+    _require_config()
+    from sarathy.config.loader import load_config
+
+    config = load_config()
+    servers = config.tools.mcp_servers
+
+    if not servers:
+        console.print("[dim]No MCP servers configured. Use 'sarathy mcp add' to add one.[/dim]")
+        return
+
+    table = Table(title="MCP Servers")
+    table.add_column("Name", style="cyan")
+    table.add_column("Mode", style="yellow")
+    table.add_column("Command/URL", style="green")
+    table.add_column("Timeout", style="dim")
+
+    for name, cfg in sorted(servers.items()):
+        if cfg.command:
+            mode = "stdio"
+            target = f"{cfg.command} {' '.join(cfg.args)}" if cfg.args else cfg.command
+        else:
+            mode = "HTTP"
+            target = cfg.url
+
+        table.add_row(name, mode, target, f"{cfg.tool_timeout}s")
+
+    console.print(table)
+
+
+@mcp_app.command("remove")
+def mcp_remove(
+    name: str = typer.Argument(..., help="Name of the MCP server to remove"),
+):
+    """Remove an MCP server from configuration."""
+    _require_config()
+    from sarathy.config.loader import load_config, save_config
+
+    config = load_config()
+
+    if name not in config.tools.mcp_servers:
+        console.print(f"[red]MCP server '{name}' not found.[/red]")
+        raise typer.Exit(1)
+
+    del config.tools.mcp_servers[name]
+    save_config(config)
+    console.print(f"[green]✓ Removed MCP server '{name}'[/green]")
+
+
+@mcp_app.command("clear")
+def mcp_clear(confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt")):
+    """Remove all configured MCP servers."""
+    _require_config()
+    from sarathy.config.loader import load_config, save_config
+
+    config = load_config()
+
+    if not config.tools.mcp_servers:
+        console.print("[dim]No MCP servers to remove.[/dim]")
+        return
+
+    if not confirm:
+        count = len(config.tools.mcp_servers)
+        console.print(f"[yellow]This will remove {count} MCP server(s).[/yellow]")
+        response = input("Type 'yes' to confirm: ")
+        if response.strip().lower() != "yes":
+            console.print("[dim]Aborted.[/dim]")
+            raise typer.Exit(0)
+
+    count = len(config.tools.mcp_servers)
+    config.tools.mcp_servers = {}
+    save_config(config)
+    console.print(f"[green]✓ Removed {count} MCP server(s)[/green]")
+
+
 if __name__ == "__main__":
     app()

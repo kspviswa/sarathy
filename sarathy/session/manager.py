@@ -212,6 +212,10 @@ class SessionManager:
 
         return session
 
+    def read_session(self, key: str) -> Session | None:
+        """Load a session for read-only display without creating or caching it."""
+        return self._load(key)
+
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
         path = self._get_active_session_path(key)

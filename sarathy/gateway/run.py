@@ -165,7 +165,7 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     skill_manager.on_reload(on_skills_updated)
 
     # Initialize channels with command manager
-    channels = ChannelManager(config, bus, command_manager=command_manager)
+    channels = ChannelManager(config, bus, command_manager=command_manager, session_manager=session_manager)
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         enabled = set(channels.enabled_channels)

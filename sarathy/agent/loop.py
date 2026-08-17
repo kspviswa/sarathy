@@ -274,6 +274,8 @@ class AgentLoop:
                 streaming_enabled = self.channels_config.telegram.streaming
             elif channel == "discord":
                 streaming_enabled = self.channels_config.discord.streaming
+            elif channel == "dashboard":
+                streaming_enabled = self.channels_config.dashboard.streaming
 
         messages = initial_messages
         iteration = 0

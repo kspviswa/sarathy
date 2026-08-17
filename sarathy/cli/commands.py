@@ -656,6 +656,10 @@ def agent(
 channels_app = typer.Typer(help="Manage channels")
 app.add_typer(channels_app, name="channels")
 
+from sarathy.channels.dashboard.cli import dashboard_app  # noqa: E402
+
+app.add_typer(dashboard_app, name="dashboard")
+
 
 @channels_app.command("status")
 def channels_status():
@@ -682,6 +686,11 @@ def channels_status():
     em = config.channels.email
     em_config = em.imap_host if em.imap_host else "[dim]not configured[/dim]"
     table.add_row("Email", "✓" if em.enabled else "✗", em_config)
+
+    # Dashboard
+    db = config.channels.dashboard
+    db_config = f"{db.host}:{db.port} ({len(db.pairing_keys)} keys)" if db.enabled else "[dim]not enabled[/dim]"
+    table.add_row("Dashboard", "✓" if db.enabled else "✗", db_config)
 
     console.print(table)
 

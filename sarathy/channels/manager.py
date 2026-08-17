@@ -7,7 +7,6 @@ from typing import Any
 
 from loguru import logger
 
-from sarathy.bus.events import OutboundMessage
 from sarathy.bus.queue import MessageBus
 from sarathy.channels.base import BaseChannel
 from sarathy.config.schema import Config
@@ -23,10 +22,11 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus, command_manager=None):
+    def __init__(self, config: Config, bus: MessageBus, command_manager=None, session_manager=None):
         self.config = config
         self.bus = bus
         self.command_manager = command_manager
+        self.session_manager = session_manager
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
 
@@ -72,6 +72,20 @@ class ChannelManager:
                 logger.info("Email channel enabled")
             except ImportError as e:
                 logger.warning("Email channel not available: {}", e)
+
+        # Dashboard channel
+        if self.config.channels.dashboard.enabled:
+            try:
+                from sarathy.channels.dashboard import DashboardChannel
+
+                self.channels["dashboard"] = DashboardChannel(
+                    self.config.channels.dashboard,
+                    self.bus,
+                    session_manager=self.session_manager,
+                )
+                logger.info("Dashboard channel enabled")
+            except ImportError as e:
+                logger.warning("Dashboard channel not available: {}", e)
 
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
         """Start a channel and log any exceptions."""

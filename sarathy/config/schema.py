@@ -73,6 +73,17 @@ class EmailConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Allowed sender email addresses
 
 
+class DashboardConfig(Base):
+    """Dashboard channel configuration (web UI / PWA)."""
+
+    enabled: bool = False
+    host: str = "0.0.0.0"  # Bind address; 0.0.0.0 to reach from LAN devices (phone)
+    port: int = 18790
+    streaming: bool = True  # Stream token-level progress into the chat UI
+    pairing_keys: list[str] = Field(default_factory=list)  # CLI-managed; never exposed via API
+    allow_from: list[str] = Field(default_factory=list)  # Optional IP allowlist (empty = allow all)
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -81,6 +92,7 @@ class ChannelsConfig(Base):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     discord: DiscordConfig = Field(default_factory=DiscordConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
+    dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
 
 
 class AgentDefaults(Base):

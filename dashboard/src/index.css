@@ -1,0 +1,164 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.75rem;
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.541 0.231 293.031);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.96 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.96 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.941 0.03 293.6);
+  --accent-foreground: oklch(0.315 0.105 293.4);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.541 0.231 293.031);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.19 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.19 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.606 0.25 292.717);
+  --primary-foreground: oklch(0.969 0.016 293.756);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.271 0.065 293.75);
+  --accent-foreground: oklch(0.894 0.057 293.283);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.606 0.25 292.717);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    overscroll-behavior-y: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    @apply bg-primary text-primary-foreground;
+  }
+}
+
+@layer utilities {
+  .safe-top {
+    padding-top: max(env(safe-area-inset-top), 0.75rem);
+  }
+  .safe-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Markdown chat rendering */
+.md {
+  @apply text-[15px] leading-relaxed break-words;
+}
+.md p {
+  @apply my-1.5;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  @apply mt-3 mb-1.5 font-semibold text-foreground;
+}
+.md h1 {
+  @apply text-lg;
+}
+.md h2 {
+  @apply text-base;
+}
+.md ul {
+  @apply my-1.5 list-disc pl-5;
+}
+.md ol {
+  @apply my-1.5 list-decimal pl-5;
+}
+.md li {
+  @apply my-0.5;
+}
+.md a {
+  @apply text-primary underline underline-offset-2;
+}
+.md blockquote {
+  @apply my-2 border-l-2 border-muted-foreground/40 pl-3 text-muted-foreground;
+}
+.md code {
+  @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[13px] text-foreground;
+}
+.md pre {
+  @apply my-2 overflow-x-auto rounded-lg bg-muted p-3;
+}
+.md pre code {
+  @apply bg-transparent p-0 text-[13px];
+}
+.md table {
+  @apply my-2 w-full border-collapse text-sm;
+}
+.md th,
+.md td {
+  @apply border border-border px-2 py-1 text-left;
+}
+.md hr {
+  @apply my-3 border-border;
+}
+.md img {
+  @apply my-2 max-h-64 rounded-lg;
+}

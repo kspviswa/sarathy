@@ -7,23 +7,89 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type { ConfigResponse } from "@/lib/types";
 
-const FORM_ORDER = ["model", "provider", "apiKey", "temperature", "system_prompt", "streaming", "embeddingModel"];
+type FieldType = "text" | "number" | "boolean" | "select";
 
-const FIELD_META: Record<string, { label: string; type: "text" | "number" | "boolean" | "secret" }> = {
-  model: { label: "Model", type: "text" },
-  provider: { label: "Provider", type: "text" },
-  apiKey: { label: "API key", type: "secret" },
-  temperature: { label: "Temperature", type: "number" },
-  system_prompt: { label: "System prompt", type: "text" },
-  streaming: { label: "Streaming", type: "boolean" },
-  embeddingModel: { label: "Embedding model", type: "text" },
-};
+interface FieldDef {
+  id: string;
+  path: string;
+  label: string;
+  type: FieldType;
+  step?: number;
+  options?: string[];
+}
+
+const FIELDS: FieldDef[] = [
+  { id: "model", path: "agents.defaults.model", label: "Model", type: "text" },
+  { id: "provider", path: "agents.defaults.provider", label: "Provider", type: "text" },
+  { id: "temperature", path: "agents.defaults.temperature", label: "Temperature", type: "number", step: 0.1 },
+  { id: "maxTokens", path: "agents.defaults.maxTokens", label: "Max tokens", type: "number" },
+  { id: "contextLength", path: "agents.defaults.contextLength", label: "Context length", type: "number" },
+  { id: "workspace", path: "agents.defaults.workspace", label: "Workspace", type: "text" },
+  {
+    id: "reasoningEffort",
+    path: "agents.defaults.reasoningEffort",
+    label: "Reasoning effort",
+    type: "select",
+    options: ["", "off", "low", "medium", "high", "xhigh"],
+  },
+  { id: "sendProgress", path: "channels.sendProgress", label: "Stream progress messages", type: "boolean" },
+  { id: "sendToolHints", path: "channels.sendToolHints", label: "Stream tool-call hints", type: "boolean" },
+  { id: "dashStreaming", path: "channels.dashboard.streaming", label: "Dashboard streaming", type: "boolean" },
+  { id: "dashHost", path: "channels.dashboard.host", label: "Dashboard host", type: "text" },
+  { id: "dashPort", path: "channels.dashboard.port", label: "Dashboard port", type: "number" },
+];
+
+const SECTIONS: { title: string; fields: FieldDef[] }[] = [
+  { title: "Agent", fields: FIELDS.slice(0, 7) },
+  { title: "Channels", fields: FIELDS.slice(7, 9) },
+  { title: "Dashboard", fields: FIELDS.slice(9) },
+];
+
+function getPath(obj: ConfigResponse, path: string): unknown {
+  return path.split(".").reduce<unknown>((o, k) => {
+    if (o == null || typeof o !== "object") return undefined;
+    return (o as Record<string, unknown>)[k];
+  }, obj);
+}
+
+function setPath(obj: ConfigResponse, path: string, value: unknown): void {
+  const parts = path.split(".");
+  let cur: Record<string, unknown> = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const k = parts[i];
+    if (typeof cur[k] !== "object" || cur[k] === null) cur[k] = {};
+    cur = cur[k] as Record<string, unknown>;
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
+function toFormValue(v: unknown, type: FieldType): string {
+  if (v === undefined || v === null) return type === "select" ? "" : "";
+  if (type === "boolean") return v ? "true" : "false";
+  return String(v);
+}
+
+function fromFormValue(v: string, field: FieldDef): unknown {
+  if (field.type === "boolean") return v === "true";
+  if (field.type === "number") {
+    if (v === "") return undefined;
+    const n = Number(v);
+    return Number.isNaN(n) ? undefined : n;
+  }
+  if (field.type === "select") {
+    if (v === "") return null;
+    if (v === "off" || v === "low" || v === "medium" || v === "high" || v === "xhigh") return v;
+    return v;
+  }
+  return v;
+}
 
 export function ConfigView() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -42,10 +108,8 @@ export function ConfigView() {
         setConfig(res);
         setRaw(JSON.stringify(res, null, 2));
         const state: Record<string, string> = {};
-        for (const key of FORM_ORDER) {
-          const v = res[key];
-          if (v === undefined) continue;
-          state[key] = typeof v === "boolean" ? (v ? "true" : "false") : String(v);
+        for (const field of FIELDS) {
+          state[field.path] = toFormValue(getPath(res, field.path), field.type);
         }
         setFormState(state);
       })
@@ -53,20 +117,16 @@ export function ConfigView() {
       .finally(() => setLoading(false));
   }, []);
 
-  const setField = (key: string, value: string) => setFormState((prev) => ({ ...prev, [key]: value }));
+  const setField = (path: string, value: string) => setFormState((prev) => ({ ...prev, [path]: value }));
 
   async function saveForm() {
+    if (!config) return;
     setSaving(true);
     const payload: ConfigResponse = {};
-    for (const key of FORM_ORDER) {
-      const meta = FIELD_META[key];
-      const v = formState[key];
-      if (v === undefined) continue;
-      if (meta?.type === "boolean") payload[key] = v === "true";
-      else if (meta?.type === "number") {
-        const n = Number(v);
-        if (!Number.isNaN(n)) payload[key] = n;
-      } else payload[key] = v;
+    for (const field of FIELDS) {
+      const value = fromFormValue(formState[field.path] ?? "", field);
+      if (value === undefined) continue;
+      setPath(payload, field.path, value);
     }
     try {
       const res = await api.putConfig(payload);
@@ -76,7 +136,13 @@ export function ConfigView() {
       } else {
         toast.success("Config saved");
       }
-      setRaw(JSON.stringify(payload, null, 2));
+      const merged = structuredClone(config);
+      for (const field of FIELDS) {
+        const value = fromFormValue(formState[field.path] ?? "", field);
+        if (value === undefined) continue;
+        setPath(merged, field.path, value);
+      }
+      setRaw(JSON.stringify(merged, null, 2));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save config");
     } finally {
@@ -87,7 +153,7 @@ export function ConfigView() {
   async function saveRaw() {
     setSaving(true);
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as ConfigResponse;
       const res = await api.putConfig(parsed);
       if (res.restartRequired) {
         setRestartRequired(true);
@@ -154,35 +220,17 @@ export function ConfigView() {
               <TabsTrigger value="form">Form</TabsTrigger>
               <TabsTrigger value="raw">JSON</TabsTrigger>
             </TabsList>
-            <TabsContent value="form" className="flex flex-col gap-4">
-              {FORM_ORDER.filter((key) => config?.[key] !== undefined).map((key) => {
-                const meta = FIELD_META[key];
-                const v = formState[key];
-                if (meta?.type === "boolean") {
-                  return (
-                    <div key={key} className="flex items-center justify-between">
-                      <Label htmlFor={`f-${key}`}>{meta.label}</Label>
-                      <Switch
-                        id={`f-${key}`}
-                        checked={v === "true"}
-                        onCheckedChange={(c) => setField(key, c ? "true" : "false")}
-                      />
-                    </div>
-                  );
-                }
-                return (
-                  <div key={key} className="flex flex-col gap-2">
-                    <Label htmlFor={`f-${key}`}>{meta?.label ?? key}</Label>
-                    <Input
-                      id={`f-${key}`}
-                      type={meta?.type === "secret" ? "password" : meta?.type === "number" ? "number" : "text"}
-                      value={v ?? ""}
-                      onChange={(e) => setField(key, e.target.value)}
-                      placeholder={meta?.type === "secret" ? "<set>" : undefined}
-                    />
-                  </div>
-                );
-              })}
+            <TabsContent value="form" className="flex flex-col gap-6">
+              {SECTIONS.map((section) => (
+                <div key={section.title} className="flex flex-col gap-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    {section.title}
+                  </p>
+                  {section.fields.map((field) => (
+                    <FieldRow key={field.id} field={field} value={formState[field.path] ?? ""} onChange={(v) => setField(field.path, v)} />
+                  ))}
+                </div>
+              ))}
               <Button onClick={() => void saveForm()} disabled={saving}>
                 <Save />
                 {saving ? "Saving…" : "Save"}
@@ -205,6 +253,57 @@ export function ConfigView() {
           </Tabs>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function FieldRow({
+  field,
+  value,
+  onChange,
+}: {
+  field: FieldDef;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  if (field.type === "boolean") {
+    return (
+      <div className="flex items-center justify-between">
+        <Label htmlFor={`f-${field.id}`}>{field.label}</Label>
+        <Switch id={`f-${field.id}`} checked={value === "true"} onCheckedChange={(c) => onChange(c ? "true" : "false")} />
+      </div>
+    );
+  }
+  if (field.type === "select") {
+    return (
+      <div className="flex flex-col gap-2">
+        <Label htmlFor={`f-${field.id}`}>{field.label}</Label>
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger id={`f-${field.id}`}>
+            <SelectValue placeholder="—" />
+          </SelectTrigger>
+          <SelectContent>
+            {field.options?.map((opt) => (
+              <SelectItem key={opt} value={opt}>
+                {opt === "" ? "None" : opt}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor={`f-${field.id}`}>{field.label}</Label>
+      <Input
+        id={`f-${field.id}`}
+        type={field.type === "number" ? "number" : "text"}
+        step={field.step}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        spellCheck={false}
+      />
     </div>
   );
 }

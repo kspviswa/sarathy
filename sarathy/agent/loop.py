@@ -634,6 +634,16 @@ class AgentLoop:
                     return await self._handle_model_command(session, msg, args)
                 elif cmd_name == "provider":
                     return await self._handle_provider_command(session, msg, args)
+                elif cmd_name == "status":
+                    return await self._handle_status_command(session, msg, args)
+                elif cmd_name == "version":
+                    from sarathy import __version__
+
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=f"sarathy v{__version__}",
+                    )
 
         self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
         if message_tool := self.tools.get("message"):
@@ -1109,6 +1119,58 @@ Model context length: {self.context_length:,}
             channel=msg.channel,
             chat_id=msg.chat_id,
             content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name>",
+        )
+
+    async def _handle_status_command(
+        self, session: Session, msg: InboundMessage, args: str
+    ) -> OutboundMessage:
+        """Handle /status command - system status like the CLI's `sarathy status`."""
+        from sarathy.config.loader import get_config_path, load_config
+
+        config = load_config()
+        config_path = get_config_path()
+        lines = ["🪆 sarathy Status", ""]
+
+        lines.append(
+            f"Config: {config_path} {'✓' if config_path.exists() else '✗'}"
+        )
+        lines.append(
+            f"Workspace: {config.workspace_path} {'✓' if config.workspace_path.exists() else '✗'}"
+        )
+
+        if config_path.exists():
+            from sarathy.providers.manager import describe_provider
+
+            lines.append(f"Model: {config.agents.defaults.model}")
+            lines.append(f"Provider: {config.agents.defaults.provider or '(none set)'}")
+
+            for pname, p in config.providers.items():
+                try:
+                    desc = describe_provider(pname, p)
+                except Exception:
+                    continue
+                if desc["isLocal"]:
+                    state = f"✓ {desc['apiBase']}" if desc["apiBase"] else "not set"
+                else:
+                    state = "✓" if desc["hasApiKey"] else "not set"
+                lines.append(f"{desc['label']}: {state}")
+
+            ws = config.tools.web.search
+            if ws.enabled:
+                env_key = "FIRECRAWL_API_KEY" if ws.provider == "firecrawl" else "BRAVE_API_KEY"
+                import os as _os
+
+                has_key = bool(ws.api_key or _os.environ.get(env_key))
+                lines.append(
+                    f"Web Search ({ws.provider}): {'✓' if has_key else '⚠ no API key'}"
+                )
+            else:
+                lines.append("Web Search: disabled")
+
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="\n".join(lines),
         )
 
     _TOOL_RESULT_MAX_CHARS = 500

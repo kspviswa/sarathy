@@ -7,7 +7,15 @@ import re
 from pathlib import Path
 
 from loguru import logger
-from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeDefault,
+    ReactionTypeEmoji,
+    ReplyParameters,
+    Update,
+)
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
@@ -214,6 +222,7 @@ class TelegramChannel(BaseChannel):
     async def _register_commands(self) -> None:
         """Register bot commands with Telegram."""
         commands = list(self.DEFAULT_COMMANDS)
+        seen = {c.command for c in commands}
 
         # Add dynamic commands from command_manager
         if self.command_manager:
@@ -224,6 +233,9 @@ class TelegramChannel(BaseChannel):
                         "Skipping command '{}' for Telegram (hyphens not supported)", cmd_info.name
                     )
                     continue
+                if cmd_info.name in seen:
+                    continue
+                seen.add(cmd_info.name)
                 commands.append(BotCommand(cmd_info.name, cmd_info.description))
 
                 # Add handler for skill command if not already registered
@@ -232,8 +244,19 @@ class TelegramChannel(BaseChannel):
                     self._registered_skill_commands.add(cmd_info.name)
 
         try:
-            await self._app.bot.set_my_commands(commands)
-            logger.debug(f"Registered {len(commands)} bot commands")
+            # Set commands for every scope we can control. Telegram stores a bot's
+            # command menu server-side per token and it persists across bot
+            # software; chat-scoped commands (e.g. those left by a previous bot
+            # on the same token) override the default scope. Setting the same
+            # list here ensures sarathy owns the menu everywhere.
+            scopes = [
+                BotCommandScopeDefault(),
+                BotCommandScopeAllPrivateChats(),
+                BotCommandScopeAllGroupChats(),
+            ]
+            for scope in scopes:
+                await self._app.bot.set_my_commands(commands, scope=scope)
+            logger.debug("Registered {} bot commands in {} scopes", len(commands), len(scopes))
         except Exception as e:
             logger.warning("Failed to register bot commands: {}", e)
 

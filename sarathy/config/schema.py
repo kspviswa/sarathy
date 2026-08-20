@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -153,20 +153,85 @@ class AgentsConfig(Base):
 
 
 class ProviderConfig(Base):
-    """LLM provider configuration."""
+    """LLM provider configuration.
 
+    ``kind`` selects how the provider is driven:
+      - ``custom``  : any OpenAI-compatible endpoint (direct client)
+      - ``ollama``  : Ollama (local)
+      - ``lmstudio``: LM Studio (local, OpenAI-compatible)
+      - ``vllm``    : vLLM (local, OpenAI-compatible)
+      - ``litellm`` : a hosted provider driven through LiteLLM
+    """
+
+    kind: str = "custom"
     api_key: str = "dummy"
     api_base: str | None = "http://localhost:11434"
     extra_headers: dict[str, str] | None = None
+    label: str = ""  # Optional human-readable name shown in UIs
 
 
-class ProvidersConfig(Base):
-    """Configuration for LLM providers."""
+class ProvidersConfig(RootModel[dict[str, ProviderConfig]]):
+    """Configuration for LLM providers.
 
-    custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
-    ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local
-    lmstudio: ProviderConfig = Field(default_factory=ProviderConfig)  # LMStudio local
-    vllm: ProviderConfig = Field(default_factory=ProviderConfig)  # vLLM local
+    Providers are stored as an arbitrary map so any number of OpenAI-compatible
+    endpoints can be added, edited, or removed at runtime. The known local
+    providers (ollama, lmstudio, vllm) and the legacy ``custom`` entry are
+    seeded automatically for first-time users.
+
+    Serializes as a flat ``{name: config}`` map (backward compatible with the
+    previous fixed ``providers`` block in ``config.json``).
+    """
+
+    root: dict[str, ProviderConfig] = Field(
+        default_factory=lambda: {
+            "custom": ProviderConfig(
+                kind="custom",
+                api_key="dummy",
+                api_base="http://localhost:8000/v1",
+                label="Custom (OpenAI-compatible)",
+            ),
+            "ollama": ProviderConfig(
+                kind="ollama", api_key="dummy", api_base="http://localhost:11434", label="Ollama"
+            ),
+            "lmstudio": ProviderConfig(
+                kind="lmstudio",
+                api_key="dummy",
+                api_base="http://localhost:1234/v1",
+                label="LM Studio",
+            ),
+            "vllm": ProviderConfig(kind="vllm", api_key="dummy", api_base="", label="vLLM"),
+        }
+    )
+
+    def __getitem__(self, name: str) -> ProviderConfig:
+        return self.root[name]
+
+    def __setitem__(self, name: str, value: ProviderConfig) -> None:
+        self.root[name] = value
+
+    def __delitem__(self, name: str) -> None:
+        del self.root[name]
+
+    def pop(self, name: str, default: ProviderConfig | None = None) -> ProviderConfig | None:
+        return self.root.pop(name, default)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.root
+
+    def get(self, name: str, default: ProviderConfig | None = None) -> ProviderConfig | None:
+        return self.root.get(name, default)
+
+    def items(self):
+        return self.root.items()
+
+    def keys(self):
+        return self.root.keys()
+
+    def values(self):
+        return self.root.values()
+
+    def __iter__(self):
+        return iter(self.root)
 
 
 class HeartbeatConfig(Base):
@@ -240,6 +305,10 @@ class Config(BaseSettings):
         """Get expanded workspace path."""
         return Path(self.agents.defaults.workspace).expanduser()
 
+    def provider_items(self) -> list[tuple[str, ProviderConfig]]:
+        """Return ``(name, config)`` pairs for every configured provider."""
+        return list(self.providers.items())
+
     def _match_provider(
         self, model: str | None = None
     ) -> tuple["ProviderConfig | None", str | None]:
@@ -247,23 +316,19 @@ class Config(BaseSettings):
 
         Requires agents.defaults.provider to be set and must match a configured provider.
         """
-        from sarathy.providers.registry import PROVIDERS
-
         provider_name = self.agents.defaults.provider
         if not provider_name:
-            available = [s.name for s in PROVIDERS if hasattr(self.providers, s.name)]
             raise ValueError(
                 f"Missing required 'provider' in agents.defaults. "
-                f"Available providers: {', '.join(available)}"
+                f"Available providers: {', '.join(self.providers.keys())}"
             )
 
         # Get the provider config directly by name
-        p = getattr(self.providers, provider_name, None)
+        p = self.providers.get(provider_name)
         if not p:
-            available = [s.name for s in PROVIDERS if hasattr(self.providers, s.name)]
             raise ValueError(
                 f"Unknown provider '{provider_name}' in agents.defaults.provider. "
-                f"Available providers: {', '.join(available)}"
+                f"Available providers: {', '.join(self.providers.keys())}"
             )
 
         return p, provider_name
@@ -291,7 +356,7 @@ class Config(BaseSettings):
         if p and p.api_base:
             return p.api_base
         if name:
-            spec = find_by_name(name)
+            spec = find_by_name(name) or find_by_name(p.kind if p else "")
             if spec and spec.is_gateway and spec.default_api_base:
                 return spec.default_api_base
         return None

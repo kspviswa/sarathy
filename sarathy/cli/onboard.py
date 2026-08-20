@@ -185,20 +185,30 @@ class ProviderScreen(Screen):
 
             from sarathy.config.schema import ProviderConfig
 
-            pc = ProviderConfig()
+            defaults = {
+                "ollama": ("ollama", "http://localhost:11434", "llama3"),
+                "lmstudio": ("lmstudio", "http://localhost:1234/v1", "llama3"),
+                "vllm": ("vllm", "http://localhost:8000/v1", "llama3"),
+                "custom": ("custom", "http://localhost:8000/v1", "gpt-4"),
+            }
+            kind, default_base, default_model = defaults[provider]
 
-            api_base = self.query_one("#api_base").value
+            pc = ProviderConfig(kind=kind)
+
+            api_base = self.query_one("#api_base").value or default_base
             api_key = self.query_one("#api_key").value
 
-            if api_base:
-                pc.api_base = api_base
+            pc.api_base = api_base
             if api_key:
                 pc.api_key = api_key
 
-            setattr(self.config.providers, provider, pc)
-            self.config.agents.defaults.model = "llama3" if provider == "ollama" else "gpt-4"
+            self.config.providers[provider] = pc
+            self.config.agents.defaults.provider = provider
+            self.config.agents.defaults.model = default_model
 
-            self.app.push_screen(ModelScreen(self.config, self.config_path, self.workspace))
+            self.app.push_screen(
+                ModelScreen(self.config, self.config_path, self.workspace)
+            )
 
 
 class ModelScreen(Screen):
@@ -213,7 +223,7 @@ class ModelScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Container(
             Static("[bold cyan]Step 2: Configure Model[/bold cyan]", id="title"),
-            Static("Enter the model name you want to use:", id="subtitle"),
+            Static("Enter the model name, or fetch models from your provider:", id="subtitle"),
             Label("Model Name:"),
             Input(
                 placeholder="llama3",
@@ -222,6 +232,7 @@ class ModelScreen(Screen):
             ),
             Static(""),
             Horizontal(
+                Button("Fetch Models", variant="secondary", id="fetch"),
                 Button("← Back", variant="default", id="back"),
                 Button("Next →", variant="primary", id="next"),
             ),
@@ -231,11 +242,43 @@ class ModelScreen(Screen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":
             self.app.pop_screen()
+        elif event.button.id == "fetch":
+            self._fetch_models()
         else:
             model_name = self.query_one("#model_name").value
             if model_name:
                 self.config.agents.defaults.model = model_name
             self.app.push_screen(ChannelsScreen(self.config, self.config_path, self.workspace))
+
+    def _fetch_models(self) -> None:
+        from sarathy.providers.manager import list_models
+
+        provider = self.config.agents.defaults.provider
+        self.app.notify(f"Fetching models from '{provider}'...", timeout=3)
+
+        def _run() -> list[str]:
+            return list_models(provider, self.config)
+
+        def _done(models: list[str]) -> None:
+            if not models:
+                self.app.notify(
+                    f"No models returned by '{provider}'.", severity="warning", timeout=6
+                )
+                return
+            self.query_one("#model_name").value = models[0]
+            self.app.notify(
+                f"Found {len(models)} models. First: {models[0]}. Edit if needed.",
+                timeout=6,
+            )
+
+        def _failed(e: Exception) -> None:
+            self.app.notify(f"Failed to fetch models: {e}", severity="error", timeout=8)
+
+        try:
+            worker = self.app.run_worker(_run, group="models", exclusive=False, exit_on_error=False)
+            worker.add_done_callback(lambda w: self.app.call_from_thread(_done, w.result) if w.success else self.app.call_from_thread(_failed, w.error))
+        except Exception as e:
+            self.app.call_from_thread(_failed, e)
 
 
 class ChannelsScreen(Screen):

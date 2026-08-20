@@ -67,6 +67,7 @@ class AgentLoop:
         channels_config: ChannelsConfig | None = None,
         reasoning_effort: str | None = None,
         reviewer: Any | None = None,
+        runtime: Any | None = None,
     ):
         from sarathy.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -81,6 +82,7 @@ class AgentLoop:
         self.memory_window = memory_window
         self.context_length = context_length
         self.reasoning_effort = reasoning_effort
+        self.runtime = runtime
         self.web_search_config = web_search_config or WebSearchConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
@@ -527,6 +529,15 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    def _refresh_runtime(self) -> bool:
+        """Hot-reload model/provider/parameters from the persisted config.
+
+        Returns True when settings changed (used by callers that need to react).
+        """
+        if self.runtime is None:
+            return False
+        return bool(self.runtime.apply_to(self))
+
     async def _process_message(
         self,
         msg: InboundMessage,
@@ -534,6 +545,9 @@ class AgentLoop:
         on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
+        # Hot-reload model/provider/parameters (no gateway restart needed).
+        self._refresh_runtime()
+
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
             channel, chat_id = (
@@ -616,6 +630,10 @@ class AgentLoop:
                     return await self._handle_restart_command(session, msg)
                 elif cmd_name == "shell":
                     return await self._handle_shell_command(session, msg, args)
+                elif cmd_name == "model":
+                    return await self._handle_model_command(session, msg, args)
+                elif cmd_name == "provider":
+                    return await self._handle_provider_command(session, msg, args)
 
         self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
         if message_tool := self.tools.get("message"):
@@ -948,6 +966,149 @@ Model context length: {self.context_length:,}
             chat_id=msg.chat_id,
             content=result,
             metadata={"_shell_raw": True},
+        )
+
+    async def _handle_model_command(
+        self, session: Session, msg: InboundMessage, args: str
+    ) -> OutboundMessage:
+        """Handle /model command - show/set the active model."""
+        if self.runtime is None:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="⚠️ Runtime settings are not available in this context.",
+            )
+        parts = args.split(None, 1)
+        sub = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub in ("status", ""):
+            s = self.runtime.status()
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    f"🤖 Model: {s['model']}\n"
+                    f"Provider: {s['provider']}\n"
+                    f"Temperature: {s['temperature']}\n"
+                    f"Max tokens: {s['max_tokens']}\n"
+                    f"Reasoning: {s['reasoning_effort'] or 'off'}\n\n"
+                    "Usage: /model set <name> · /model list · /model"
+                ),
+            )
+
+        if sub == "list":
+            from sarathy.providers.manager import list_models
+
+            provider = self.runtime.config.agents.defaults.provider
+            try:
+                models = await asyncio.to_thread(list_models, provider, self.runtime.config)
+            except ValueError as e:
+                return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"⚠️ {e}")
+            if not models:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"No models returned by provider '{provider}'.",
+                )
+            header = f"📦 Models available on '{provider}':\n\n"
+            body = "\n".join(f"• {m}" for m in models)
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=header + body)
+
+        if sub == "set" and rest:
+            try:
+                self.runtime.set_active(self.runtime.config.agents.defaults.provider, model=rest)
+            except ValueError as e:
+                return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"⚠️ {e}")
+            self._refresh_runtime()
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"✅ Model set to {rest} (provider: {self.runtime.config.agents.defaults.provider}).",
+            )
+
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="Usage: /model [status] · /model list · /model set <model-name>",
+        )
+
+    async def _handle_provider_command(
+        self, session: Session, msg: InboundMessage, args: str
+    ) -> OutboundMessage:
+        """Handle /provider command - list/switch providers."""
+        if self.runtime is None:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="⚠️ Runtime settings are not available in this context.",
+            )
+        parts = args.split(None, 1)
+        sub = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub in ("status", ""):
+            s = self.runtime.status()
+            lines = [
+                f"🔌 Provider: {s['provider']}",
+                f"🤖 Model: {s['model']}",
+                "",
+                "Configured providers:",
+            ]
+            for name in s["providers"]:
+                mark = "→" if name == s["provider"] else " "
+                lines.append(f" {mark} {name}")
+            lines.append("")
+            lines.append("Usage: /provider list · /provider set <name> [model] · /provider models <name>")
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
+
+        if sub == "list":
+            s = self.runtime.status()
+            lines = ["Configured providers:"]
+            for name in s["providers"]:
+                mark = "→" if name == s["provider"] else " "
+                lines.append(f" {mark} {name}")
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
+
+        if sub == "models" and rest:
+            from sarathy.providers.manager import list_models
+
+            try:
+                models = await asyncio.to_thread(list_models, rest, self.runtime.config)
+            except ValueError as e:
+                return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"⚠️ {e}")
+            if not models:
+                return OutboundMessage(
+                    channel=msg.channel, chat_id=msg.chat_id, content=f"No models from '{rest}'."
+                )
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"📦 Models on '{rest}':\n\n" + "\n".join(f"• {m}" for m in models),
+            )
+
+        if sub == "set" and rest:
+            pname = rest.split()[0]
+            model = rest.split(None, 1)[1] if len(rest.split(None, 1)) > 1 else None
+            try:
+                self.runtime.set_active(pname, model=model)
+            except ValueError as e:
+                return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"⚠️ {e}")
+            self._refresh_runtime()
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    f"✅ Switched provider to {pname}."
+                    + (f" Model: {model}." if model else "")
+                    + " Model changes apply immediately."
+                ),
+            )
+
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name>",
         )
 
     _TOOL_RESULT_MAX_CHARS = 500

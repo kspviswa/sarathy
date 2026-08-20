@@ -2,6 +2,9 @@ import type {
   ConfigResponse,
   MeResponse,
   PairResponse,
+  ProviderModelsResponse,
+  ProvidersResponse,
+  RuntimeSetResponse,
   SessionDetail,
   SessionInfo,
   StatusResponse,
@@ -73,6 +76,32 @@ export const api = {
   putConfig: (data: ConfigResponse) =>
     request<{ ok: boolean; restartRequired: boolean }>("/api/config", {
       method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  providers: () => request<ProvidersResponse>("/api/providers"),
+
+  providerModels: (name: string) =>
+    request<ProviderModelsResponse>(`/api/providers/${encodeURIComponent(name)}/models`),
+
+  addProvider: (data: Record<string, unknown>) =>
+    request<{ ok: boolean }>("/api/providers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  editProvider: (name: string, data: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/api/providers/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  removeProvider: (name: string) =>
+    request<{ ok: boolean }>(`/api/providers/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  setRuntime: (data: { provider?: string; model?: string }) =>
+    request<RuntimeSetResponse>("/api/runtime", {
+      method: "POST",
       body: JSON.stringify(data),
     }),
 

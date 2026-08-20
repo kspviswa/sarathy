@@ -49,11 +49,13 @@ class DashboardChannel(BaseChannel):
         session_manager=None,
         config_path: Path | None = None,
         devices_path: Path | None = None,
+        runtime=None,
     ):
         super().__init__(config, bus)
         self.config: DashboardConfig = config
         self.session_manager = session_manager
         self.config_path = Path(config_path) if config_path else None
+        self.runtime = runtime
         self._registry = DeviceRegistry(devices_path)
         self._static_dir = Path(__file__).parent / "static"
         self._runner: web.AppRunner | None = None
@@ -226,6 +228,12 @@ class DashboardChannel(BaseChannel):
         app.router.add_post("/api/chat/stop", self._api_chat_stop)
         app.router.add_get("/api/config", self._api_get_config)
         app.router.add_put("/api/config", self._api_put_config)
+        app.router.add_get("/api/providers", self._api_providers_list)
+        app.router.add_post("/api/providers", self._api_providers_add)
+        app.router.add_put("/api/providers/{name}", self._api_providers_edit)
+        app.router.add_delete("/api/providers/{name}", self._api_providers_remove)
+        app.router.add_get("/api/providers/{name}/models", self._api_providers_models)
+        app.router.add_post("/api/runtime", self._api_runtime_set)
         app.router.add_post("/api/restart", self._api_restart)
         app.router.add_get("/api/sessions", self._api_sessions)
         app.router.add_get("/api/session", self._api_session_messages)
@@ -343,6 +351,146 @@ class DashboardChannel(BaseChannel):
 
         save_config(new_cfg, self.config_path)
         return web.json_response({"ok": True, "restartRequired": True})
+
+    # ------------------------------------------------------------------ providers api
+
+    async def _api_providers_list(self, request: web.Request) -> web.Response:
+        from sarathy.providers.manager import describe_provider
+
+        cfg = self._load_full_config()
+        active = cfg.get_provider_name()
+        items = []
+        for name, p in cfg.providers.items():
+            try:
+                desc = describe_provider(name, p)
+            except Exception:
+                continue
+            desc["active"] = name == active
+            items.append(desc)
+        return web.json_response({"providers": items, "active": active})
+
+    async def _api_providers_add(self, request: web.Request) -> web.Response:
+        from sarathy.config.loader import save_config
+        from sarathy.config.schema import ProviderConfig
+        from sarathy.providers.registry import KNOWN_KINDS
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        name = (data.get("name") or "").strip()
+        if not name or not name.isidentifier():
+            return web.json_response({"error": "invalid provider name"}, status=400)
+        kind = (data.get("kind") or "custom").strip()
+        if kind not in KNOWN_KINDS:
+            return web.json_response(
+                {"error": f"unknown kind '{kind}'"}, status=400
+            )
+        cfg = self._load_full_config()
+        if name in cfg.providers:
+            return web.json_response({"error": "provider already exists"}, status=409)
+        cfg.providers[name] = ProviderConfig(
+            kind=kind,
+            api_base=(data.get("apiBase") or "").strip() or None,
+            api_key=(data.get("apiKey") or "").strip() or "dummy",
+            label=(data.get("label") or "").strip() or name.title(),
+            extra_headers=dict(data.get("extraHeaders") or {}),
+        )
+        save_config(cfg, self.config_path)
+        if data.get("setActive"):
+            cfg.agents.defaults.provider = name
+            save_config(cfg, self.config_path)
+        return web.json_response({"ok": True})
+
+    async def _api_providers_edit(self, request: web.Request) -> web.Response:
+        from sarathy.config.loader import save_config
+        from sarathy.providers.registry import KNOWN_KINDS
+
+        name = request.match_info["name"]
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        cfg = self._load_full_config()
+        if name not in cfg.providers:
+            return web.json_response({"error": "provider not found"}, status=404)
+        p = cfg.providers[name]
+        if "apiBase" in data:
+            p.api_base = (data.get("apiBase") or "").strip() or None
+        if "apiKey" in data:
+            p.api_key = (data.get("apiKey") or "").strip() or p.api_key
+        if "label" in data:
+            p.label = (data.get("label") or "").strip()
+        if "kind" in data and data["kind"] in KNOWN_KINDS:
+            p.kind = data["kind"]
+        if "extraHeaders" in data:
+            p.extra_headers = dict(data.get("extraHeaders") or {})
+        save_config(cfg, self.config_path)
+        return web.json_response({"ok": True})
+
+    async def _api_providers_remove(self, request: web.Request) -> web.Response:
+        from sarathy.config.loader import save_config
+
+        name = request.match_info["name"]
+        cfg = self._load_full_config()
+        if name not in cfg.providers:
+            return web.json_response({"error": "provider not found"}, status=404)
+        if name == cfg.get_provider_name():
+            return web.json_response(
+                {"error": "cannot remove the active provider"}, status=400
+            )
+        cfg.providers.pop(name)
+        save_config(cfg, self.config_path)
+        return web.json_response({"ok": True})
+
+    async def _api_providers_models(self, request: web.Request) -> web.Response:
+        from sarathy.providers.manager import list_models
+
+        name = request.match_info["name"]
+        cfg = self._load_full_config()
+        if name not in cfg.providers:
+            return web.json_response({"error": "provider not found"}, status=404)
+        try:
+            models = await asyncio.to_thread(list_models, name, cfg)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=502)
+        return web.json_response({"provider": name, "models": models})
+
+    async def _api_runtime_set(self, request: web.Request) -> web.Response:
+        from sarathy.config.loader import save_config
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        cfg = self._load_full_config()
+
+        provider = (data.get("provider") or "").strip()
+        model = (data.get("model") or "").strip()
+
+        if provider and provider not in cfg.providers:
+            return web.json_response({"error": "provider not found"}, status=404)
+        if provider:
+            cfg.agents.defaults.provider = provider
+        if model:
+            cfg.agents.defaults.model = model
+        save_config(cfg, self.config_path)
+
+        if self.runtime is not None:
+            try:
+                self.runtime.set_active(
+                    cfg.agents.defaults.provider, model=cfg.agents.defaults.model
+                )
+                return web.json_response(
+                    {"ok": True, "applied": True, "provider": cfg.agents.defaults.provider}
+                )
+            except Exception as e:
+                return web.json_response(
+                    {"ok": True, "applied": False, "error": str(e)}, status=200
+                )
+        return web.json_response(
+            {"ok": True, "applied": False, "error": "no running gateway session"}
+        )
 
     # ------------------------------------------------------------------ restart api
 

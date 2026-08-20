@@ -27,48 +27,11 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     _create_global_skills()
 
     bus = MessageBus()
-    from sarathy.providers.custom_provider import CustomProvider
-    from sarathy.providers.litellm_provider import LiteLLMProvider
-    from sarathy.providers.registry import find_by_name
+    from sarathy.providers.manager import RuntimeProvider
 
-    model = config.agents.defaults.model
-    provider_name = config.get_provider_name()
-    p = config.get_provider()
-    api_base = config.get_api_base()
+    runtime = RuntimeProvider(config)
 
-    # Use CustomProvider for OpenAI-compatible endpoints (/v1) because:
-    # 1. LiteLLM strips reasoning content from streaming deltas with OpenAI provider
-    # 2. CustomProvider properly extracts reasoning/thinking from Ollama, LMStudio, vLLM
-    if api_base and api_base.endswith("/v1"):
-        provider = CustomProvider(
-            api_key=p.api_key if p else "no-key",
-            api_base=api_base,
-            default_model=model,
-        )
-    elif provider_name == "custom":
-        provider = CustomProvider(
-            api_key=p.api_key if p else "no-key",
-            api_base=api_base or "http://localhost:8000/v1",
-            default_model=model,
-        )
-    else:
-        spec = find_by_name(provider_name)
-        if spec and spec.is_local:
-            pass
-        elif (
-            not model.startswith("bedrock/")
-            and not (p and p.api_key)
-            and not (spec and spec.is_oauth)
-        ):
-            raise RuntimeError("No API key configured")
-
-        provider = LiteLLMProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            provider_name=provider_name,
-        )
+    provider = runtime.provider
 
     session_manager = SessionManager(
         config=config,
@@ -84,9 +47,9 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
         bus=bus,
         provider=provider,
         workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        temperature=config.agents.defaults.temperature,
-        max_tokens=config.agents.defaults.max_tokens,
+        model=runtime.model,
+        temperature=runtime.temperature,
+        max_tokens=runtime.max_tokens,
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
         web_search_config=config.tools.web.search,
@@ -98,7 +61,8 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
         context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
-        reasoning_effort=config.agents.defaults.reasoning_effort,
+        reasoning_effort=runtime.reasoning_effort,
+        runtime=runtime,
     )
 
     # Initialize background reviewer for idle-time learning
@@ -165,7 +129,13 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     skill_manager.on_reload(on_skills_updated)
 
     # Initialize channels with command manager
-    channels = ChannelManager(config, bus, command_manager=command_manager, session_manager=session_manager)
+    channels = ChannelManager(
+        config,
+        bus,
+        command_manager=command_manager,
+        session_manager=session_manager,
+        runtime=runtime,
+    )
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         enabled = set(channels.enabled_channels)
@@ -215,6 +185,12 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
         enabled=hb_cfg.enabled,
     )
 
+    def _sync_heartbeat_runtime() -> None:
+        heartbeat.provider = runtime.provider
+        heartbeat.model = runtime.model
+
+    runtime.on_change(_sync_heartbeat_runtime)
+
     async def _check_restart_flag() -> None:
         import json
         import os as _os
@@ -232,27 +208,27 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
             channel = data.get("channel", "cli")
             chat_id = data.get("chat_id", "direct")
 
-            from sarathy.providers.registry import PROVIDERS
+            from sarathy.providers.manager import describe_provider
 
             status_lines = ["✅ Gateway restarted successfully!", "", "📊 Sarathy Status:", ""]
             status_lines.append(f"Version: {__version__}")
             status_lines.append(f"Model: {config.agents.defaults.model}")
             status_lines.append(f"Provider: {config.get_provider_name()}")
 
-            for spec in PROVIDERS:
-                p = getattr(config.providers, spec.name, None)
-                if p is None:
+            for pname, p in config.providers.items():
+                try:
+                    desc = describe_provider(pname, p)
+                except Exception:
                     continue
-                if spec.is_oauth:
-                    status_lines.append(f"{spec.label}: ✓ (OAuth)")
-                elif spec.is_local:
-                    if p.api_base:
-                        status_lines.append(f"{spec.label}: ✓ {p.api_base}")
-                    else:
-                        status_lines.append(f"{spec.label}: not set")
+                if desc["isLocal"]:
+                    status_lines.append(
+                        f"{desc['label']}: ✓ {desc['apiBase'] or 'not set'}"
+                        if desc["apiBase"]
+                        else f"{desc['label']}: not set"
+                    )
                 else:
-                    has_key = bool(p.api_key)
-                    status_lines.append(f"{spec.label}: {'✓' if has_key else 'not set'}")
+                    has_key = bool(desc["hasApiKey"])
+                    status_lines.append(f"{desc['label']}: {'✓' if has_key else 'not set'}")
 
             ws = config.tools.web.search
             if ws.enabled:

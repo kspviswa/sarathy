@@ -22,11 +22,12 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus, command_manager=None, session_manager=None):
+    def __init__(self, config: Config, bus: MessageBus, command_manager=None, session_manager=None, runtime=None):
         self.config = config
         self.bus = bus
         self.command_manager = command_manager
         self.session_manager = session_manager
+        self.runtime = runtime
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
 
@@ -82,6 +83,7 @@ class ChannelManager:
                     self.config.channels.dashboard,
                     self.bus,
                     session_manager=self.session_manager,
+                    runtime=self.runtime,
                 )
                 logger.info("Dashboard channel enabled")
             except ImportError as e:

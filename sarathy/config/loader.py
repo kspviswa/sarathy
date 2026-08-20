@@ -67,4 +67,13 @@ def _migrate_config(data: dict) -> dict:
     exec_cfg = tools.get("exec", {})
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
+
+    # Infer provider `kind` for legacy provider blocks that predate the
+    # dynamic-provider rework (ollama/lmstudio/vllm were fixed fields).
+    providers = data.get("providers")
+    if isinstance(providers, dict):
+        legacy_kinds = {"custom": "custom", "ollama": "ollama", "lmstudio": "lmstudio", "vllm": "vllm"}
+        for name, p in providers.items():
+            if isinstance(p, dict) and "kind" not in p and name in legacy_kinds:
+                p["kind"] = legacy_kinds[name]
     return data

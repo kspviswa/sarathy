@@ -151,3 +151,34 @@ def find_by_name(name: str) -> ProviderSpec | None:
         if spec.name == name:
             return spec
     return None
+
+
+KNOWN_KINDS = {"custom", "ollama", "lmstudio", "vllm", "litellm"}
+
+
+def provider_spec_for(kind: str) -> ProviderSpec | None:
+    """Return the built-in ProviderSpec that a provider ``kind`` maps to.
+
+    ``custom`` and ``litellm`` have no static spec (they are generic); local
+    kinds map to their static spec so prefix/env handling stays consistent.
+    """
+    if kind in ("custom", "litellm"):
+        return find_by_name("custom") if kind == "custom" else None
+    return find_by_name(kind)
+
+
+def resolve_kind(name: str, cfg: "ProviderConfig | None" = None) -> str:
+    """Resolve the effective kind for a configured provider.
+
+    The explicit ``kind`` field wins; otherwise the provider name is matched
+    against known providers; otherwise it is treated as a custom
+    OpenAI-compatible endpoint.
+    """
+    if cfg is not None:
+        kind = (cfg.kind or "").strip()
+        if kind:
+            return kind
+    spec = find_by_name(name)
+    if spec is not None:
+        return spec.name
+    return "custom"

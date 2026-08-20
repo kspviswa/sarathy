@@ -72,6 +72,18 @@ BUILTIN_COMMANDS = {
         description="Execute shell command directly",
         subcommands=[],
     ),
+    "version": BuiltinCommand(
+        name="version",
+        description="Show installed sarathy version",
+        subcommands=[],
+        has_status=True,
+    ),
+    "status": BuiltinCommand(
+        name="status",
+        description="Show system status (model, provider, workspace)",
+        subcommands=[],
+        has_status=True,
+    ),
     "model": BuiltinCommand(
         name="model",
         description="Show or change the active model",

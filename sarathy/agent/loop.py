@@ -1115,11 +1115,113 @@ Model context length: {self.context_length:,}
                 ),
             )
 
+        if sub == "add":
+            return await self._handle_provider_add(session, msg, rest)
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
-            content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name>",
+            content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name> · /provider add <name> [--api-base <url>] [--kind <kind>] [--set-active]",
         )
+
+    async def _handle_provider_add(
+        self, session: Session, msg: InboundMessage, rest: str
+    ) -> OutboundMessage:
+        """Handle /provider add — create a new provider from chat.
+
+        Syntax: /provider add <name> [--api-base <url>] [--kind openai|anthropic]
+                [--api-key <key>] [--label <label>] [--set-active]
+        """
+        from sarathy.config.loader import load_config, save_config
+        from sarathy.config.schema import ProviderConfig
+
+        if not rest:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    "Usage: /provider add <name> [--api-base <url>] "
+                    "[--kind openai|anthropic] [--api-key <key>] [--set-active]\n"
+                    "Example: /provider add mylms --api-base http://localhost:1234/v1 --set-active"
+                ),
+            )
+
+        parts = rest.split()
+        name = parts[0]
+        api_base = None
+        kind = "openai"
+        label = None
+        api_key = None
+        set_active = False
+
+        i = 1
+        while i < len(parts):
+            p = parts[i]
+            if p == "--api-base" and i + 1 < len(parts):
+                api_base = parts[i + 1]
+                i += 2
+            elif p == "--kind" and i + 1 < len(parts):
+                kind = parts[i + 1].lower()
+                i += 2
+            elif p == "--api-key" and i + 1 < len(parts):
+                api_key = parts[i + 1]
+                i += 2
+            elif p == "--label" and i + 1 < len(parts):
+                label = parts[i + 1]
+                i += 2
+            elif p == "--set-active":
+                set_active = True
+                i += 1
+            else:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"⚠️ Unknown option: {p}",
+                )
+
+        if kind not in ("openai", "anthropic"):
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="⚠️ Kind must be 'openai' (chat completions) or 'anthropic' (messages).",
+            )
+
+        if kind == "openai":
+            api_base = api_base or "https://api.openai.com/v1"
+            if not api_base.endswith("/v1"):
+                api_base = api_base.rstrip("/") + "/v1"
+        else:
+            api_base = api_base or "https://api.anthropic.com"
+
+        config = load_config()
+        if name in config.providers:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"⚠️ Provider '{name}' already exists. Use /provider set {name} to activate it.",
+            )
+
+        config.providers[name] = ProviderConfig(
+            kind=kind,
+            api_base=api_base,
+            api_key=api_key or "dummy",
+            label=label or name.title(),
+        )
+        save_config(config)
+        if set_active:
+            config.agents.defaults.provider = name
+            save_config(config)
+        self._refresh_runtime()
+
+        reply = f"✅ Added provider '{name}' ({kind} → {api_base})."
+        if set_active:
+            reply += (
+                f"\nNow active. Model: {config.agents.defaults.model} "
+                "(change via /model set <name> or /model list)."
+            )
+        else:
+            reply += "\nActivate it with: /provider set <name> [model]"
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=reply)
 
     async def _handle_status_command(
         self, session: Session, msg: InboundMessage, args: str

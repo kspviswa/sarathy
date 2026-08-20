@@ -103,6 +103,41 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
     ),
+    # OpenAI-compatible chat-completions endpoint (also covers LM Studio, etc.)
+    ProviderSpec(
+        name="openai",
+        keywords=("openai",),
+        env_key="OPENAI_API_KEY",
+        display_name="OpenAI (Chat Completions)",
+        litellm_prefix="openai",
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=False,
+        is_local=False,
+        detect_by_key_prefix="sk-",
+        detect_by_base_keyword="openai",
+        default_api_base="https://api.openai.com/v1",
+        strip_model_prefix=False,
+        model_overrides=(),
+        is_direct=True,
+    ),
+    # Anthropic Messages endpoint
+    ProviderSpec(
+        name="anthropic",
+        keywords=("anthropic",),
+        env_key="ANTHROPIC_API_KEY",
+        display_name="Anthropic (Messages)",
+        litellm_prefix="anthropic",
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=False,
+        is_local=False,
+        detect_by_key_prefix="sk-ant-",
+        detect_by_base_keyword="anthropic",
+        default_api_base="https://api.anthropic.com",
+        strip_model_prefix=False,
+        model_overrides=(),
+    ),
 )
 
 
@@ -153,14 +188,15 @@ def find_by_name(name: str) -> ProviderSpec | None:
     return None
 
 
-KNOWN_KINDS = {"custom", "ollama", "lmstudio", "vllm", "litellm"}
+KNOWN_KINDS = {"custom", "ollama", "lmstudio", "vllm", "litellm", "openai", "anthropic"}
 
 
 def provider_spec_for(kind: str) -> ProviderSpec | None:
     """Return the built-in ProviderSpec that a provider ``kind`` maps to.
 
-    ``custom`` and ``litellm`` have no static spec (they are generic); local
-    kinds map to their static spec so prefix/env handling stays consistent.
+    ``custom`` and ``litellm`` have no static spec (they are generic); the
+    remaining kinds map to their static spec so prefix/env handling stays
+    consistent.
     """
     if kind in ("custom", "litellm"):
         return find_by_name("custom") if kind == "custom" else None

@@ -31,8 +31,10 @@ def build_provider(name: str, cfg: "ProviderConfig", model: str) -> "LLMProvider
     spec = provider_spec_for(kind)
     api_base = cfg.api_base or (spec.default_api_base if spec else None)
 
-    if kind == "custom" or (api_base and api_base.endswith("/v1")):
+    if kind in ("custom", "openai") or (api_base and api_base.endswith("/v1")):
         # OpenAI-compatible endpoint → direct client (keeps reasoning content).
+        if kind == "openai" and api_base and not api_base.endswith("/v1"):
+            api_base = api_base.rstrip("/") + "/v1"
         return CustomProvider(
             api_key=cfg.api_key or "no-key",
             api_base=api_base or "http://localhost:8000/v1",

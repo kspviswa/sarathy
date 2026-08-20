@@ -260,44 +260,9 @@ def _create_global_skills():
 
 def _make_provider(config: Config):
     """Create the appropriate LLM provider from config."""
-    from sarathy.providers.custom_provider import CustomProvider
-    from sarathy.providers.litellm_provider import LiteLLMProvider
+    from sarathy.providers.manager import create_provider
 
-    model = config.agents.defaults.model
-    provider_name = config.get_provider_name()
-    if not provider_name:
-        console.print("[red]Error: No provider configured.[/red]")
-        console.print("Set 'provider' in agents.defaults in ~/.sarathy/config.json")
-        raise typer.Exit(1)
-    p = config.get_provider()
-
-    # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM
-    if provider_name == "custom":
-        return CustomProvider(
-            api_key=p.api_key if p else "no-key",
-            api_base=config.get_api_base() or "http://localhost:8000/v1",
-            default_model=model,
-        )
-
-    from sarathy.providers.registry import find_by_name
-
-    spec = find_by_name(provider_name)
-    if spec and spec.is_local:
-        pass
-    elif (
-        not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and spec.is_oauth)
-    ):
-        console.print("[red]Error: No API key configured.[/red]")
-        console.print("Set one in ~/.sarathy/config.json under providers section")
-        raise typer.Exit(1)
-
-    return LiteLLMProvider(
-        api_key=p.api_key if p else None,
-        api_base=config.get_api_base(),
-        default_model=model,
-        extra_headers=p.extra_headers if p else None,
-        provider_name=provider_name,
-    )
+    return create_provider(config)
 
 
 # ============================================================================
@@ -469,8 +434,12 @@ def agent(
 
     config = load_config()
 
+    from sarathy.providers.manager import RuntimeProvider
+
+    runtime = RuntimeProvider(config)
+    provider = runtime.provider
+
     bus = MessageBus()
-    provider = _make_provider(config)
 
     # Create cron service for tool usage (no callback needed for CLI unless running)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
@@ -501,9 +470,9 @@ def agent(
         bus=bus,
         provider=provider,
         workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        temperature=config.agents.defaults.temperature,
-        max_tokens=config.agents.defaults.max_tokens,
+        model=runtime.model,
+        temperature=runtime.temperature,
+        max_tokens=runtime.max_tokens,
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
         web_search_config=config.tools.web.search,
@@ -514,9 +483,12 @@ def agent(
         context_length=config.agents.defaults.context_length,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
-        reasoning_effort=config.agents.defaults.reasoning_effort,
+        reasoning_effort=runtime.reasoning_effort,
         reviewer=reviewer,
+        runtime=runtime,
     )
+
+    runtime.on_change(lambda: setattr(reviewer, "provider", runtime.provider))
 
     # Show spinner when logs are off (no output to miss); skip when logs are on
     def _thinking_ctx():
@@ -956,7 +928,7 @@ def status():
     )
 
     if config_path.exists():
-        from sarathy.providers.registry import PROVIDERS
+        from sarathy.providers.manager import describe_provider
 
         console.print(f"Model: {config.agents.defaults.model}")
 
@@ -964,23 +936,21 @@ def status():
         provider_name = config.agents.defaults.provider
         console.print(f"Provider: {provider_name}")
 
-        # Check API keys from registry
-        for spec in PROVIDERS:
-            p = getattr(config.providers, spec.name, None)
-            if p is None:
+        # Check providers from config
+        for pname, p in config.providers.items():
+            try:
+                desc = describe_provider(pname, p)
+            except Exception:
                 continue
-            if spec.is_oauth:
-                console.print(f"{spec.label}: [green]✓ (OAuth)[/green]")
-            elif spec.is_local:
-                # Local deployments show api_base instead of api_key
-                if p.api_base:
-                    console.print(f"{spec.label}: [green]✓ {p.api_base}[/green]")
+            if desc["isLocal"]:
+                if desc["apiBase"]:
+                    console.print(f"{desc['label']}: [green]✓ {desc['apiBase']}[/green]")
                 else:
-                    console.print(f"{spec.label}: [dim]not set[/dim]")
+                    console.print(f"{desc['label']}: [dim]not set[/dim]")
             else:
-                has_key = bool(p.api_key)
+                has_key = bool(desc["hasApiKey"])
                 console.print(
-                    f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
+                    f"{desc['label']}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
                 )
 
         # Web search status
@@ -1001,8 +971,192 @@ def status():
 # Provider Management
 # ============================================================================
 
-provider_app = typer.Typer(help="Manage providers")
+provider_app = typer.Typer(help="Manage LLM providers")
 app.add_typer(provider_app, name="provider")
+
+
+@provider_app.command("list")
+def provider_list():
+    """List configured providers."""
+    _require_config()
+    from sarathy.config.loader import load_config
+    from sarathy.providers.manager import describe_provider
+
+    config = load_config()
+    active = config.get_provider_name()
+    if not config.providers:
+        console.print("[dim]No providers configured.[/dim]")
+        return
+    for pname, p in config.providers.items():
+        try:
+            desc = describe_provider(pname, p)
+        except Exception:
+            continue
+        marker = "→" if pname == active else " "
+        state = (
+            f"local · {desc['apiBase'] or 'not set'}"
+            if desc["isLocal"]
+            else ("apiKey set" if desc["hasApiKey"] else "no apiKey")
+        )
+        console.print(f" {marker} [cyan]{pname}[/cyan] ({desc['label']}) [dim]· {desc['kind']} · {state}[/dim]")
+
+
+@provider_app.command("models")
+def provider_models(
+    provider: str = typer.Argument(..., help="Provider name to list models for"),
+):
+    """List models available on a provider."""
+    _require_config()
+    from sarathy.config.loader import load_config
+    from sarathy.providers.manager import list_models
+
+    config = load_config()
+    try:
+        models = list_models(provider, config)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    if not models:
+        console.print(f"[yellow]No models returned by provider '{provider}'.[/yellow]")
+        return
+    console.print(f"[bold]{provider} models ({len(models)}):[/bold]")
+    for m in models:
+        console.print(f"  • {m}")
+
+
+@provider_app.command("add")
+def provider_add(
+    name: str = typer.Argument(..., help="Unique provider name (e.g. 'my-openai')"),
+    api_base: str = typer.Option("", "--api-base", help="Endpoint URL (e.g. https://x/v1, or Ollama base)"),
+    kind: str = typer.Option("custom", "--kind", help="custom|ollama|lmstudio|vllm|litellm"),
+    label: str = typer.Option("", "--label", help="Human-readable label"),
+    api_key: str = typer.Option(None, "--api-key", help="API key (for remote providers)"),
+    header: list[str] = typer.Option([], "--header", help="Extra headers as KEY=VALUE (repeatable)"),
+    set_active: bool = typer.Option(False, "--set-active", help="Make this the active provider"),
+):
+    """Add a new LLM provider to config."""
+    _require_config()
+    from sarathy.config.loader import load_config, save_config
+    from sarathy.config.schema import ProviderConfig
+    from sarathy.providers.registry import KNOWN_KINDS, resolve_kind
+
+    if kind not in KNOWN_KINDS:
+        console.print(f"[red]Unknown kind '{kind}'. Valid kinds: {', '.join(sorted(KNOWN_KINDS))}[/red]")
+        raise typer.Exit(1)
+
+    config = load_config()
+    if name in config.providers:
+        console.print(f"[red]Provider '{name}' already exists.[/red]")
+        raise typer.Exit(1)
+
+    effective = resolve_kind(name, ProviderConfig(kind=kind, api_base=api_base or None))
+    extra_headers = None
+    if header:
+        extra_headers = {}
+        for h in header:
+            k, _, v = h.partition("=")
+            if k:
+                extra_headers[k] = v
+
+    config.providers[name] = ProviderConfig(
+        kind=effective,
+        api_base=api_base or None,
+        api_key=api_key or "dummy",
+        label=label or name.title(),
+        extra_headers=extra_headers,
+    )
+    save_config(config)
+    console.print(f"[green]✓ Added provider '{name}'[/green]")
+
+    if set_active:
+        config.agents.defaults.provider = name
+        save_config(config)
+        console.print(f"[green]✓ Set active provider to '{name}'[/green]")
+
+
+@provider_app.command("set")
+def provider_set(
+    provider: str = typer.Argument(..., help="Provider name to activate"),
+    model: str = typer.Option(None, "--model", "-m", help="Model to use with this provider"),
+):
+    """Switch the active provider (and optionally the model)."""
+    _require_config()
+    from sarathy.config.loader import load_config, save_config
+
+    config = load_config()
+    if provider not in config.providers:
+        console.print(f"[red]Unknown provider '{provider}'. Available: {', '.join(config.providers.keys()) or '(none)'}[/red]")
+        raise typer.Exit(1)
+    config.agents.defaults.provider = provider
+    if model:
+        config.agents.defaults.model = model
+    save_config(config)
+    msg = f"[green]✓ Active provider set to '{provider}'[/green]"
+    if model:
+        msg += f" with model '{model}'"
+    console.print(msg)
+    console.print("[dim]Applied immediately to running gateway/CLI sessions (hot-reload).[/dim]")
+
+
+@provider_app.command("edit")
+def provider_edit(
+    provider: str = typer.Argument(..., help="Provider name to edit"),
+    api_base: str = typer.Option(None, "--api-base", help="Endpoint URL"),
+    label: str = typer.Option(None, "--label", help="Human-readable label"),
+    api_key: str = typer.Option(None, "--api-key", help="API key"),
+    kind: str = typer.Option(None, "--kind", help="custom|ollama|lmstudio|vllm|litellm"),
+):
+    """Edit a provider's configuration."""
+    _require_config()
+    from sarathy.config.loader import load_config, save_config
+    from sarathy.providers.registry import KNOWN_KINDS
+
+    config = load_config()
+    if provider not in config.providers:
+        console.print(f"[red]Unknown provider '{provider}'.[/red]")
+        raise typer.Exit(1)
+    p = config.providers[provider]
+    if api_base is not None:
+        p.api_base = api_base or None
+    if label is not None:
+        p.label = label
+    if api_key is not None:
+        p.api_key = api_key
+    if kind is not None:
+        if kind not in KNOWN_KINDS:
+            console.print(f"[red]Unknown kind '{kind}'. Valid kinds: {', '.join(sorted(KNOWN_KINDS))}[/red]")
+            raise typer.Exit(1)
+        p.kind = kind
+    save_config(config)
+    console.print(f"[green]✓ Updated provider '{provider}'[/green]")
+
+
+@provider_app.command("remove")
+def provider_remove(
+    provider: str = typer.Argument(..., help="Provider name to remove"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+):
+    """Remove a provider from config."""
+    _require_config()
+    from sarathy.config.loader import load_config, save_config
+
+    config = load_config()
+    if provider not in config.providers:
+        console.print(f"[red]Unknown provider '{provider}'.[/red]")
+        raise typer.Exit(1)
+    if provider == config.get_provider_name():
+        console.print(
+            f"[yellow]'{provider}' is the active provider. Use 'sarathy provider set <other>' first.[/yellow]"
+        )
+        raise typer.Exit(1)
+    if not yes:
+        confirm = typer.confirm(f"Remove provider '{provider}'?")
+        if not confirm:
+            console.print("Aborted.")
+            raise typer.Exit(0)
+    config.providers.pop(provider)
+    save_config(config)
+    console.print(f"[green]✓ Removed provider '{provider}'[/green]")
 
 
 @provider_app.command("login")
@@ -1010,10 +1164,10 @@ def provider_login(
     provider: str = typer.Argument(..., help="Provider name (e.g. 'ollama', 'lmstudio', 'vllm')"),
 ):
     """Authenticate with a provider (not needed for local providers)."""
-    from sarathy.providers.registry import PROVIDERS
+    from sarathy.providers.registry import PROVIDERS, find_by_name
 
     key = provider.replace("-", "_")
-    spec = next((s for s in PROVIDERS if s.name == key), None)
+    spec = find_by_name(key)
     if not spec:
         names = ", ".join(s.name for s in PROVIDERS)
         console.print(f"[red]Unknown provider: {provider}[/red]  Available: {names}")

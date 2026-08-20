@@ -72,6 +72,18 @@ BUILTIN_COMMANDS = {
         description="Execute shell command directly",
         subcommands=[],
     ),
+    "model": BuiltinCommand(
+        name="model",
+        description="Show or change the active model",
+        subcommands=["status", "list", "set"],
+        has_status=True,
+    ),
+    "provider": BuiltinCommand(
+        name="provider",
+        description="List or switch LLM providers",
+        subcommands=["status", "list", "set", "models"],
+        has_status=True,
+    ),
 }
 
 

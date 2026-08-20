@@ -62,3 +62,29 @@ export interface StatusResponse {
 export interface ConfigResponse {
   [key: string]: unknown;
 }
+
+export interface ProviderInfo {
+  name: string;
+  label: string;
+  kind: string;
+  apiBase: string | null;
+  hasApiKey: boolean;
+  isLocal: boolean;
+  active: boolean;
+}
+
+export interface ProvidersResponse {
+  providers: ProviderInfo[];
+  active: string;
+}
+
+export interface ProviderModelsResponse {
+  provider: string;
+  models: string[];
+}
+
+export interface RuntimeSetResponse {
+  ok: boolean;
+  applied: boolean;
+  error?: string;
+}

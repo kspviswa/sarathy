@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from pathlib import Path
 
 from loguru import logger
 from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
@@ -438,8 +439,14 @@ class TelegramChannel(BaseChannel):
                     if media_type in ("voice", "audio")
                     else "document"
                 )
+                # Pass an explicit filename so documents/audio keep their original
+                # name (PTB otherwise derives it from the open file handle).
+                filename = Path(media_path).name or None
                 with open(media_path, "rb") as f:
-                    await sender(chat_id=chat_id_int, **{param: f}, reply_parameters=reply_params)
+                    kwargs = {param: f, "reply_parameters": reply_params}
+                    if media_type in ("document", "audio", "voice") and filename:
+                        kwargs["filename"] = filename
+                    await sender(chat_id=chat_id_int, **kwargs)
             except Exception as e:
                 filename = media_path.rsplit("/", 1)[-1]
                 logger.error("Failed to send media {}: {}", media_path, e)
@@ -671,11 +678,12 @@ class TelegramChannel(BaseChannel):
 
             try:
                 file = await self._app.bot.get_file(media_file.file_id)
-                ext = self._get_extension(media_type, getattr(media_file, "mime_type", None))
+                original_name = getattr(media_file, "file_name", None) or ""
+                ext = self._get_extension(
+                    media_type, getattr(media_file, "mime_type", None), original_name
+                )
 
                 # Save to workspace/media/
-                from pathlib import Path
-
                 media_dir = Path.home() / ".sarathy" / "media"
                 media_dir.mkdir(parents=True, exist_ok=True)
 
@@ -788,16 +796,41 @@ class TelegramChannel(BaseChannel):
         """Log polling / handler errors instead of silently swallowing them."""
         logger.error("Telegram error: {}", context.error)
 
-    def _get_extension(self, media_type: str, mime_type: str | None) -> str:
-        """Get file extension based on media type."""
+    def _get_extension(self, media_type: str, mime_type: str | None, file_name: str = "") -> str:
+        """Get file extension based on media type.
+
+        Priority:
+        1. The original filename's extension (preserves ``.pdf``, ``.mp3``, ...)
+        2. The mime-type map
+        3. A media-type default
+        """
+        if file_name:
+            ext = Path(file_name).suffix.lower()
+            if ext:
+                return ext
+
         if mime_type:
             ext_map = {
                 "image/jpeg": ".jpg",
                 "image/png": ".png",
                 "image/gif": ".gif",
+                "image/webp": ".webp",
                 "audio/ogg": ".ogg",
                 "audio/mpeg": ".mp3",
                 "audio/mp4": ".m4a",
+                "audio/aac": ".aac",
+                "audio/wav": ".wav",
+                "audio/x-wav": ".wav",
+                "video/mp4": ".mp4",
+                "application/pdf": ".pdf",
+                "application/json": ".json",
+                "application/zip": ".zip",
+                "application/x-tar": ".tar",
+                "application/gzip": ".gz",
+                "text/plain": ".txt",
+                "text/markdown": ".md",
+                "text/html": ".html",
+                "text/csv": ".csv",
             }
             if mime_type in ext_map:
                 return ext_map[mime_type]

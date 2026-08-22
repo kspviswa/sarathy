@@ -739,10 +739,18 @@ class AgentLoop:
     async def _handle_new_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
         """Handle /new command - archive session and start fresh."""
         try:
-            # Archive session to archived_sessions/ before clearing
+            # Archive session to archived_sessions/ before clearing.
+            # Stamp archived=True only when the reviewer has no pending
+            # snapshots for this session (live review finished); otherwise
+            # leave False so unverified archives are re-checked later.
             if session.messages:
-                session.archive_session()
-                logger.info("Archived session {} to archived_sessions/", session.key)
+                learned = self.reviewer is None or not self.reviewer.has_pending(session.key)
+                session.archive_session(learned=learned)
+                logger.info(
+                    "Archived session {} to archived_sessions/ (learned={})",
+                    session.key,
+                    learned,
+                )
         except Exception as e:
             logger.error("Failed to archive session {}: {}", session.key, e)
             # Continue anyway - best effort archival

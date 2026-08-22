@@ -66,6 +66,7 @@ class BackgroundReviewer:
         enabled: bool = True,
         cooldown_seconds: int = 5,
         max_queue_size: int = 5,
+        max_retries: int = 3,
     ):
         self._provider = provider
         self._workspace = Path(str(workspace)) if workspace else Path.home() / ".sarathy" / "workspace"
@@ -73,10 +74,13 @@ class BackgroundReviewer:
         self._enabled = enabled
         self._cooldown = cooldown_seconds
         self._max_queue = max_queue_size
+        self._max_retries = max_retries
         self._queue: list[dict[str, Any]] = []
+        self._inflight: dict[str, Any] | None = None
         self._llm_idle = asyncio.Event()
         self._llm_idle.set()
         self._worker: asyncio.Task | None = None
+        self._sweep_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start the background worker."""
@@ -88,12 +92,15 @@ class BackgroundReviewer:
 
     async def stop(self) -> None:
         """Stop the worker gracefully."""
-        if self._worker:
-            self._worker.cancel()
-            try:
-                await self._worker
-            except asyncio.CancelledError:
-                pass
+        for attr in ("_worker", "_sweep_task"):
+            task = getattr(self, attr, None)
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                setattr(self, attr, None)
 
     def mark_busy(self) -> None:
         """Called before LLM call — review cannot start."""
@@ -111,8 +118,65 @@ class BackgroundReviewer:
             self._queue.pop(0)
         self._queue.append({"messages": messages, "session_key": session_key})
 
+    def has_pending(self, session_key: str) -> bool:
+        """Check whether any snapshots for session_key are queued or mid-flight.
+
+        Used by /new to decide whether live review had finished before the
+        session was archived. Returns False when the reviewer is disabled —
+        nothing is pending because the pipeline is inactive.
+        """
+        if not self._enabled:
+            return False
+        if any(t.get("session_key") == session_key for t in self._queue):
+            return True
+        inflight = self._inflight
+        return bool(inflight and inflight.get("session_key") == session_key)
+
+    def schedule_archive_sweep(self, session_manager: Any) -> None:
+        """Schedule a one-shot crash-recovery pass over unverified archives.
+
+        Called at gateway startup. Processes archived_sessions/ files stamped
+        archived=False (live review never confirmed before archiving) through
+        the normal extraction path, then flips their stamp. Non-blocking.
+        """
+        if not self._enabled:
+            logger.info("Archive sweep skipped (review disabled)")
+            return
+        self._sweep_task = asyncio.create_task(self._archive_sweep(session_manager))
+
+    async def _archive_sweep(self, session_manager: Any) -> int:
+        """Re-verify each archived session stamped archived=False."""
+        if not self._enabled:
+            return 0
+        sessions = session_manager.get_unarchived()
+        if not sessions:
+            logger.debug("Archive sweep: nothing unverified")
+            return 0
+
+        logger.info("Archive sweep: {} unverified session(s)", len(sessions))
+        processed = 0
+        for session in sessions:
+            # Respect the idle gate — never overlap a live conversation turn.
+            await self._llm_idle.wait()
+            task = {"messages": session.messages, "session_key": session.key}
+            try:
+                await self._process_review(task)
+            except Exception as e:
+                # Stamp stays False; the file is retried on next startup.
+                logger.error("Archive sweep failed for {}: {}", session.key, e)
+                continue
+            session_manager.mark_session_archived(session.key)
+            processed += 1
+
+        logger.info("Archive sweep verified {}/{} unverified session(s)", processed, len(sessions))
+        return processed
+
     async def _worker_loop(self) -> None:
-        """Process reviews when LLM is idle."""
+        """Process reviews when LLM is idle.
+
+        A task is removed from the queue only after its review succeeds;
+        failures are retried up to max_retries times, then dropped.
+        """
         while True:
             try:
                 if not self._queue:
@@ -126,10 +190,31 @@ class BackgroundReviewer:
                     continue
 
                 task = self._queue.pop(0)
+                self._inflight = task
                 try:
                     await self._process_review(task)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
-                    logger.error("Background review failed: {}", e)
+                    task["retries"] = task.get("retries", 0) + 1
+                    if task["retries"] > self._max_retries:
+                        logger.error(
+                            "Background review for session {} dropped after {} attempts: {}",
+                            task.get("session_key", "?"),
+                            task["retries"],
+                            e,
+                        )
+                    else:
+                        logger.warning(
+                            "Background review failed (attempt {}/{}): {}",
+                            task["retries"],
+                            self._max_retries,
+                            e,
+                        )
+                        # Requeue at the end so one bad snapshot cannot block others.
+                        self._queue.append(task)
+                finally:
+                    self._inflight = None
 
             except asyncio.CancelledError:
                 break
@@ -146,24 +231,21 @@ class BackgroundReviewer:
         if not conversation_text.strip():
             return
 
-        try:
-            response = await self._provider.chat(
-                messages=[
-                    {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Review this conversation:\n\n{conversation_text}"},
-                ],
-            )
-        except Exception as e:
-            logger.error("Review LLM call failed: {}", e)
-            return
+        # Let provider failures propagate: the worker retries the task.
+        response = await self._provider.chat(
+            messages=[
+                {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Review this conversation:\n\n{conversation_text}"},
+            ],
+        )
 
         content = response.content if hasattr(response, "content") else str(response)
 
         try:
             result = json.loads(content)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse review response as JSON: {}", content[:200])
-            return
+        except json.JSONDecodeError as e:
+            # Local models occasionally emit malformed JSON; treat as retryable.
+            raise ValueError(f"Unparseable review response: {content[:200]}") from e
 
         if not isinstance(result, dict) or result.get("nothing_found"):
             logger.debug("No learnings from session {}", session_key)

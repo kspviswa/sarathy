@@ -33,7 +33,7 @@ class Session:
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated to files
     max_size: int | None = None  # Auto-create new session when messages >= this count
-    archived: bool = False  # False when newly created, True after background thread processes
+    archived: bool = False  # True only when live review was confirmed done at archive time
     pending_lessons: list[str] = field(default_factory=list)
     pending_skills: list[str] = field(default_factory=list)
 
@@ -92,11 +92,14 @@ class Session:
         if hasattr(self, "_manager") and self._manager is not None:
             self._manager._cache[self.key] = new_session
 
-    def archive_session(self) -> None:
+    def archive_session(self, learned: bool = False) -> None:
         """Archive session to timestamped JSONL file in archived_sessions directory.
 
-        The session is saved with archived=False. The background thread will later
-        set archived=True after processing.
+        Args:
+            learned: True only when live per-turn review is confirmed complete
+                for this session (e.g. /new checked via reviewer.has_pending).
+                Callers that cannot confirm it keep the default False so the
+                file is treated as unverified and re-checked later.
         """
         from datetime import datetime
         from pathlib import Path
@@ -118,7 +121,7 @@ class Session:
                 "updated_at": self.updated_at.isoformat(),
                 "metadata": self.metadata,
                 "last_consolidated": self.last_consolidated,
-                "archived": False,
+                "archived": learned,
                 "pending_lessons": self.pending_lessons,
                 "pending_skills": self.pending_skills,
             }
@@ -322,11 +325,16 @@ class SessionManager:
         return new_session
 
     def mark_session_archived(self, key: str) -> None:
-        """Mark a session as archived in the archived_sessions/ file."""
+        """Mark archived sessions as verified in the archived_sessions/ files.
+
+        Flips every file for this key that is still stamped archived=False —
+        multiple archives can exist for one session key (one per /new).
+        """
         archive_dir = Path(self.workspace) / "archived_sessions"
         if not archive_dir.exists():
             return
 
+        marked = 0
         for filepath in archive_dir.glob("session-*.jsonl"):
             try:
                 with open(filepath, encoding="utf-8") as f:
@@ -334,14 +342,20 @@ class SessionManager:
                 if not lines:
                     continue
                 metadata = json.loads(lines[0])
-                if metadata.get("key") == key:
+                if (
+                    metadata.get("_type") == "metadata"
+                    and metadata.get("key") == key
+                    and not metadata.get("archived", False)
+                ):
                     metadata["archived"] = True
                     lines[0] = json.dumps(metadata, ensure_ascii=False) + "\n"
                     filepath.write_text("".join(lines), encoding="utf-8")
-                    logger.info("Marked session {} as archived", key)
-                    break
+                    marked += 1
             except Exception as e:
                 logger.warning("Failed to mark session {} as archived: {}", key, e)
+
+        if marked:
+            logger.info("Marked {} archived session(s) of {} as verified", marked, key)
 
     def get_unarchived(self) -> list[Session]:
         """Get all unarchived sessions from archived_sessions/ directory.

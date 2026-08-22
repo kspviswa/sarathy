@@ -32,4 +32,4 @@ Write important facts immediately using `edit_file` or `write_file`:
 
 ## Auto-consolidation
 
-Old conversations are automatically archived to `archived_sessions/` when the session grows large or `/new` is used. The background archival thread extracts long-term facts to MEMORY.md. You don't need to manage this.
+Old conversations are automatically archived to `archived_sessions/` when the session grows large or `/new` is used. Long-term facts are extracted to MEMORY.md/USER.md by an idle-time background review that runs after each conversation turn — there is no separate archival thread. Archived sessions stamped `archived: false` were archived before their review finished and are re-checked once at gateway startup as crash recovery. You don't need to manage this.

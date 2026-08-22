@@ -76,6 +76,8 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     )
     agent.reviewer = reviewer
     await reviewer.start()
+    # Crash recovery: re-verify archives whose live review never completed.
+    reviewer.schedule_archive_sweep(session_manager)
 
     async def on_cron_job(job: CronJob) -> str | None:
         response = await agent.process_direct(

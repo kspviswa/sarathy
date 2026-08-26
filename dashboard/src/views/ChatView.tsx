@@ -422,7 +422,7 @@ export function ChatView({
         </div>
       )}
 
-      <div className="flex items-center justify-between border-b bg-background/80 px-4 py-2 backdrop-blur">
+      <div className="safe-top flex items-center justify-between border-b bg-background/80 px-4 py-2 backdrop-blur">
         <div className="flex items-center gap-2">
           <MessageSquareText className="size-4 text-muted-foreground" />
           <span className="text-sm font-semibold">Chat</span>
@@ -627,16 +627,17 @@ function MessageRow({
     <div className={cn("group flex", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[85%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
+          "max-w-[85%] rounded-2xl px-4 text-[15px] leading-relaxed",
           isUser
-            ? "bg-primary text-primary-foreground"
-            : "border border-border bg-card text-card-foreground",
+            ? "bg-primary text-primary-foreground py-2"
+            : "border border-border bg-card text-card-foreground py-2.5",
         )}
       >
         {showThinking && (
           <ThinkingSection
             toolHints={message.toolHints || []}
             thinkingContent={message.thinkingContent || ""}
+            done={!message.progress}
             onOpenFile={onOpenFile}
           />
         )}
@@ -703,7 +704,7 @@ function MessageRow({
           </div>
         )}
         {isUser && (
-          <div className="mt-1 -mb-1 opacity-0 transition-opacity group-hover:opacity-100">
+          <div className="mt-0.5 opacity-0 transition-opacity group-hover:opacity-100">
             <div className="flex justify-end">
               <MessageActions content={cleanContent} onReply={onReply} />
             </div>

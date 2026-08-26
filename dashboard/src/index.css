@@ -97,6 +97,10 @@
   .safe-bottom {
     padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
   }
+  .standalone-fix {
+    height: 100dvh;
+    height: 100vh; /* fallback for standalone PWA where dvh may miscalculate */
+  }
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
@@ -109,6 +113,8 @@
 /* Markdown chat rendering */
 .md {
   @apply text-[15px] leading-relaxed break-words;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .md p {
   @apply my-1.5;
@@ -142,15 +148,19 @@
 }
 .md code {
   @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[13px] text-foreground;
+  word-break: break-word;
 }
 .md pre {
   @apply my-2 overflow-x-auto rounded-lg bg-muted p-3;
 }
 .md pre code {
-  @apply bg-transparent p-0 text-[13px];
+  @apply bg-transparent p-0 font-mono text-[13px] text-foreground;
+  white-space: pre;
 }
 .md table {
   @apply my-2 w-full border-collapse text-sm;
+  display: block;
+  overflow-x: auto;
 }
 .md th,
 .md td {

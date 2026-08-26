@@ -229,7 +229,7 @@ function AppInner() {
   };
 
   return (
-    <div className="flex h-dvh flex-col md:flex-row">
+    <div className="standalone-fix flex flex-col md:flex-row">
       <nav className="safe-bottom order-2 flex shrink-0 items-center justify-around border-t bg-background px-2 py-1 md:order-1 md:w-52 md:flex-col md:items-stretch md:justify-start md:border-r md:border-t-0 md:py-4">
         <div className="mb-4 hidden items-center gap-2 px-3 md:flex">
           <Logo size={28} />

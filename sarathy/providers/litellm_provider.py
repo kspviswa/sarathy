@@ -181,6 +181,7 @@ class LiteLLMProvider(LLMProvider):
         reasoning_effort: str | None = None,
         stream: bool = False,
         on_progress: callable | None = None,
+        on_thinking: callable | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -241,7 +242,7 @@ class LiteLLMProvider(LLMProvider):
 
         try:
             if stream and on_progress:
-                return await self._stream_chat(kwargs, on_progress)
+                return await self._stream_chat(kwargs, on_progress, on_thinking=on_thinking)
             response = await acompletion(**kwargs)
             return self._parse_response(response)
         except Exception as e:
@@ -250,7 +251,12 @@ class LiteLLMProvider(LLMProvider):
                 finish_reason="error",
             )
 
-    async def _stream_chat(self, kwargs: dict, on_progress: callable) -> LLMResponse:
+    async def _stream_chat(
+        self,
+        kwargs: dict,
+        on_progress: callable,
+        on_thinking: callable | None = None,
+    ) -> LLMResponse:
         """Handle streaming chat completion."""
         accumulated_content = ""
         accumulated_reasoning = ""
@@ -278,6 +284,11 @@ class LiteLLMProvider(LLMProvider):
                 )
                 if reasoning:
                     accumulated_reasoning += reasoning
+                    if on_thinking and accumulated_reasoning:
+                        if asyncio.iscoroutinefunction(on_thinking):
+                            await on_thinking(accumulated_reasoning)
+                        else:
+                            on_thinking(accumulated_reasoning)
 
                 if delta.content:
                     accumulated_content += delta.content

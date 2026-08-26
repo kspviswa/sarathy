@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import type { FileNode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export function FilesView() {
+export function FilesView({ initialFile }: { initialFile?: string | null }) {
   const [tree, setTree] = useState<FileNode[] | null>(null);
   const [root, setRoot] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -36,6 +36,12 @@ export function FilesView() {
   useEffect(() => {
     void loadTree();
   }, [loadTree]);
+
+  useEffect(() => {
+    if (initialFile && !loadingTree) {
+      void openFile(initialFile);
+    }
+  }, [initialFile, loadingTree]);
 
   async function openFile(p: string) {
     setLoadingFile(true);

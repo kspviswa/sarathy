@@ -1,5 +1,13 @@
-import { Square, WandSparkles } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Check,
+  Copy,
+  RotateCcw,
+  Square,
+  WandSparkles,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
@@ -7,6 +15,8 @@ import { toast } from "sonner";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { CodeBlock } from "@/components/CodeBlock";
+import { ThinkingSection } from "@/components/ThinkingSection";
 import { cn } from "@/lib/utils";
 
 export interface ChatMessage {
@@ -14,6 +24,65 @@ export interface ChatMessage {
   content: string;
   progress?: boolean;
   toolHint?: string;
+  toolHints?: string[];
+  thinkingContent?: string;
+  messageId?: string;
+}
+
+interface MessageActionsProps {
+  content: string;
+  onRegenerate?: () => void;
+}
+
+function MessageActions({ content, onRegenerate }: MessageActionsProps) {
+  const [copied, setCopied] = useState(false);
+
+  const copyMessage = useCallback(() => {
+    void navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [content]);
+
+  return (
+    <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7 text-muted-foreground hover:text-foreground"
+        onClick={copyMessage}
+        title="Copy"
+      >
+        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7 text-muted-foreground hover:text-foreground"
+        title="Good response"
+      >
+        <ArrowUpFromLine className="size-3.5" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7 text-muted-foreground hover:text-foreground"
+        title="Bad response"
+      >
+        <ArrowDownToLine className="size-3.5" />
+      </Button>
+      {onRegenerate && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 text-muted-foreground hover:text-foreground"
+          onClick={onRegenerate}
+          title="Regenerate"
+        >
+          <RotateCcw className="size-3.5" />
+        </Button>
+      )}
+    </div>
+  );
 }
 
 export function ChatView({
@@ -21,18 +90,38 @@ export function ChatView({
   streaming,
   onSend,
   onStop,
+  onOpenFile,
+  onRegenerate,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
   onSend: (content: string) => Promise<void> | void;
   onStop: () => Promise<void> | void;
+  onOpenFile?: (path: string) => void;
+  onRegenerate?: () => void;
 }) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+
+  const checkNearBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const threshold = 100;
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  }, []);
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el) el.addEventListener("scroll", checkNearBottom, { passive: true });
+    return () => el?.removeEventListener("scroll", checkNearBottom);
+  }, [checkNearBottom]);
+
+  useEffect(() => {
+    if (isNearBottomRef.current) {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
   }, [messages, streaming]);
 
   async function send() {
@@ -57,14 +146,24 @@ export function ChatView({
             </div>
           ) : null}
           {messages.map((m, i) => (
-            <MessageRow key={i} message={m} />
+            <MessageRow
+              key={i}
+              message={m}
+              onOpenFile={onOpenFile}
+              onRegenerate={m.role === "assistant" && !streaming ? onRegenerate : undefined}
+            />
           ))}
-          {streaming ? (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
-              Sarathy is responding…
-            </div>
-          ) : null}
+          {streaming &&
+            (() => {
+              const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+              const hasContent = lastAssistant && lastAssistant.content.length > 0;
+              return !hasContent ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
+                  Sarathy is responding…
+                </div>
+              ) : null;
+            })()}
         </div>
       </div>
 
@@ -98,10 +197,23 @@ export function ChatView({
   );
 }
 
-function MessageRow({ message }: { message: ChatMessage }) {
+function MessageRow({
+  message,
+  onOpenFile,
+  onRegenerate,
+}: {
+  message: ChatMessage;
+  onOpenFile?: (path: string) => void;
+  onRegenerate?: () => void;
+}) {
   const isUser = message.role === "user";
+  const isStreaming = message.progress && message.content.length === 0;
+  const hasContent = message.content.length > 0;
+  const showThinking =
+    !isUser && (message.toolHints?.length || 0) + (message.thinkingContent?.length || 0) > 0;
+
   return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+    <div className={cn("group flex", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
           "max-w-[85%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
@@ -110,22 +222,57 @@ function MessageRow({ message }: { message: ChatMessage }) {
             : "border border-border bg-card text-card-foreground",
         )}
       >
-        {message.toolHint && !isUser ? (
-          <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-            <WandSparkles className="size-3" />
-            {message.toolHint}
-          </div>
-        ) : null}
+        {showThinking && (
+          <ThinkingSection
+            toolHints={message.toolHints || []}
+            thinkingContent={message.thinkingContent || ""}
+            onOpenFile={onOpenFile}
+          />
+        )}
         {isUser ? (
           <div className="whitespace-pre-wrap break-words">{message.content}</div>
+        ) : isStreaming ? (
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
+            thinking…
+          </div>
+        ) : hasContent ? (
+          <div className="md">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                code: ({ children, className, ...props }) => {
+                  const isBlock = className?.startsWith("language-");
+                  if (isBlock) {
+                    return (
+                      <CodeBlock className={className} onOpenFile={onOpenFile}>
+                        {String(children)}
+                      </CodeBlock>
+                    );
+                  }
+                  return (
+                    <code className={className} {...props}>
+                      {children}
+                    </code>
+                  );
+                },
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+            {message.progress && (
+              <span className="streaming-caret" />
+            )}
+          </div>
         ) : message.progress ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
             thinking…
           </div>
-        ) : (
-          <div className="md">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+        ) : null}
+        {!isUser && hasContent && (
+          <div className="mt-1 -mb-1">
+            <MessageActions content={message.content} onRegenerate={onRegenerate} />
           </div>
         )}
       </div>

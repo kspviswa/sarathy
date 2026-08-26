@@ -259,6 +259,7 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
+        on_thinking: Callable[..., Awaitable[None]] | None = None,
         reasoning_effort: str | None = None,
         channel: str | None = None,
         session_metadata: dict | None = None,
@@ -303,6 +304,7 @@ class AgentLoop:
                     reasoning_effort=reasoning_effort or self.reasoning_effort,
                     stream=should_stream,
                     on_progress=on_progress if should_stream else None,
+                    on_thinking=on_thinking if should_stream else None,
                 )
             finally:
                 if self.reviewer:
@@ -672,6 +674,18 @@ class AgentLoop:
                 )
             )
 
+        async def _bus_thinking(content: str) -> None:
+            meta = dict(msg.metadata or {})
+            meta["_thinking"] = True
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=content,
+                    metadata=meta,
+                )
+            )
+
         verbose_flag = session.metadata.get("verbose", False)
 
         effective_reasoning_effort = (
@@ -680,6 +694,7 @@ class AgentLoop:
         final_content, _, all_msgs, stats = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
+            on_thinking=_bus_thinking,
             reasoning_effort=effective_reasoning_effort,
             channel=msg.channel,
             session_metadata=session.metadata,

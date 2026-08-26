@@ -4,6 +4,7 @@ export interface OutboundMessage {
   chatId: string;
   content: string;
   media: string[];
+  replyTo: string | null;
   metadata: Record<string, unknown>;
 }
 

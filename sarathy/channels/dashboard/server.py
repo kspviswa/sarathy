@@ -12,6 +12,7 @@ import asyncio
 import json
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Callable
 
@@ -35,6 +36,19 @@ MAX_FILE_BYTES = 2 * 1024 * 1024  # Workspace file read/write cap
 MAX_TREE_ENTRIES = 5000  # Guard against pathological workspaces
 _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_FAILURES = 10
+_MEDIA_DIR = Path.home() / ".sarathy" / "media"
+
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
+_AUDIO_EXTS = {".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"}
+
+
+def _media_type_from_path(path: str) -> str:
+    ext = Path(path).suffix.lower()
+    if ext in _IMAGE_EXTS:
+        return "image"
+    if ext in _AUDIO_EXTS:
+        return "voice"
+    return "file"
 
 
 class DashboardChannel(BaseChannel):
@@ -126,6 +140,7 @@ class DashboardChannel(BaseChannel):
                 "chatId": msg.chat_id,
                 "content": msg.content,
                 "media": msg.media,
+                "replyTo": msg.reply_to,
                 "metadata": msg.metadata or {},
             },
             ensure_ascii=False,
@@ -226,6 +241,8 @@ class DashboardChannel(BaseChannel):
         app.router.add_post("/api/auth/logout", self._api_logout)
         app.router.add_post("/api/chat", self._api_chat)
         app.router.add_post("/api/chat/stop", self._api_chat_stop)
+        app.router.add_post("/api/media", self._api_media_upload)
+        app.router.add_get("/api/media", self._api_media_serve)
         app.router.add_get("/api/config", self._api_get_config)
         app.router.add_put("/api/config", self._api_put_config)
         app.router.add_get("/api/providers", self._api_providers_list)
@@ -298,13 +315,23 @@ class DashboardChannel(BaseChannel):
 
     # ------------------------------------------------------------------ chat api
 
-    def _inbound(self, content: str, device_id: str) -> InboundMessage:
+    def _inbound(
+        self,
+        content: str,
+        device_id: str,
+        media: list[str] | None = None,
+        reply_to: str | None = None,
+    ) -> InboundMessage:
+        metadata: dict = {"device_id": device_id}
+        if reply_to:
+            metadata["reply_to"] = reply_to
         return InboundMessage(
             channel=self.name,
             sender_id=f"dashboard:{device_id}",
             chat_id="console",
             content=content,
-            metadata={"device_id": device_id},
+            media=media or [],
+            metadata=metadata,
             session_key_override=DASHBOARD_SESSION_KEY,
         )
 
@@ -314,14 +341,72 @@ class DashboardChannel(BaseChannel):
         except Exception:
             return web.json_response({"error": "invalid body"}, status=400)
         content = (data.get("content") or "").strip()
-        if not content:
+        media_paths = data.get("media") or []
+        reply_to = data.get("reply_to")
+        if not content and not media_paths:
             return web.json_response({"error": "empty message"}, status=400)
-        await self.bus.publish_inbound(self._inbound(content, request.get("device_id", "")))
+        if media_paths:
+            for mp in media_paths:
+                mtype = _media_type_from_path(mp)
+                if f"[{mtype}:" not in content:
+                    content = (content + "\n" if content else "") + f"[{mtype}: {mp}]"
+        if not content:
+            content = "[empty message]"
+        await self.bus.publish_inbound(
+            self._inbound(content, request.get("device_id", ""), media=media_paths, reply_to=reply_to)
+        )
         return web.json_response({"ok": True})
 
     async def _api_chat_stop(self, request: web.Request) -> web.Response:
         await self.bus.publish_inbound(self._inbound("/stop", request.get("device_id", "")))
         return web.json_response({"ok": True})
+
+    # ------------------------------------------------------------------ media api
+
+    async def _api_media_upload(self, request: web.Request) -> web.Response:
+        reader = await request.multipart()
+        field = await reader.next()
+        if field is None or field.name != "file":
+            return web.json_response({"error": "missing file field"}, status=400)
+
+        original = field.filename or "upload"
+        ext = Path(original).suffix.lower() or ""
+        unique_name = f"{uuid.uuid4().hex[:16]}{ext}"
+        _MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        dest = _MEDIA_DIR / unique_name
+
+        size = 0
+        max_size = 20 * 1024 * 1024
+        with open(dest, "wb") as f:
+            while True:
+                chunk = await field.read_chunk(8192)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_size:
+                    f.close()
+                    dest.unlink(missing_ok=True)
+                    return web.json_response({"error": "file too large"}, status=413)
+                f.write(chunk)
+
+        return web.json_response({"ok": True, "path": str(dest), "url": f"/api/media?path={dest}"})
+
+    async def _api_media_serve(self, request: web.Request) -> web.Response:
+        raw = request.query.get("path", "")
+        if not raw:
+            return web.json_response({"error": "missing path"}, status=400)
+        try:
+            resolved = Path(raw).resolve()
+        except Exception:
+            return web.json_response({"error": "invalid path"}, status=400)
+
+        media_root = _MEDIA_DIR.resolve()
+        if resolved != media_root and media_root not in resolved.parents:
+            return web.json_response({"error": "forbidden"}, status=403)
+        if not resolved.is_file():
+            return web.json_response({"error": "not found"}, status=404)
+
+        return web.FileResponse(resolved)
 
     # ------------------------------------------------------------------ config api
 

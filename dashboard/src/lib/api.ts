@@ -70,6 +70,30 @@ export const api = {
   sendChat: (content: string) =>
     request<{ ok: boolean }>("/api/chat", { method: "POST", body: JSON.stringify({ content }) }),
 
+  sendChatWithMedia: (content: string, media: string[], replyTo?: string | null) =>
+    request<{ ok: boolean }>("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({ content, media, reply_to: replyTo ?? null }),
+    }),
+
+  uploadMedia: async (file: File): Promise<{ ok: boolean; path: string; url: string }> => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch("/api/media", { method: "POST", headers, body: form });
+    if (res.status === 401) throw new AuthError("unauthorized");
+    if (!res.ok) {
+      let message = res.statusText || "Upload failed";
+      try {
+        const body = await res.json();
+        if (body?.error) message = String(body.error);
+      } catch { /* ignore */ }
+      throw new Error(message);
+    }
+    return res.json();
+  },
+
   stopChat: () => request<{ ok: boolean }>("/api/chat/stop", { method: "POST" }),
 
   getConfig: () => request<ConfigResponse>("/api/config"),

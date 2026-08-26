@@ -15,6 +15,8 @@ import { SessionsView } from "@/views/SessionsView";
 import { StatusView } from "@/views/StatusView";
 import { cn } from "@/lib/utils";
 
+export type { ChatMessage } from "@/views/ChatView";
+
 type Tab = "chat" | "files" | "sessions" | "config" | "status";
 
 const TABS: { id: Tab; label: string; icon: typeof MessageSquareText }[] = [
@@ -80,16 +82,16 @@ function AppInner() {
           if (last?.role === "assistant" && last.progress) {
             return [
               ...prev.slice(0, -1),
-              { ...last, content: m.content, progress: false },
+              { ...last, content: m.content, progress: false, media: m.media?.length ? m.media : last.media, replyTo: m.replyTo ?? last.replyTo },
             ];
           }
           if (last?.role === "assistant" && !last.progress) {
             return [
               ...prev.slice(0, -1),
-              { ...last, content: last.content + m.content, progress: false },
+              { ...last, content: last.content + m.content, progress: false, media: m.media?.length ? m.media : last.media, replyTo: m.replyTo ?? last.replyTo },
             ];
           }
-          return [...prev, { role: "assistant", content: m.content }];
+          return [...prev, { role: "assistant", content: m.content, media: m.media, replyTo: m.replyTo }];
         });
         return;
       }
@@ -145,9 +147,9 @@ function AppInner() {
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && !last.progress) {
-          return [...prev.slice(0, -1), { ...last, content: last.content + m.content }];
+          return [...prev.slice(0, -1), { ...last, content: last.content + m.content, media: m.media?.length ? m.media : last.media, replyTo: m.replyTo ?? last.replyTo }];
         }
-        return [...prev, { role: "assistant", content: m.content }];
+        return [...prev, { role: "assistant", content: m.content, media: m.media, replyTo: m.replyTo }];
       });
     });
     socket.connect();
@@ -159,10 +161,14 @@ function AppInner() {
   }, [authed]);
 
   const handleSend = useCallback(
-    async (content: string) => {
+    async (content: string, media?: string[], replyTo?: string | null, replyToContent?: string) => {
       lastUserMessageRef.current = content;
-      setMessages((prev) => [...prev, { role: "user", content }]);
-      await api.sendChat(content);
+      setMessages((prev) => [...prev, { role: "user", content, media, replyTo, replyToContent }]);
+      if (media && media.length > 0) {
+        await api.sendChatWithMedia(content, media, replyTo);
+      } else {
+        await api.sendChat(content);
+      }
     },
     [],
   );

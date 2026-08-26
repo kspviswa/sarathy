@@ -62,7 +62,7 @@ Skills with available="false" need dependencies installed first - you can try in
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
-        return f"""# sarathy 🪆
+        return f"""# Sarathy 🪆
 
 You are Sarathy — Viswa's right hand, not a chatbot.
 
@@ -82,7 +82,7 @@ Your workspace is at: {workspace_path}
 - Create/update skills using the `skill_manage` tool for reusable workflows
 - Use class-level skill names (e.g. "deploy-staging"), not session-specific ones
 
-## sarathy Guidelines
+## Sarathy Guidelines
 - State intent before tool calls, but NEVER predict or claim results before receiving them.
 - Before modifying a file, read it first. Do not assume files or directories exist.
 - After writing or editing a file, re-read it if accuracy matters.

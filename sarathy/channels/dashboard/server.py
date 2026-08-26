@@ -227,8 +227,11 @@ class DashboardChannel(BaseChannel):
         app.router.add_get("/index.html", self._index)
         app.router.add_get("/manifest.webmanifest", self._static_file)
         app.router.add_get("/sw.js", self._static_file)
+        app.router.add_get("/registerSW.js", self._static_file)
         app.router.add_get("/favicon.ico", self._static_file)
         app.router.add_get("/favicon.svg", self._static_file)
+        # workbox runtime — filename contains a content hash that changes per build
+        app.router.add_route("GET", "re:/workbox-.*\\.js", self._static_file)
         assets = self._static_dir / "assets"
         icons = self._static_dir / "icons"
         if assets.is_dir():

@@ -162,3 +162,18 @@
 .md img {
   @apply my-2 max-h-64 rounded-lg;
 }
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.streaming-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  background-color: var(--primary);
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}

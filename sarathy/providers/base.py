@@ -101,6 +101,7 @@ class LLMProvider(ABC):
         reasoning_effort: str | None = None,
         stream: bool = False,
         on_progress: callable | None = None,
+        on_thinking: callable | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -113,6 +114,7 @@ class LLMProvider(ABC):
             temperature: Sampling temperature.
             stream: Whether to stream the response.
             on_progress: Callback for streaming progress updates.
+            on_thinking: Callback for streaming reasoning/thinking updates.
 
         Returns:
             LLMResponse with content and/or tool calls.

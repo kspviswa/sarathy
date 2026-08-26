@@ -30,7 +30,9 @@ function AppInner() {
   const [tab, setTab] = useState<Tab>("chat");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [openFile, setOpenFile] = useState<string | null>(null);
   const socketRef = useRef<DashboardSocket | null>(null);
+  const lastUserMessageRef = useRef<string>("");
 
   useEffect(() => {
     if (!getToken()) {
@@ -61,8 +63,13 @@ function AppInner() {
         setStreaming(true);
         setMessages((prev) => {
           const last = prev[prev.length - 1];
-          if (last?.role === "assistant") return prev;
-          return [...prev, { role: "assistant", content: "", progress: true }];
+          if (last?.role === "assistant") {
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: m.content, progress: true },
+            ];
+          }
+          return [...prev, { role: "assistant", content: m.content, progress: true }];
         });
         return;
       }
@@ -71,10 +78,16 @@ function AppInner() {
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === "assistant" && last.progress) {
-            return [...prev.slice(0, -1), { role: "assistant", content: m.content }];
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: m.content, progress: false },
+            ];
           }
           if (last?.role === "assistant" && !last.progress) {
-            return [...prev.slice(0, -1), { role: "assistant", content: last.content + m.content }];
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: last.content + m.content, progress: false },
+            ];
           }
           return [...prev, { role: "assistant", content: m.content }];
         });
@@ -83,10 +96,49 @@ function AppInner() {
       if (m.metadata?._tool_hint) {
         setMessages((prev) => {
           const last = prev[prev.length - 1];
+          const hint = String(m.metadata._tool_hint);
           if (last?.role === "assistant") {
-            return [...prev.slice(0, -1), { ...last, toolHint: String(m.metadata._tool_hint) }];
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...last,
+                toolHint: hint,
+                toolHints: [...(last.toolHints || []), hint],
+              },
+            ];
           }
-          return [...prev, { role: "assistant", content: "", toolHint: String(m.metadata._tool_hint) }];
+          return [
+            ...prev,
+            {
+              role: "assistant",
+              content: "",
+              toolHint: hint,
+              toolHints: [hint],
+            },
+          ];
+        });
+        return;
+      }
+      if (m.metadata?._thinking) {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant") {
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...last,
+                thinkingContent: (last.thinkingContent || "") + m.content,
+              },
+            ];
+          }
+          return [
+            ...prev,
+            {
+              role: "assistant",
+              content: "",
+              thinkingContent: m.content,
+            },
+          ];
         });
         return;
       }
@@ -106,15 +158,34 @@ function AppInner() {
     };
   }, [authed]);
 
-  const handleSend = useCallback(async (content: string) => {
-    setMessages((prev) => [...prev, { role: "user", content }]);
-    await api.sendChat(content);
-  }, []);
+  const handleSend = useCallback(
+    async (content: string) => {
+      lastUserMessageRef.current = content;
+      setMessages((prev) => [...prev, { role: "user", content }]);
+      await api.sendChat(content);
+    },
+    [],
+  );
 
   const handleStop = useCallback(async () => {
     await api.stopChat();
     setStreaming(false);
   }, []);
+
+  const handleOpenFile = useCallback(
+    (path: string) => {
+      setOpenFile(path);
+      setTab("files");
+    },
+    [],
+  );
+
+  const handleRegenerate = useCallback(async () => {
+    const lastUserMsg = lastUserMessageRef.current;
+    if (!lastUserMsg || streaming) return;
+    setMessages((prev) => [...prev, { role: "user", content: lastUserMsg }]);
+    await api.sendChat(lastUserMsg);
+  }, [streaming]);
 
   if (authed === null) {
     return (
@@ -158,8 +229,17 @@ function AppInner() {
       </nav>
 
       <main className="order-1 min-h-0 flex-1 md:order-2">
-        {tab === "chat" && <ChatView messages={messages} streaming={streaming} onSend={handleSend} onStop={handleStop} />}
-        {tab === "files" && <FilesView />}
+        {tab === "chat" && (
+          <ChatView
+            messages={messages}
+            streaming={streaming}
+            onSend={handleSend}
+            onStop={handleStop}
+            onOpenFile={handleOpenFile}
+            onRegenerate={handleRegenerate}
+          />
+        )}
+        {tab === "files" && <FilesView initialFile={openFile} />}
         {tab === "sessions" && <SessionsView />}
         {tab === "config" && <ConfigView />}
         {tab === "status" && <StatusView onLoggedOut={logout} />}

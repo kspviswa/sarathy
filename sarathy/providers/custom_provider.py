@@ -32,6 +32,7 @@ class CustomProvider(LLMProvider):
         reasoning_effort: str | None = None,
         stream: bool = False,
         on_progress: callable | None = None,
+        on_thinking: callable | None = None,
     ) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": model or self.default_model,
@@ -49,14 +50,19 @@ class CustomProvider(LLMProvider):
             kwargs.update(tools=tools, tool_choice="auto")
 
         if stream and on_progress:
-            return await self._stream_chat(kwargs, on_progress)
+            return await self._stream_chat(kwargs, on_progress, on_thinking=on_thinking)
 
         try:
             return self._parse(await self._client.chat.completions.create(**kwargs))
         except Exception as e:
             return LLMResponse(content=f"Error: {e}", finish_reason="error")
 
-    async def _stream_chat(self, kwargs: dict, on_progress: callable) -> LLMResponse:
+    async def _stream_chat(
+        self,
+        kwargs: dict,
+        on_progress: callable,
+        on_thinking: callable | None = None,
+    ) -> LLMResponse:
         """Handle streaming chat completion."""
         accumulated_content = ""
         accumulated_reasoning = ""
@@ -79,6 +85,11 @@ class CustomProvider(LLMProvider):
                 )
                 if reasoning:
                     accumulated_reasoning += reasoning
+                    if on_thinking and accumulated_reasoning:
+                        if asyncio.iscoroutinefunction(on_thinking):
+                            await on_thinking(accumulated_reasoning)
+                        else:
+                            on_thinking(accumulated_reasoning)
 
                 if delta.content:
                     accumulated_content += delta.content

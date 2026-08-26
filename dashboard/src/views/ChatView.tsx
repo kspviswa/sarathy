@@ -5,7 +5,9 @@ import {
   Copy,
   Download,
   Mic,
+  MessageSquareText,
   Paperclip,
+  Plus,
   RotateCcw,
   Send,
   Square,
@@ -209,6 +211,7 @@ export function ChatView({
   streaming,
   onSend,
   onStop,
+  onNewChat,
   onOpenFile,
   onRegenerate,
 }: {
@@ -216,6 +219,7 @@ export function ChatView({
   streaming: boolean;
   onSend: (content: string, media?: string[], replyTo?: string | null, replyToContent?: string) => Promise<void> | void;
   onStop: () => Promise<void> | void;
+  onNewChat: () => void;
   onOpenFile?: (path: string) => void;
   onRegenerate?: () => void;
 }) {
@@ -417,6 +421,25 @@ export function ChatView({
           </div>
         </div>
       )}
+
+      <div className="flex items-center justify-between border-b bg-background/80 px-4 py-2 backdrop-blur">
+        <div className="flex items-center gap-2">
+          <MessageSquareText className="size-4 text-muted-foreground" />
+          <span className="text-sm font-semibold">Chat</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {streaming && (
+            <Button variant="secondary" size="sm" onClick={() => void onStop()} title="Stop processing">
+              <Square className="size-4" />
+              <span className="hidden sm:inline">Stop</span>
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={onNewChat} title="Start a new chat">
+            <Plus className="size-4" />
+            <span className="hidden sm:inline">New chat</span>
+          </Button>
+        </div>
+      </div>
 
       <div ref={scrollRef} className="no-scrollbar flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-4">

@@ -183,6 +183,13 @@ function AppInner() {
     [],
   );
 
+  const handleNewChat = useCallback(() => {
+    // Clear the current chat view for a fresh conversation.
+    setMessages([]);
+    setStreaming(false);
+    setOpenFile(null);
+  }, []);
+
   const handleStop = useCallback(async () => {
     await api.stopChat();
     setStreaming(false);
@@ -251,6 +258,7 @@ function AppInner() {
             streaming={streaming}
             onSend={handleSend}
             onStop={handleStop}
+            onNewChat={handleNewChat}
             onOpenFile={handleOpenFile}
             onRegenerate={handleRegenerate}
           />

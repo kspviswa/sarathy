@@ -436,16 +436,13 @@ export function ChatView({
             />
           ))}
           {streaming &&
-            (() => {
-              const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-              const hasContent = lastAssistant && lastAssistant.content.length > 0;
-              return !hasContent ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
-                  Sarathy is responding…
-                </div>
-              ) : null;
-            })()}
+            messages.length > 0 &&
+            messages[messages.length - 1].role === "user" && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
+                Sarathy is responding…
+              </div>
+            )}
         </div>
       </div>
 

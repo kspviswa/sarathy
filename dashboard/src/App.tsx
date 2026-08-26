@@ -61,22 +61,8 @@ function AppInner() {
     socketRef.current = socket;
     const unsubscribe = socket.onMessage((m) => {
       if (m.channel !== "dashboard" && m.chatId !== "console") return;
-      if (m.metadata?._progress) {
-        setStreaming(true);
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.role === "assistant") {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, content: m.content, progress: true },
-            ];
-          }
-          return [...prev, { role: "assistant", content: m.content, progress: true }];
-        });
-        return;
-      }
-      setStreaming(false);
       if (m.metadata?._final) {
+        setStreaming(false);
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === "assistant" && last.progress) {
@@ -95,7 +81,50 @@ function AppInner() {
         });
         return;
       }
+      if (m.metadata?._progress) {
+        // Streaming content frame. Server sends cumulative content, so REPLACE.
+        setStreaming(true);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant") {
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: m.content, progress: true },
+            ];
+          }
+          return [...prev, { role: "assistant", content: m.content, progress: true }];
+        });
+        return;
+      }
+      if (m.metadata?._thinking) {
+        // Thinking frames carry the FULL accumulated reasoning each time, so
+        // REPLACE (never append) to avoid "LLet me...Let me..." duplication.
+        setStreaming(true);
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant") {
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...last,
+                thinkingContent: m.content,
+              },
+            ];
+          }
+          return [
+            ...prev,
+            {
+              role: "assistant",
+              content: "",
+              thinkingContent: m.content,
+            },
+          ];
+        });
+        return;
+      }
       if (m.metadata?._tool_hint) {
+        // Tool calls mean the agent is still working.
+        setStreaming(true);
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           const hint = String(m.metadata._tool_hint);
@@ -121,29 +150,7 @@ function AppInner() {
         });
         return;
       }
-      if (m.metadata?._thinking) {
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.role === "assistant") {
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...last,
-                thinkingContent: (last.thinkingContent || "") + m.content,
-              },
-            ];
-          }
-          return [
-            ...prev,
-            {
-              role: "assistant",
-              content: "",
-              thinkingContent: m.content,
-            },
-          ];
-        });
-        return;
-      }
+      setStreaming(false);
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && !last.progress) {
@@ -164,6 +171,9 @@ function AppInner() {
     async (content: string, media?: string[], replyTo?: string | null, replyToContent?: string) => {
       lastUserMessageRef.current = content;
       setMessages((prev) => [...prev, { role: "user", content, media, replyTo, replyToContent }]);
+      // Optimistically mark as working so the "Sarathy is responding…" indicator
+      // shows immediately, before the first streaming/thinking frame arrives.
+      setStreaming(true);
       if (media && media.length > 0) {
         await api.sendChatWithMedia(content, media, replyTo);
       } else {

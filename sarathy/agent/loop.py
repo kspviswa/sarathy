@@ -675,6 +675,12 @@ class AgentLoop:
             )
 
         async def _bus_thinking(content: str) -> None:
+            # Thinking is a dashboard-only stream. Non-dashboard channels (e.g.
+            # telegram) treat any outbound message without `_progress` as a
+            # final message, so publishing thinking there would spam one
+            # telegram message per reasoning token. Scope it to the dashboard.
+            if msg.channel != "dashboard":
+                return
             meta = dict(msg.metadata or {})
             meta["_thinking"] = True
             await self.bus.publish_outbound(

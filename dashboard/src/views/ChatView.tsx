@@ -619,10 +619,10 @@ function MessageRow({
   onReply?: () => void;
 }) {
   const isUser = message.role === "user";
-  const isStreaming = message.progress && message.content.length === 0;
-  const hasContent = message.content.length > 0;
+  const isStreaming = message.progress && (message.content?.length ?? 0) === 0;
+  const hasContent = (message.content?.length ?? 0) > 0;
   const showThinking =
-    !isUser && (message.toolHints?.length || 0) + (message.thinkingContent?.length || 0) > 0;
+    !isUser && ((message.toolHints?.length ?? 0) + (message.thinkingContent?.length ?? 0) > 0);
 
   const cleanContent = useMemo(() => {
     if (!message.content) return "";

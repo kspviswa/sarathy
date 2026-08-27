@@ -30,7 +30,15 @@ export function useLastSession(
         const detail = await api.session(chosen.key);
         if (cancelled) return;
         const mapped = detail.messages
-          .filter((m) => m.role === "user" || m.role === "assistant")
+          // Only surface user + assistant messages that actually carry text.
+          // Tool-call bookkeeping rows have null/empty content; rendering them
+          // would crash on `.content.length` (blank-screen regression).
+          .filter(
+            (m) =>
+              (m.role === "user" || m.role === "assistant") &&
+              typeof m.content === "string" &&
+              m.content.length > 0,
+          )
           .map<ChatMessage>((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,

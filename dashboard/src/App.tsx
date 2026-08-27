@@ -6,6 +6,7 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import { ThemeProvider } from "@/lib/theme";
+import { useLastSession } from "@/lib/useLastSession";
 import { DashboardSocket } from "@/lib/ws";
 import { ChatView, type ChatMessage } from "@/views/ChatView";
 import { ConfigView } from "@/views/ConfigView";
@@ -38,6 +39,8 @@ function AppInner() {
   const lastUserMessageRef = useRef<string>("");
   const tabRef = useRef<Tab>("chat");
   tabRef.current = tab;
+
+  const loadingHistory = useLastSession(authed === true, setMessages);
 
   useEffect(() => {
     if (!getToken()) {
@@ -277,6 +280,7 @@ function AppInner() {
           <ChatView
             messages={messages}
             streaming={streaming}
+            loading={loadingHistory}
             onSend={handleSend}
             onStop={handleStop}
             onNewChat={handleNewChat}

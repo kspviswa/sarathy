@@ -1,4 +1,5 @@
 import {
+  Loader2,
   Mic,
   Paperclip,
   Plus,
@@ -86,6 +87,7 @@ function MobileMedia({ paths }: { paths: string[] }) {
 export function ChatView({
   messages,
   streaming,
+  loading,
   onSend,
   onStop,
   onNewChat,
@@ -94,6 +96,7 @@ export function ChatView({
 }: {
   messages: ChatMessage[];
   streaming: boolean;
+  loading?: boolean;
   onSend: (content: string, media?: string[], replyTo?: string | null, replyToContent?: string) => Promise<void> | void;
   onStop: () => Promise<void> | void;
   onNewChat: () => void;
@@ -254,10 +257,17 @@ export function ChatView({
 
       <div ref={scrollRef} className="no-scrollbar flex-1 overflow-y-auto px-3 pb-3">
         {messages.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 py-20 text-center">
-            <Logo size={64} />
-            <p className="text-muted-foreground">Say hello to Sarathy anywhere.</p>
-          </div>
+          loading ? (
+            <div className="flex items-center justify-center gap-2 py-20 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Loading…
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-3 py-20 text-center">
+              <Logo size={64} />
+              <p className="text-muted-foreground">Say hello to Sarathy anywhere.</p>
+            </div>
+          )
         ) : null}
         <div className="flex w-full flex-col gap-3">
           {messages.map((m, i) => (

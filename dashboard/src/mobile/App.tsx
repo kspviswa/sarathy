@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Logo } from "@/components/logo";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import { ThemeProvider } from "@/lib/theme";
+import { useLastSession } from "@/lib/useLastSession";
 import { DashboardSocket } from "@/lib/ws";
 import type { ChatMessage as ChatMessageT } from "@/views/ChatView";
 import { PairView } from "@/views/PairView";
@@ -42,6 +43,8 @@ function MobileAppInner() {
   const lastUserMessageRef = useRef<string>("");
   const tabRef = useRef<Tab>("chat");
   tabRef.current = tab;
+
+  const loadingHistory = useLastSession(authed === true, setMessages);
 
   useEffect(() => {
     if (!getToken()) {
@@ -223,6 +226,7 @@ function MobileAppInner() {
           <ChatView
             messages={messages}
             streaming={streaming}
+            loading={loadingHistory}
             onSend={handleSend}
             onStop={handleStop}
             onNewChat={handleNewChat}

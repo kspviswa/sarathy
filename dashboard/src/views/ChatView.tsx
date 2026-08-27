@@ -4,6 +4,7 @@ import {
   Check,
   Copy,
   Download,
+  Loader2,
   Mic,
   MessageSquareText,
   Paperclip,
@@ -209,6 +210,7 @@ function ReplySnippet({ content, onCancel }: { content: string; onCancel: () => 
 export function ChatView({
   messages,
   streaming,
+  loading,
   onSend,
   onStop,
   onNewChat,
@@ -217,6 +219,7 @@ export function ChatView({
 }: {
   messages: ChatMessage[];
   streaming: boolean;
+  loading?: boolean;
   onSend: (content: string, media?: string[], replyTo?: string | null, replyToContent?: string) => Promise<void> | void;
   onStop: () => Promise<void> | void;
   onNewChat: () => void;
@@ -454,10 +457,17 @@ export function ChatView({
       <div ref={scrollRef} className="no-scrollbar flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-4">
           {messages.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 py-16 text-center">
-              <Logo size={56} />
-              <p className="text-muted-foreground">Say hello to Sarathy from anywhere.</p>
-            </div>
+            loading ? (
+              <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                Loading…
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3 py-16 text-center">
+                <Logo size={56} />
+                <p className="text-muted-foreground">Say hello to Sarathy from anywhere.</p>
+              </div>
+            )
           ) : null}
           {messages.map((m, i) => (
             <MessageRow

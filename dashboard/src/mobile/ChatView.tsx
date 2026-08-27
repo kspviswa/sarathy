@@ -403,7 +403,7 @@ function MobileMessage({
 
   const showThinking =
     !isUser && (message.toolHints?.length || 0) + (message.thinkingContent?.length || 0) > 0;
-  const isStreaming = message.progress && message.content.length === 0;
+  const isStreaming = message.progress && (message.content?.length ?? 0) === 0;
 
   return (
     <div className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}>

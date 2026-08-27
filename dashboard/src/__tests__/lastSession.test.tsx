@@ -105,6 +105,32 @@ describe("Last session load — desktop App", () => {
     expect(await screen.findByText(/Say hello to Sarathy/)).toBeInTheDocument();
     expect(screen.queryByText("hello prior")).not.toBeInTheDocument();
   });
+
+  it("does not crash when history contains null-content assistant tool rows (real dashboard:console shape)", async () => {
+    // Regression: the live dashboard:console session stores assistant tool-call
+    // rows with `content: null` alongside normal text messages. These must be
+    // filtered out at load — rendering them crashed MessageRow's
+    // `message.content.length` and unmounted the app (blank screen, 0.6.0).
+    vi.mocked(api.sessions).mockResolvedValue({
+      sessions: [{ key: "dashboard:console", created_at: "t", updated_at: "t" }],
+    });
+    vi.mocked(api.session).mockResolvedValue({
+      key: "dashboard:console",
+      createdAt: "t",
+      messages: [
+        { role: "user", content: "hello prior", timestamp: "t1" },
+        { role: "assistant", content: null, timestamp: "t2" },
+        { role: "tool", content: "some tool result", timestamp: "t3" },
+        { role: "assistant", content: "hi back prior", timestamp: "t4" },
+      ],
+    });
+
+    render(<DesktopApp />);
+
+    // Real text messages still render; null-content tool rows must not crash.
+    expect(await screen.findByText("hello prior")).toBeInTheDocument();
+    expect(screen.getByText("hi back prior")).toBeInTheDocument();
+  });
 });
 
 describe("Last session load — mobile App", () => {

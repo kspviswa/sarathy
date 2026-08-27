@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#09090b" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Sarathy" />
+    <meta name="description" content="Sarathy personal AI assistant — mobile" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+    <link rel="apple-touch-startup-image" href="./icons/icon-512.png" />
+    <title>Sarathy • Mobile</title>
+    <script>
+      (function () {
+        // Mobile-native shell: only phones (pointer:coarse + narrow) belong here.
+        // Tablets/desktop redirect to the desktop app, unless an explicit
+        // ?view=mobile override or sarathy_view cookie asked to stay mobile.
+        try {
+          var p = new URLSearchParams(window.location.search);
+          var m = document.cookie.match(/(?:^|;\s*)sarathy_view=([^;]*)/);
+          var override = p.get("view") || (m && m[1]);
+          var isPhone =
+            window.matchMedia("(pointer: coarse)").matches &&
+            window.innerWidth < 768;
+          if (!isPhone && override !== "mobile") {
+            window.location.replace("/");
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/mobile/main.tsx"></script>
+  </body>
+</html>

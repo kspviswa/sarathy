@@ -33,8 +33,11 @@ function AppInner() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [openFile, setOpenFile] = useState<string | null>(null);
+  const [unread, setUnread] = useState<Partial<Record<Tab, number>>>({});
   const socketRef = useRef<DashboardSocket | null>(null);
   const lastUserMessageRef = useRef<string>("");
+  const tabRef = useRef<Tab>("chat");
+  tabRef.current = tab;
 
   useEffect(() => {
     if (!getToken()) {
@@ -59,6 +62,15 @@ function AppInner() {
     if (!authed) return;
     const socket = new DashboardSocket();
     socketRef.current = socket;
+    const unsubNotif = socket.onNotification((n) => {
+      toast(n.payload.title, {
+        description: n.payload.body,
+      });
+      const t = n.payload.tab as Tab | undefined;
+      if (t && t !== tabRef.current) {
+        setUnread((prev) => ({ ...prev, [t]: (prev[t] ?? 0) + 1 }));
+      }
+    });
     const unsubscribe = socket.onMessage((m) => {
       if (m.channel !== "dashboard" && m.chatId !== "console") return;
       if (m.metadata?._final) {
@@ -161,6 +173,7 @@ function AppInner() {
     });
     socket.connect();
     return () => {
+      unsubNotif();
       unsubscribe();
       socket.disconnect();
       socketRef.current = null;
@@ -239,12 +252,20 @@ function AppInner() {
           <Button
             key={id}
             variant={tab === id ? "secondary" : "ghost"}
-            onClick={() => setTab(id)}
+            onClick={() => {
+              setTab(id);
+              setUnread((prev) => ({ ...prev, [id]: 0 }));
+            }}
             className={cn(
-              "h-11 flex-col gap-1 rounded-lg md:h-10 md:flex-row md:justify-start md:gap-2",
+              "relative h-11 flex-col gap-1 rounded-lg md:h-10 md:flex-row md:justify-start md:gap-2",
               tab === id && "font-medium",
             )}
           >
+            {unread[id] ? (
+              <span className="pointer-events-none absolute right-2 top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground">
+                {unread[id]}
+              </span>
+            ) : null}
             <Icon className="size-5 md:size-4" />
             <span className="text-[11px] md:text-sm">{label}</span>
           </Button>

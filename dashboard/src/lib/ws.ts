@@ -3,9 +3,22 @@ import type { OutboundMessage } from "./types";
 
 type MessageHandler = (msg: OutboundMessage) => void;
 
+export interface NotificationFrame {
+  type: "notification";
+  payload: {
+    title: string;
+    body?: string;
+    tab?: string;
+    timestamp?: string;
+  };
+}
+
+type NotificationHandler = (n: NotificationFrame) => void;
+
 export class DashboardSocket {
   private ws: WebSocket | null = null;
   private handlers = new Set<MessageHandler>();
+  private notifHandlers = new Set<NotificationHandler>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -27,6 +40,11 @@ export class DashboardSocket {
   onMessage(handler: MessageHandler): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
+  }
+
+  onNotification(handler: NotificationHandler): () => void {
+    this.notifHandlers.add(handler);
+    return () => this.notifHandlers.delete(handler);
   }
 
   private open(): void {
@@ -56,7 +74,11 @@ export class DashboardSocket {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data as string);
-        if (data?.type === "message") this.handlers.forEach((h) => h(data as OutboundMessage));
+        if (data?.type === "notification") {
+          this.notifHandlers.forEach((h) => h(data as NotificationFrame));
+        } else if (data?.type === "message") {
+          this.handlers.forEach((h) => h(data as OutboundMessage));
+        }
       } catch {
         /* ignore non-JSON */
       }

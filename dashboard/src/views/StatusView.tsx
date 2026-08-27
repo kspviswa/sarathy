@@ -1,4 +1,4 @@
-import { Activity, LogOut, Moon, RefreshCw, Server, Sun } from "lucide-react";
+import { Activity, LogOut, Moon, RefreshCw, Server, Smartphone, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -85,6 +85,16 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button
+            variant="ghost"
+            size="icon"
+            title="Open the mobile site"
+            onClick={() => {
+              window.location.href = "/mobile?view=mobile";
+            }}
+          >
+            <Smartphone />
+          </Button>
           <Button variant="ghost" size="icon" onClick={() => void logout()} title="Log out">
             <LogOut />
           </Button>

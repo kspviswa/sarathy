@@ -17,8 +17,27 @@
     <link rel="apple-touch-icon" href="./icons/icon-180.png" />
     <link rel="apple-touch-startup-image" href="./icons/icon-512.png" />
     <title>Sarathy</title>
-    <script type="module" crossorigin src="./assets/index-B6Bs1vUa.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-Coy5wAEw.css">
+    <script>
+      (function () {
+        // Device-kind client re-check: if a phone somehow landed on the desktop
+        // shell (UA mismatch, cached page, etc.) route to /mobile. Never fight an
+        // explicit ?view= or sarathy_view cookie override.
+        try {
+          var p = new URLSearchParams(window.location.search);
+          var m = document.cookie.match(/(?:^|;\s*)sarathy_view=([^;]*)/);
+          var override = p.get("view") || (m && m[1]);
+          var isPhone =
+            window.matchMedia("(pointer: coarse)").matches &&
+            window.innerWidth < 768;
+          if (isPhone && override !== "desktop") {
+            window.location.replace("/mobile");
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="./assets/main-CKgZ6AYr.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/index-CQIKoDof.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-Dq3RXkGl.css">
   <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
   <body>
     <div id="root"></div>

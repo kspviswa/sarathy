@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -37,6 +39,11 @@ MAX_TREE_ENTRIES = 5000  # Guard against pathological workspaces
 _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_FAILURES = 10
 _MEDIA_DIR = Path.home() / ".sarathy" / "media"
+
+_MOBILE_UA_RE = re.compile(
+    r"(Mobi|Android|iPhone|iPod|BlackBerry|IEMobile|Opera Mini|Silk|Windows Phone)",
+    re.IGNORECASE,
+)
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 _AUDIO_EXTS = {".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"}
@@ -151,6 +158,36 @@ class DashboardChannel(BaseChannel):
             except Exception:
                 self._ws_clients.discard(ws)
 
+    async def send_notification(
+        self, title: str, body: str = "", tab: str | None = None
+    ) -> None:
+        """Broadcast an in-app notification frame to connected dashboard clients.
+
+        Additive to the existing chat streaming contract: clients receive a
+        ``{type: "notification", payload: {title, body, timestamp, tab}}`` frame
+        and surface it as a toast / unread badge. Does not disturb the
+        ``_progress`` / ``_thinking`` / ``_tool_hint`` / ``_final`` contract.
+        """
+        if not self._ws_clients:
+            return
+        payload = json.dumps(
+            {
+                "type": "notification",
+                "payload": {
+                    "title": title,
+                    "body": body,
+                    "tab": tab,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+            ensure_ascii=False,
+        )
+        for ws in list(self._ws_clients):
+            try:
+                await ws.send_str(payload)
+            except Exception:
+                self._ws_clients.discard(ws)
+
     def is_allowed(self, sender_id: str) -> bool:
         # Access control happens at the HTTP layer (pairing key + token).
         return True
@@ -225,6 +262,8 @@ class DashboardChannel(BaseChannel):
     def _setup_routes(self, app: web.Application) -> None:
         app.router.add_get("/", self._index)
         app.router.add_get("/index.html", self._index)
+        app.router.add_get("/mobile", self._mobile_index)
+        app.router.add_get("/mobile.html", self._mobile_index)
         app.router.add_get("/manifest.webmanifest", self._static_file)
         app.router.add_get("/sw.js", self._static_file)
         app.router.add_get("/registerSW.js", self._static_file)
@@ -236,6 +275,10 @@ class DashboardChannel(BaseChannel):
         icons = self._static_dir / "icons"
         if assets.is_dir():
             app.router.add_static("/assets/", assets)
+            # Aliased namespace so the mobile build's hashed assets can be
+            # served under /mobile/assets/ as well. Content-hashed filenames
+            # never collide between the desktop and mobile bundles.
+            app.router.add_static("/mobile/assets/", assets)
         if icons.is_dir():
             app.router.add_static("/icons/", icons)
 
@@ -263,8 +306,56 @@ class DashboardChannel(BaseChannel):
         app.router.add_get("/api/status", self._api_status)
         app.router.add_get("/ws", self._ws_handler)
 
+    def _device_kind(self, request: web.Request) -> str:
+        """Return ``"mobile"`` for phone UAs, else ``"desktop"``.
+
+        Tablets (e.g. iPad) intentionally map to ``"desktop"`` per the product
+        decision — only phones get the mobile layout. iPad UAs must be excluded
+        explicitly because their string contains ``"Mobile/"`` which would
+        otherwise match the ``Mobi`` token.
+        """
+        ua = request.headers.get("User-Agent", "")
+        if "iPad" in ua:
+            return "desktop"
+        return "mobile" if _MOBILE_UA_RE.search(ua) else "desktop"
+
+    def _view_override(self, request: web.Request) -> str | None:
+        """Return the effective view override from ?view= or the ``sarathy_view``
+        cookie, or ``None`` when the user has expressed no preference."""
+        q = request.query.get("view")
+        if q in ("mobile", "desktop"):
+            return q
+        cookie = request.cookies.get("sarathy_view")
+        if cookie in ("mobile", "desktop"):
+            return cookie
+        return None
+
+    def _html_response(self, name: str, request: web.Request) -> web.Response:
+        """FileResponse for an HTML shell, persisting a ?view= override cookie."""
+        resp = web.FileResponse(self._static_dir / name)
+        q = request.query.get("view")
+        if q in ("mobile", "desktop"):
+            resp.set_cookie(
+                "sarathy_view", q, max_age=60 * 60 * 24 * 60, path="/", samesite="Lax"
+            )
+        return resp
+
     async def _index(self, request: web.Request) -> web.Response:
-        return web.FileResponse(self._static_dir / "index.html")
+        override = self._view_override(request)
+        view = override or self._device_kind(request)
+        if view == "mobile":
+            return self._html_response("mobile.html", request)
+        return self._html_response("index.html", request)
+
+    async def _mobile_index(self, request: web.Request) -> web.Response:
+        override = self._view_override(request)
+        if override == "desktop":
+            resp = web.HTTPFound("/")
+            resp.set_cookie(
+                "sarathy_view", "desktop", max_age=60 * 60 * 24 * 60, path="/", samesite="Lax"
+            )
+            return resp
+        return self._html_response("mobile.html", request)
 
     async def _static_file(self, request: web.Request) -> web.Response:
         name = request.path.lstrip("/")

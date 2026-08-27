@@ -48,5 +48,11 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "../sarathy/channels/dashboard/static"),
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, "index.html"),
+        mobile: path.resolve(import.meta.dirname, "mobile.html"),
+      },
+    },
   },
 });

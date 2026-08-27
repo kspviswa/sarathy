@@ -2,6 +2,8 @@
 
 import asyncio
 
+from loguru import logger
+
 from sarathy.agent.loop import AgentLoop
 from sarathy.bus.queue import MessageBus
 from sarathy.channels.manager import ChannelManager
@@ -79,6 +81,23 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     # Crash recovery: re-verify archives whose live review never completed.
     reviewer.schedule_archive_sweep(session_manager)
 
+    async def _notify_dashboard(title: str, body: str = "") -> None:
+        """Broadcast an in-app notification frame via the dashboard channel.
+
+        Safe no-op when the dashboard channel is disabled/absent or there are no
+        connected WS clients.
+        """
+        try:
+            dashboard = channels.get_channel("dashboard")
+        except Exception:
+            return
+        if dashboard is None or not hasattr(dashboard, "send_notification"):
+            return
+        try:
+            await dashboard.send_notification(title, body=body)
+        except Exception as e:
+            logger.warning("Dashboard notification failed: {}", e)
+
     async def on_cron_job(job: CronJob) -> str | None:
         response = await agent.process_direct(
             job.payload.message,
@@ -96,9 +115,20 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
                     content=response or "",
                 )
             )
+        await _notify_dashboard(
+            f"Job '{job.name}' done",
+            body=f"Cron job {job.id} finished successfully.",
+        )
         return response
 
+    async def on_cron_job_error(job: CronJob) -> None:
+        await _notify_dashboard(
+            f"Job '{job.name}' failed",
+            body=f"Cron job {job.id} errored: {job.state.last_error or 'unknown error'}",
+        )
+
     cron.on_job = on_cron_job
+    cron.on_job_error = on_cron_job_error
 
     # Initialize skill manager and command manager
     from sarathy.agent.skills import SkillManager

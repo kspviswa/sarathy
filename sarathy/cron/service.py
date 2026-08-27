@@ -67,10 +67,12 @@ class CronService:
     def __init__(
         self,
         store_path: Path,
-        on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None
+        on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None,
+        on_job_error: Callable[[CronJob], Coroutine[Any, Any, None]] | None = None,
     ):
         self.store_path = store_path
         self.on_job = on_job  # Callback to execute job, returns response text
+        self.on_job_error = on_job_error  # Callback invoked when a job fails
         self._store: CronStore | None = None
         self._timer_task: asyncio.Task | None = None
         self._running = False
@@ -266,6 +268,11 @@ class CronService:
             job.state.last_status = "error"
             job.state.last_error = str(e)
             logger.error("Cron: job '{}' failed: {}", job.name, e)
+            if self.on_job_error:
+                try:
+                    await self.on_job_error(job)
+                except Exception as notify_err:
+                    logger.warning("Cron: job '{}' error notifier failed: {}", job.name, notify_err)
         
         job.state.last_run_at_ms = start_ms
         job.updated_at_ms = _now_ms()

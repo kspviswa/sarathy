@@ -1,21 +1,25 @@
-import { FileCode2, Gauge, MessageSquareText, Settings } from "lucide-react";
+import {
+  Activity,
+  FileCode2,
+  Gauge,
+  MessageSquareText,
+  Settings,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Logo } from "@/components/logo";
-import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import { ThemeProvider } from "@/lib/theme";
 import { DashboardSocket } from "@/lib/ws";
-import { ChatView, type ChatMessage } from "@/views/ChatView";
-import { ConfigView } from "@/views/ConfigView";
-import { FilesView } from "@/views/FilesView";
+import type { ChatMessage as ChatMessageT } from "@/views/ChatView";
 import { PairView } from "@/views/PairView";
-import { SessionsView } from "@/views/SessionsView";
-import { StatusView } from "@/views/StatusView";
 import { cn } from "@/lib/utils";
-
-export type { ChatMessage } from "@/views/ChatView";
+import { ChatView } from "./ChatView";
+import { FilesView } from "./FilesView";
+import { SessionsView } from "./SessionsView";
+import { ConfigView } from "./ConfigView";
+import { StatusView } from "./StatusView";
 
 type Tab = "chat" | "files" | "sessions" | "config" | "status";
 
@@ -24,13 +28,13 @@ const TABS: { id: Tab; label: string; icon: typeof MessageSquareText }[] = [
   { id: "files", label: "Files", icon: FileCode2 },
   { id: "sessions", label: "Sessions", icon: Gauge },
   { id: "config", label: "Config", icon: Settings },
-  { id: "status", label: "Status", icon: Gauge },
+  { id: "status", label: "Status", icon: Activity },
 ];
 
-function AppInner() {
+function MobileAppInner() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [tab, setTab] = useState<Tab>("chat");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessageT[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [unread, setUnread] = useState<Partial<Record<Tab, number>>>({});
@@ -63,9 +67,7 @@ function AppInner() {
     const socket = new DashboardSocket();
     socketRef.current = socket;
     const unsubNotif = socket.onNotification((n) => {
-      toast(n.payload.title, {
-        description: n.payload.body,
-      });
+      toast(n.payload.title, { description: n.payload.body });
       const t = n.payload.tab as Tab | undefined;
       if (t && t !== tabRef.current) {
         setUnread((prev) => ({ ...prev, [t]: (prev[t] ?? 0) + 1 }));
@@ -94,48 +96,28 @@ function AppInner() {
         return;
       }
       if (m.metadata?._progress) {
-        // Streaming content frame. Server sends cumulative content, so REPLACE.
         setStreaming(true);
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === "assistant") {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, content: m.content, progress: true },
-            ];
+            return [...prev.slice(0, -1), { ...last, content: m.content, progress: true }];
           }
           return [...prev, { role: "assistant", content: m.content, progress: true }];
         });
         return;
       }
       if (m.metadata?._thinking) {
-        // Thinking frames carry the FULL accumulated reasoning each time, so
-        // REPLACE (never append) to avoid "LLet me...Let me..." duplication.
         setStreaming(true);
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === "assistant") {
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...last,
-                thinkingContent: m.content,
-              },
-            ];
+            return [...prev.slice(0, -1), { ...last, thinkingContent: m.content }];
           }
-          return [
-            ...prev,
-            {
-              role: "assistant",
-              content: "",
-              thinkingContent: m.content,
-            },
-          ];
+          return [...prev, { role: "assistant", content: "", thinkingContent: m.content }];
         });
         return;
       }
       if (m.metadata?._tool_hint) {
-        // Tool calls mean the agent is still working.
         setStreaming(true);
         setMessages((prev) => {
           const last = prev[prev.length - 1];
@@ -143,22 +125,10 @@ function AppInner() {
           if (last?.role === "assistant") {
             return [
               ...prev.slice(0, -1),
-              {
-                ...last,
-                toolHint: hint,
-                toolHints: [...(last.toolHints || []), hint],
-              },
+              { ...last, toolHint: hint, toolHints: [...(last.toolHints || []), hint] },
             ];
           }
-          return [
-            ...prev,
-            {
-              role: "assistant",
-              content: "",
-              toolHint: hint,
-              toolHints: [hint],
-            },
-          ];
+          return [...prev, { role: "assistant", content: "", toolHint: hint, toolHints: [hint] }];
         });
         return;
       }
@@ -184,8 +154,6 @@ function AppInner() {
     async (content: string, media?: string[], replyTo?: string | null, replyToContent?: string) => {
       lastUserMessageRef.current = content;
       setMessages((prev) => [...prev, { role: "user", content, media, replyTo, replyToContent }]);
-      // Optimistically mark as working so the "Sarathy is responding…" indicator
-      // shows immediately, before the first streaming/thinking frame arrives.
       setStreaming(true);
       if (media && media.length > 0) {
         await api.sendChatWithMedia(content, media, replyTo);
@@ -197,7 +165,6 @@ function AppInner() {
   );
 
   const handleNewChat = useCallback(() => {
-    // Clear the current chat view for a fresh conversation.
     setMessages([]);
     setStreaming(false);
     setOpenFile(null);
@@ -242,37 +209,16 @@ function AppInner() {
   };
 
   return (
-    <div className="standalone-fix flex flex-col md:flex-row">
-      <nav className="safe-bottom order-2 flex shrink-0 items-center justify-around border-t bg-background px-2 py-1 md:order-1 md:w-52 md:flex-col md:items-stretch md:justify-start md:border-r md:border-t-0 md:py-4">
-        <div className="mb-4 hidden items-center gap-2 px-3 md:flex">
-          <Logo size={28} />
+    <div className="safe-top flex h-dvh flex-col" data-testid="mobile-app">
+      <header className="flex items-center justify-between border-b bg-background/90 px-4 py-3 backdrop-blur">
+        <div className="flex items-center gap-2">
+          <Logo size={22} />
           <span className="font-bold tracking-tight">Sarathy</span>
         </div>
-        {TABS.map(({ id, label, icon: Icon }) => (
-          <Button
-            key={id}
-            variant={tab === id ? "secondary" : "ghost"}
-            onClick={() => {
-              setTab(id);
-              setUnread((prev) => ({ ...prev, [id]: 0 }));
-            }}
-            className={cn(
-              "relative h-11 flex-col gap-1 rounded-lg md:h-10 md:flex-row md:justify-start md:gap-2",
-              tab === id && "font-medium",
-            )}
-          >
-            {unread[id] ? (
-              <span className="pointer-events-none absolute right-2 top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground">
-                {unread[id]}
-              </span>
-            ) : null}
-            <Icon className="size-5 md:size-4" />
-            <span className="text-[11px] md:text-sm">{label}</span>
-          </Button>
-        ))}
-      </nav>
+        <span className="text-xs text-muted-foreground">Mobile</span>
+      </header>
 
-      <main className="order-1 min-h-0 flex-1 md:order-2">
+      <main className="min-h-0 flex-1 overflow-y-auto">
         {tab === "chat" && (
           <ChatView
             messages={messages}
@@ -289,6 +235,36 @@ function AppInner() {
         {tab === "config" && <ConfigView />}
         {tab === "status" && <StatusView onLoggedOut={logout} />}
       </main>
+
+      <nav
+        className="safe-bottom flex shrink-0 items-stretch justify-around border-t bg-background px-1 pb-2"
+        data-testid="mobile-tabbar"
+      >
+        {TABS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            aria-label={label}
+            onClick={() => {
+              setTab(id);
+              setUnread((prev) => ({ ...prev, [id]: 0 }));
+            }}
+            className={cn(
+              "relative flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-2",
+              tab === id ? "text-primary" : "text-muted-foreground",
+            )}
+          >
+            <span className="relative">
+              {unread[id] ? (
+                <span className="absolute -right-2 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground">
+                  {unread[id]}
+                </span>
+              ) : null}
+              <Icon className="size-6" />
+            </span>
+            <span className="text-[10px] font-medium">{label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }
@@ -296,7 +272,7 @@ function AppInner() {
 export default function App() {
   return (
     <ThemeProvider>
-      <AppInner />
+      <MobileAppInner />
     </ThemeProvider>
   );
 }

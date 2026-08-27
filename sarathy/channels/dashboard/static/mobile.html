@@ -11,17 +11,17 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Sarathy" />
-    <meta name="description" content="Sarathy personal AI assistant dashboard" />
+    <meta name="description" content="Sarathy personal AI assistant — mobile" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icons/icon-192.png" />
     <link rel="apple-touch-icon" href="./icons/icon-180.png" />
     <link rel="apple-touch-startup-image" href="./icons/icon-512.png" />
-    <title>Sarathy</title>
+    <title>Sarathy • Mobile</title>
     <script>
       (function () {
-        // Device-kind client re-check: if a phone somehow landed on the desktop
-        // shell (UA mismatch, cached page, etc.) route to /mobile. Never fight an
-        // explicit ?view= or sarathy_view cookie override.
+        // Mobile-native shell: only phones (pointer:coarse + narrow) belong here.
+        // Tablets/desktop redirect to the desktop app, unless an explicit
+        // ?view=mobile override or sarathy_view cookie asked to stay mobile.
         try {
           var p = new URLSearchParams(window.location.search);
           var m = document.cookie.match(/(?:^|;\s*)sarathy_view=([^;]*)/);
@@ -29,13 +29,13 @@
           var isPhone =
             window.matchMedia("(pointer: coarse)").matches &&
             window.innerWidth < 768;
-          if (isPhone && override !== "desktop") {
-            window.location.replace("/mobile");
+          if (!isPhone && override !== "mobile") {
+            window.location.replace("/");
           }
         } catch (e) {}
       })();
     </script>
-    <script type="module" crossorigin src="./assets/main-CKgZ6AYr.js"></script>
+    <script type="module" crossorigin src="./assets/mobile-CTsm3K6J.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/index-CQIKoDof.js">
     <link rel="stylesheet" crossorigin href="./assets/index-Dq3RXkGl.css">
   <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>

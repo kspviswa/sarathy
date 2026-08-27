@@ -213,3 +213,40 @@ describe("Standalone viewport fix", () => {
     expect(container.querySelector(".flex.h-full.flex-col")).toBeInTheDocument();
   });
 });
+
+describe("Composer newline behaviour (Enter = newline)", () => {
+  function renderComposer(onSend = vi.fn()) {
+    const utils = render(<ChatView {...defaultProps} onSend={onSend} />);
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    return { utils, textarea, onSend };
+  }
+
+  it("plain Enter inserts a newline and does NOT send", () => {
+    const { textarea, onSend } = renderComposer();
+    fireEvent.change(textarea, { target: { value: "line one" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("Shift+Enter also inserts a newline and does NOT send", () => {
+    const { textarea, onSend } = renderComposer();
+    fireEvent.change(textarea, { target: { value: "line one" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+Enter sends the message", () => {
+    const { textarea, onSend } = renderComposer();
+    fireEvent.change(textarea, { target: { value: "hello" } });
+    fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledWith("hello", undefined, null, undefined);
+  });
+
+  it("Cmd+Enter sends the message", () => {
+    const { textarea, onSend } = renderComposer();
+    fireEvent.change(textarea, { target: { value: "hi" } });
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+});

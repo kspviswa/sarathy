@@ -370,11 +370,21 @@ export function ChatView({
     }
   }, []);
 
-  const allUploaded = pendingMedia.every((p) => !p.uploading);
+  const   allUploaded = pendingMedia.every((p) => !p.uploading);
   const mediaPaths = useMemo(
     () => pendingMedia.filter((p) => p.path).map((p) => p.path!),
     [pendingMedia],
   );
+
+  // Enter inserts a newline (native textarea behaviour); Ctrl/Cmd+Enter or the
+  // Send button actually sends. Auto-grow the composer up to its max height.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+    }
+  }, [input]);
 
   async function send() {
     const content = input.trim();
@@ -551,14 +561,14 @@ export function ChatView({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
                   void send();
                 }
               }}
               onPaste={handlePaste}
-              placeholder="Message Sarathy…"
-              className="max-h-32 min-h-12 flex-1 resize-none"
+              placeholder="Message Sarathy…  ·  Enter = newline, Ctrl+Enter = send"
+              className="max-h-32 min-h-12 flex-1 resize-none overflow-y-auto"
               rows={1}
             />
 

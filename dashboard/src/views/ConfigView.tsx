@@ -440,7 +440,7 @@ function ProvidersManager({ onActiveChanged }: { onActiveChanged: (name: string)
 
   const openAdd = () => {
     setEditing(null);
-    setForm({ kind: "custom", apiBase: "http://localhost:8000/v1", apiKey: "", label: "" });
+    setForm({ kind: "custom", apiBase: "", apiKey: "", label: "" });
   };
 
   const openEdit = (p: ProviderInfo) => {

@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bell,
   FileCode2,
   Gauge,
   MessageSquareText,
@@ -8,10 +9,12 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Logo } from "@/components/logo";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import { ThemeProvider } from "@/lib/theme";
 import { useLastSession } from "@/lib/useLastSession";
+import { useNotifications } from "@/lib/useNotifications";
 import { DashboardSocket } from "@/lib/ws";
 import type { ChatMessage as ChatMessageT } from "@/views/ChatView";
 import { PairView } from "@/views/PairView";
@@ -39,12 +42,23 @@ function MobileAppInner() {
   const [streaming, setStreaming] = useState(false);
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [unread, setUnread] = useState<Partial<Record<Tab, number>>>({});
+  const [socket, setSocket] = useState<DashboardSocket | null>(null);
   const socketRef = useRef<DashboardSocket | null>(null);
   const lastUserMessageRef = useRef<string>("");
   const tabRef = useRef<Tab>("chat");
   tabRef.current = tab;
 
   const loadingHistory = useLastSession(authed === true, setMessages);
+
+  const { unreadCount, markAllRead } = useNotifications(socket, {
+    navigateTo: (tabId) => {
+      const dest = TABS.find((t) => t.id === tabId);
+      if (!dest) return;
+      setTab(dest.id);
+      setUnread((prev) => ({ ...prev, [dest.id]: 0 }));
+    },
+    onMarkAllRead: () => setUnread({}),
+  });
 
   useEffect(() => {
     if (!getToken()) {
@@ -69,8 +83,8 @@ function MobileAppInner() {
     if (!authed) return;
     const socket = new DashboardSocket();
     socketRef.current = socket;
+    setSocket(socket);
     const unsubNotif = socket.onNotification((n) => {
-      toast(n.payload.title, { description: n.payload.body });
       const t = n.payload.tab as Tab | undefined;
       if (t && t !== tabRef.current) {
         setUnread((prev) => ({ ...prev, [t]: (prev[t] ?? 0) + 1 }));
@@ -150,6 +164,7 @@ function MobileAppInner() {
       unsubscribe();
       socket.disconnect();
       socketRef.current = null;
+      setSocket(null);
     };
   }, [authed]);
 
@@ -218,7 +233,22 @@ function MobileAppInner() {
           <Logo size={22} />
           <span className="font-bold tracking-tight">Sarathy</span>
         </div>
-        <span className="text-xs text-muted-foreground">Mobile</span>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {unreadCount > 0 && (
+            <button
+              onClick={markAllRead}
+              aria-label={`${unreadCount} unread notifications, mark all read`}
+              data-testid="mobile-notifications-badge"
+              className="flex items-center gap-1.5 rounded-full text-primary"
+            >
+              <Bell className="size-4" />
+              <Badge variant="destructive" className="h-4 min-w-4 px-1 text-[10px]">
+                {unreadCount}
+              </Badge>
+            </button>
+          )}
+          <span>Mobile</span>
+        </div>
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto">

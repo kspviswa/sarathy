@@ -1,12 +1,14 @@
-import { FileCode2, Gauge, MessageSquareText, Settings } from "lucide-react";
+import { Bell, FileCode2, Gauge, MessageSquareText, Settings } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import { ThemeProvider } from "@/lib/theme";
 import { useLastSession } from "@/lib/useLastSession";
+import { useNotifications } from "@/lib/useNotifications";
 import { DashboardSocket } from "@/lib/ws";
 import { ChatView, type ChatMessage } from "@/views/ChatView";
 import { ConfigView } from "@/views/ConfigView";
@@ -35,12 +37,23 @@ function AppInner() {
   const [streaming, setStreaming] = useState(false);
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [unread, setUnread] = useState<Partial<Record<Tab, number>>>({});
+  const [socket, setSocket] = useState<DashboardSocket | null>(null);
   const socketRef = useRef<DashboardSocket | null>(null);
   const lastUserMessageRef = useRef<string>("");
   const tabRef = useRef<Tab>("chat");
   tabRef.current = tab;
 
   const loadingHistory = useLastSession(authed === true, setMessages);
+
+  const { unreadCount, markAllRead } = useNotifications(socket, {
+    navigateTo: (tabId) => {
+      const dest = TABS.find((t) => t.id === tabId);
+      if (!dest) return;
+      setTab(dest.id);
+      setUnread((prev) => ({ ...prev, [dest.id]: 0 }));
+    },
+    onMarkAllRead: () => setUnread({}),
+  });
 
   useEffect(() => {
     if (!getToken()) {
@@ -65,10 +78,8 @@ function AppInner() {
     if (!authed) return;
     const socket = new DashboardSocket();
     socketRef.current = socket;
+    setSocket(socket);
     const unsubNotif = socket.onNotification((n) => {
-      toast(n.payload.title, {
-        description: n.payload.body,
-      });
       const t = n.payload.tab as Tab | undefined;
       if (t && t !== tabRef.current) {
         setUnread((prev) => ({ ...prev, [t]: (prev[t] ?? 0) + 1 }));
@@ -180,6 +191,7 @@ function AppInner() {
       unsubscribe();
       socket.disconnect();
       socketRef.current = null;
+      setSocket(null);
     };
   }, [authed]);
 
@@ -251,6 +263,19 @@ function AppInner() {
           <Logo size={28} />
           <span className="font-bold tracking-tight">Sarathy</span>
         </div>
+        {unreadCount > 0 && (
+          <button
+            onClick={markAllRead}
+            className="mb-2 hidden w-full items-center justify-between rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex"
+            data-testid="notifications-menu"
+          >
+            <span className="flex items-center gap-1.5">
+              <Bell className="size-3.5" />
+              Notifications
+            </span>
+            <Badge variant="destructive">{unreadCount}</Badge>
+          </button>
+        )}
         {TABS.map(({ id, label, icon: Icon }) => (
           <Button
             key={id}

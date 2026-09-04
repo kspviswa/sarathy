@@ -300,6 +300,8 @@ class DashboardChannel(BaseChannel):
         app.router.add_post("/api/restart", self._api_restart)
         app.router.add_get("/api/sessions", self._api_sessions)
         app.router.add_get("/api/session", self._api_session_messages)
+        app.router.add_post("/api/session/new", self._api_session_new)
+        app.router.add_post("/api/session/delete", self._api_session_delete)
         app.router.add_get("/api/workspace/tree", self._api_workspace_tree)
         app.router.add_get("/api/workspace/file", self._api_workspace_get)
         app.router.add_put("/api/workspace/file", self._api_workspace_put)
@@ -415,18 +417,21 @@ class DashboardChannel(BaseChannel):
         device_id: str,
         media: list[str] | None = None,
         reply_to: str | None = None,
+        session_key: str | None = None,
     ) -> InboundMessage:
         metadata: dict = {"device_id": device_id}
         if reply_to:
             metadata["reply_to"] = reply_to
+        effective_key = session_key or DASHBOARD_SESSION_KEY
+        chat_id = session_key or "console"
         return InboundMessage(
             channel=self.name,
             sender_id=f"dashboard:{device_id}",
-            chat_id="console",
+            chat_id=chat_id,
             content=content,
             media=media or [],
             metadata=metadata,
-            session_key_override=DASHBOARD_SESSION_KEY,
+            session_key_override=effective_key,
         )
 
     async def _api_chat(self, request: web.Request) -> web.Response:
@@ -437,6 +442,7 @@ class DashboardChannel(BaseChannel):
         content = (data.get("content") or "").strip()
         media_paths = data.get("media") or []
         reply_to = data.get("reply_to")
+        session_key = data.get("session_key") or None
         if not content and not media_paths:
             return web.json_response({"error": "empty message"}, status=400)
         if media_paths:
@@ -447,12 +453,17 @@ class DashboardChannel(BaseChannel):
         if not content:
             content = "[empty message]"
         await self.bus.publish_inbound(
-            self._inbound(content, request.get("device_id", ""), media=media_paths, reply_to=reply_to)
+            self._inbound(content, request.get("device_id", ""), media=media_paths, reply_to=reply_to, session_key=session_key)
         )
         return web.json_response({"ok": True})
 
     async def _api_chat_stop(self, request: web.Request) -> web.Response:
-        await self.bus.publish_inbound(self._inbound("/stop", request.get("device_id", "")))
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        session_key = (data or {}).get("session_key") or None
+        await self.bus.publish_inbound(self._inbound("/stop", request.get("device_id", ""), session_key=session_key))
         return web.json_response({"ok": True})
 
     # ------------------------------------------------------------------ media api
@@ -726,6 +737,32 @@ class DashboardChannel(BaseChannel):
         return web.json_response(
             {"key": key, "createdAt": session.created_at.isoformat(), "messages": messages}
         )
+
+    async def _api_session_new(self, request: web.Request) -> web.Response:
+        if not self.session_manager:
+            return web.json_response({"error": "sessions unavailable"}, status=503)
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        key = (data.get("key") or "").strip()
+        if not key:
+            return web.json_response({"error": "missing key"}, status=400)
+        self.session_manager._create_new_session(key)
+        return web.json_response({"ok": True})
+
+    async def _api_session_delete(self, request: web.Request) -> web.Response:
+        if not self.session_manager:
+            return web.json_response({"error": "sessions unavailable"}, status=503)
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        key = (data.get("key") or "").strip()
+        if not key:
+            return web.json_response({"error": "missing key"}, status=400)
+        self.session_manager.delete_session(key)
+        return web.json_response({"ok": True})
 
     # ------------------------------------------------------------------ workspace api
 

@@ -310,6 +310,26 @@ class SessionManager:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
 
+    def delete_session(self, key: str) -> None:
+        """Delete a session from disk and cache (idempotent)."""
+        self.invalidate(key)
+        path = self._get_active_session_path(key)
+        if path.exists():
+            try:
+                path.unlink()
+                logger.info("Deleted session file for key: {}", key)
+            except OSError as e:
+                logger.warning("Failed to delete session file {}: {}", path, e)
+        fallback_key = "dashboard:console"
+        if key != fallback_key:
+            fb_path = self._get_active_session_path(fallback_key)
+            if fb_path.exists():
+                try:
+                    fb_path.unlink()
+                    logger.info("Deleted fallback session file for key: {}", fallback_key)
+                except OSError as e:
+                    logger.warning("Failed to delete fallback session file {}: {}", fb_path, e)
+
     def _create_new_session(self, key: str) -> Session:
         """Create a new session file with same key."""
         new_session = Session(key=key, max_size=self.max_session_size)

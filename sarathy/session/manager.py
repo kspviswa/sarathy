@@ -1,5 +1,6 @@
 """Session management for conversation history."""
 
+import asyncio
 import json
 import shutil
 from collections import OrderedDict
@@ -36,6 +37,7 @@ class Session:
     archived: bool = False  # True only when live review was confirmed done at archive time
     pending_lessons: list[str] = field(default_factory=list)
     pending_skills: list[str] = field(default_factory=list)
+    steer_queue: asyncio.Queue | None = None  # transient in-memory /steer queue (not persisted)
 
     def add_message(self, role: str, content: str | None, **kwargs: Any) -> None:
         """Add a message and auto-create new session if full."""

@@ -60,6 +60,8 @@ While nanobot served as the initial inspiration, Sarathy has evolved significant
 - `/context` - Show conversation context
 - `/remember` - Persist information to memory
 - `/verbose` - Toggle detailed stats display
+- `/steer` - Inject a mid-turn instruction into the current response
+- `/btw` - Ask a side question that runs concurrently (delivered as soon as ready)
 - Unified handling across Telegram and Discord
 
 ---

@@ -96,6 +96,16 @@ BUILTIN_COMMANDS = {
         subcommands=["status", "list", "set", "models"],
         has_status=True,
     ),
+    "steer": BuiltinCommand(
+        name="steer",
+        description="Inject a mid-turn instruction into the current response",
+        subcommands=[],
+    ),
+    "btw": BuiltinCommand(
+        name="btw",
+        description="Ask a side question that runs concurrently (delivered as soon as ready)",
+        subcommands=[],
+    ),
 }
 
 

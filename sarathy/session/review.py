@@ -77,6 +77,7 @@ class BackgroundReviewer:
         self._max_retries = max_retries
         self._queue: list[dict[str, Any]] = []
         self._inflight: dict[str, Any] | None = None
+        self._llm_busy_count = 0
         self._llm_idle = asyncio.Event()
         self._llm_idle.set()
         self._worker: asyncio.Task | None = None
@@ -103,12 +104,20 @@ class BackgroundReviewer:
                 setattr(self, attr, None)
 
     def mark_busy(self) -> None:
-        """Called before LLM call — review cannot start."""
+        """Called before LLM call — review cannot start.
+
+        Uses a counter so concurrent turns (e.g. a /btw side turn running
+        alongside the main turn) each keep the reviewer gated until every
+        active LLM call has finished.
+        """
+        self._llm_busy_count += 1
         self._llm_idle.clear()
 
     def mark_idle(self) -> None:
         """Called after LLM call completes — review can start after cooldown."""
-        self._llm_idle.set()
+        self._llm_busy_count = max(0, self._llm_busy_count - 1)
+        if self._llm_busy_count == 0:
+            self._llm_idle.set()
 
     async def enqueue(self, messages: list[dict[str, Any]], session_key: str) -> None:
         """Add a conversation snapshot for review. Called after each turn."""

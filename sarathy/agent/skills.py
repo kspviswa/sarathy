@@ -7,7 +7,7 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from loguru import logger
 
@@ -129,12 +129,17 @@ class SkillsLoader:
 
         return "\n\n---\n\n".join(parts) if parts else ""
 
+    _SENTENCE_MAX_CHARS = 120
+    _TRUNCATED_DESC_SUFFIX = "…"
+
     def build_skills_summary(self) -> str:
         """
-        Build a summary of all skills (name, description, path, availability).
+        Build a compact summary of all skills, grouped by category.
 
-        This is used for progressive loading - the agent can read the full
-        skill content using read_file when needed.
+        One element per category (frontmatter ``category:`` / ``sarathy``
+        metadata, else the name's first ``-`` token; unprefixed skills fall
+        into ``other``). Member names are comma-separated — the agent reads
+        each skill's SKILL.md via read_file on demand.
 
         Returns:
             XML-formatted skills summary.
@@ -146,29 +151,69 @@ class SkillsLoader:
         def escape_xml(s: str) -> str:
             return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        lines = ["<skills>"]
+        groups: dict[str, dict] = {}
         for s in all_skills:
-            name = escape_xml(s["name"])
-            path = s["path"]
-            desc = escape_xml(self._get_skill_description(s["name"]))
-            skill_meta = self._get_skill_meta(s["name"])
-            available = self._check_requirements(skill_meta)
+            name = s["name"]
+            category = self._skill_category(name)
+            desc = self._get_skill_description(name)
+            meta = self._get_skill_meta(name)
+            available = self._check_requirements(meta)
 
-            lines.append(f'  <skill available="{str(available).lower()}">')
-            lines.append(f"    <name>{name}</name>")
-            lines.append(f"    <description>{desc}</description>")
-            lines.append(f"    <location>{path}</location>")
+            group = groups.setdefault(category, {"members": [], "available": 0, "descriptions": []})
+            group["members"].append(name)
+            group["descriptions"].append(desc)
+            if available:
+                group["available"] += 1
 
-            # Show missing requirements for unavailable skills
-            if not available:
-                missing = self._get_missing_requirements(skill_meta)
-                if missing:
-                    lines.append(f"    <requires>{escape_xml(missing)}</requires>")
+        for group in groups.values():
+            group["members"].sort(key=str.lower)
 
-            lines.append(f"  </skill>")
+        lines = [f'<skills count="{len(all_skills)}">']
+        for category in sorted(groups):
+            group = groups[category]
+            best_desc = max(group["descriptions"], key=len)
+            desc = escape_xml(self._first_sentence(best_desc))
+            available = group["available"]
+            available_attr = str(available) if available else "false"
+            members = escape_xml(", ".join(group["members"]))
+            lines.append(
+                f'    <skillCategory name="{escape_xml(category)}" '
+                f'count="{len(group["members"])}" available="{available_attr}" '
+                f'description="{desc}">\n'
+                f"      {members}\n"
+                f"    </skillCategory>"
+            )
         lines.append("</skills>")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _first_sentence(text: str) -> str:
+        """Collapse a description to a single line, first sentence, ≤120 chars."""
+        if not text:
+            return ""
+        one_line = " ".join(text.split())
+        sentence = one_line
+        for sep in (". ", "! ", "? "):
+            idx = one_line.find(sep)
+            if idx > 0:
+                sentence = one_line[: idx + 1]
+                break
+        return sentence[: SkillsLoader._SENTENCE_MAX_CHARS].strip()
+
+    def _skill_category(self, name: str) -> str:
+        """Category for a skill: frontmatter/sarathy `category`, else first '-' token."""
+        meta = self.get_skill_metadata(name) or {}
+        category = meta.get("category")
+        if not category:
+            skill_meta = self._parse_sarathy_metadata(meta.get("metadata", ""))
+            category = skill_meta.get("category")
+        if category:
+            return str(category).strip()
+        # Unprefixed names (builtin skills) have no first-token prefix.
+        if "-" in name:
+            return name.split("-", 1)[0].strip()
+        return "other"
 
     def _get_missing_requirements(self, skill_meta: dict) -> str:
         """Get a description of missing requirements."""
@@ -331,7 +376,6 @@ class SkillManager:
         # Find the closing ---
         lines = content.split("\n")
         frontmatter_lines = []
-        in_frontmatter = False
         for i, line in enumerate(lines):
             if line.strip() == "---" and i > 0:
                 break
@@ -390,9 +434,10 @@ class SkillManager:
     async def _watch_loop(self):
         """Main watch loop using watchdog."""
         try:
-            from watchdog.observers import Observer
-            from watchdog.events import FileSystemEventHandler
             import time
+
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
 
             # Use a queue to communicate between watchdog thread and asyncio
             event_queue = self._event_queue

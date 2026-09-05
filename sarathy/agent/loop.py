@@ -28,6 +28,7 @@ from sarathy.bus.events import InboundMessage, OutboundMessage
 from sarathy.bus.queue import MessageBus
 from sarathy.providers.base import LLMProvider
 from sarathy.session.manager import Session, SessionManager
+from sarathy.utils.tokens import estimate_messages_tokens, estimate_tokens
 
 if TYPE_CHECKING:
     from sarathy.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
@@ -39,6 +40,10 @@ STEER_PROMPT_TEMPLATE = (
     "If it conflicts with the current task, the steer takes priority. "
     "Weave it into your next step.]\n\n{steer}"
 )
+
+# Fraction of the model context reserved for conversation history (the rest is
+# system prompt + tool definitions). Used by the history trimmer on every turn.
+HISTORY_BUDGET_RATIO = 0.6
 
 
 class AgentLoop:
@@ -631,6 +636,8 @@ class AgentLoop:
                     current_message=btw_text,
                     channel=msg.channel,
                     chat_id=msg.chat_id,
+                    history_budget_tokens=self._history_budget_tokens(),
+                    model=self.model,
                 )
 
                 effective_reasoning_effort = (
@@ -769,6 +776,34 @@ class AgentLoop:
         finally:
             self._active_main_turns.discard(key)
 
+    def _history_budget_tokens(self) -> int:
+        """Token budget for history trimming: 60% of context minus system + tools.
+
+        Deterministic and offline: system prompt and tool definitions are
+        estimated once, the remainder is set aside for conversation history.
+        """
+        system_prompt = self.context.build_system_prompt()
+        tools_defs = json.dumps(self.tools.get_definitions(), ensure_ascii=False)
+        overhead = estimate_tokens(system_prompt, self.model) + estimate_tokens(
+            tools_defs, self.model
+        )
+        return max(0, int(self.context_length * HISTORY_BUDGET_RATIO) - overhead)
+
+    def _detected_context_length(self) -> tuple[int | None, str]:
+        """Return (context_length, label) from the active provider, else fallback."""
+        cfg = getattr(self.runtime, "config", None)
+        provider_name = cfg.agents.defaults.provider if cfg else None
+        if provider_name and cfg:
+            try:
+                from sarathy.providers.manager import get_context_length
+
+                detected = get_context_length(provider_name, cfg, self.model)
+            except Exception:
+                detected = None
+            if detected:
+                return detected, "detected"
+        return None, "config"
+
     async def _process_message_inner(
         self,
         msg: InboundMessage,
@@ -794,6 +829,8 @@ class AgentLoop:
                 current_message=msg.content,
                 channel=channel,
                 chat_id=chat_id,
+                history_budget_tokens=self._history_budget_tokens(),
+                model=self.model,
             )
             final_content, _, all_msgs, _ = await self._run_agent_loop(messages, channel=channel)
             self._save_turn(session, all_msgs, 1 + len(history))
@@ -888,6 +925,8 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            history_budget_tokens=self._history_budget_tokens(),
+            model=self.model,
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
@@ -1152,13 +1191,20 @@ class AgentLoop:
     def _handle_context_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
         """Handle /context command - show context usage."""
         msg_count = len(session.messages)
-        unconsolidated = msg_count - session.last_consolidated
-        context_length = self.context_length
-        estimated_tokens = sum(len(m.get("content") or "") for m in session.messages) // 4
-        estimated_tokens = min(estimated_tokens, unconsolidated * 500)
-        usage_pct = (
-            (min(unconsolidated, context_length) / context_length * 100) if context_length else 0
+        history = session.get_history(max_messages=self.memory_window)
+        system_prompt = self.context.build_system_prompt()
+        tools_defs = json.dumps(self.tools.get_definitions(), ensure_ascii=False)
+        prompt_tokens = (
+            estimate_tokens(system_prompt, self.model)
+            + estimate_tokens(tools_defs, self.model)
+            + estimate_messages_tokens(history, self.model)
         )
+
+        detected, source = self._detected_context_length()
+        context_length = detected or self.context_length
+        usage_pct = (prompt_tokens / context_length * 100) if context_length else 0
+        remaining = max(0, context_length - prompt_tokens)
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
@@ -1166,11 +1212,14 @@ class AgentLoop:
 
 Session: {msg.session_key}
 Messages in session: {msg_count}
-Messages to LLM: {unconsolidated} / {context_length}
-Est. tokens (recent): ~{estimated_tokens:,}
-Model context length: {self.context_length:,}
+Messages to LLM: {len(history)}
 
-{"⚠️ Consider /new to start fresh" if usage_pct > 80 else "✅ Context OK"}""",
+Model context length: ~{context_length:,} tokens ({source})
+Est. prompt tokens: ~{prompt_tokens:,}
+Usage: {usage_pct:.1f}%
+Remaining: ~{remaining:,} tokens
+
+{"⚠️ Consider /new to start fresh" if usage_pct > 85 else "✅ Context OK"}""",
         )
 
     def _handle_remember_command(

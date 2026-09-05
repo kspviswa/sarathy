@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import uuid
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -31,6 +32,13 @@ from sarathy.session.manager import Session, SessionManager
 if TYPE_CHECKING:
     from sarathy.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
     from sarathy.cron.service import CronService
+
+
+STEER_PROMPT_TEMPLATE = (
+    "[⚡ Mid-turn steer from the user — this is the latest instruction. "
+    "If it conflicts with the current task, the steer takes priority. "
+    "Weave it into your next step.]\n\n{steer}"
+)
 
 
 class AgentLoop:
@@ -117,6 +125,8 @@ class AgentLoop:
         self._mcp_connecting = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._processing_lock = asyncio.Lock()
+        self._active_main_turns: set[str] = set()  # session keys with a running main turn
+        self._active_btw_turns: set[str] = set()  # session keys with a running /btw side turn
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
@@ -263,6 +273,7 @@ class AgentLoop:
         reasoning_effort: str | None = None,
         channel: str | None = None,
         session_metadata: dict | None = None,
+        steer_queue: asyncio.Queue | None = None,
     ) -> tuple[str | None, list[str], list[dict], dict]:
         """Run the agent iteration loop. Returns (final_content, tools_used, messages, stats)."""
         import time
@@ -289,6 +300,23 @@ class AgentLoop:
 
         while iteration < self.max_iterations:
             iteration += 1
+
+            # Steer injection point: the top of each iteration. A /steer that
+            # arrived during a running tool call is picked up here — immediately
+            # before the next model call, exactly when the running step ends.
+            if steer_queue is not None:
+                steers = []
+                while not steer_queue.empty():
+                    try:
+                        steers.append(steer_queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+                for steer in steers:
+                    messages.append(
+                        {"role": "user", "content": STEER_PROMPT_TEMPLATE.format(steer=steer)}
+                    )
+                    if on_progress:
+                        await on_progress("🎯 Steer injected", tool_hint=True)
 
             start_time = time.perf_counter()
             should_stream = streaming_enabled and on_progress is not None
@@ -455,18 +483,28 @@ class AgentLoop:
             except asyncio.TimeoutError:
                 continue
 
-            if msg.content.strip().lower() == "/stop":
+            lowered = msg.content.strip().lower()
+            if lowered == "/stop":
                 await self._handle_stop(msg)
+            elif lowered.startswith("/steer"):
+                await self._handle_steer(msg)
+            elif lowered.startswith("/btw"):
+                await self._handle_btw(msg)
             else:
-                task = asyncio.create_task(self._dispatch(msg))
-                self._active_tasks.setdefault(msg.session_key, []).append(task)
-                task.add_done_callback(
-                    lambda t, k=msg.session_key: (
-                        self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
-                        if t in self._active_tasks.get(k, [])
-                        else None
-                    )
-                )
+                self._spawn_dispatch(msg)
+
+    def _spawn_dispatch(self, msg: InboundMessage) -> asyncio.Task:
+        """Dispatch a message to the processing pipeline (tracked for /stop)."""
+        task = asyncio.create_task(self._dispatch(msg))
+        self._active_tasks.setdefault(msg.session_key, []).append(task)
+        task.add_done_callback(
+            lambda t, k=msg.session_key: (
+                self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
+                if t in self._active_tasks.get(k, [])
+                else None
+            )
+        )
+        return task
 
     async def _handle_stop(self, msg: InboundMessage) -> None:
         """Cancel all active tasks and subagents for the session."""
@@ -487,6 +525,180 @@ class AgentLoop:
                 content=content,
             )
         )
+
+    async def _handle_steer(self, msg: InboundMessage) -> None:
+        """Handle /steer: inject a mid-turn instruction into the current turn.
+
+        Enqueues the steer text into the session's queue; the running turn
+        drains it at its next boundary (right after the current tool call
+        finishes). If the session is idle, the prefix is stripped and the text
+        is dispatched as a normal message.
+        """
+        parts = msg.content.split(None, 1)
+        text = parts[1].strip() if len(parts) > 1 else ""
+        if not text:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=(
+                        "Usage: /steer <message>\n\n"
+                        "Inject a mid-turn instruction into the current response "
+                        "as soon as the running step finishes."
+                    ),
+                )
+            )
+            return
+
+        key = msg.session_key
+        session = self.sessions.get_or_create(key)
+
+        if key in self._active_main_turns or key in self._active_btw_turns:
+            session.steer_queue = session.steer_queue or asyncio.Queue()
+            await session.steer_queue.put(text)
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="🎯 Steer noted — I'll fold that into the current turn at the next pause.",
+                )
+            )
+        else:
+            # Session idle: strip the prefix and run as a normal message.
+            new_msg = InboundMessage(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+                chat_id=msg.chat_id,
+                content=text,
+                metadata=dict(msg.metadata or {}),
+            )
+            self._spawn_dispatch(new_msg)
+
+    async def _handle_btw(self, msg: InboundMessage) -> None:
+        """Handle /btw: start a separate, concurrent side LLM turn."""
+        parts = msg.content.split(None, 1)
+        text = parts[1].strip() if len(parts) > 1 else ""
+        if not text:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=(
+                        "Usage: /btw <message>\n\n"
+                        "Ask a side question. It runs concurrently and is delivered as soon as it's ready."
+                    ),
+                )
+            )
+            return
+
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="💬 BTW noted — running as a side question. I'll deliver the answer as soon as it's ready.",
+            )
+        )
+        asyncio.create_task(self._run_btw_turn(msg, text))
+
+    async def _run_btw_turn(self, msg: InboundMessage, btw_text: str) -> None:
+        """Run the /btw side turn against a snapshot of the main session."""
+        key = msg.session_key
+        try:
+            main_session = self.sessions.get_or_create(key)
+            snapshot = main_session.get_history(max_messages=self.memory_window)
+            side_key = f"{key}##btw##{uuid.uuid4().hex[:8]}"
+            side_session = self.sessions.get_or_create(side_key)
+            self._active_btw_turns.add(key)
+
+            # Protect MessageTool per-turn state so the btw turn cannot pollute
+            # the main turn's duplicate-suppression tracking.
+            mt = self.tools.get("message")
+            saved_state = None
+            if mt is not None and isinstance(mt, MessageTool):
+                saved_state = (
+                    mt._default_channel,
+                    mt._default_chat_id,
+                    mt._default_message_id,
+                    mt.get_turn_sends(),
+                    mt._response_metadata,
+                )
+                mt.start_turn()
+                mt.set_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
+
+            try:
+                messages = self.context.build_messages(
+                    history=snapshot,
+                    current_message=btw_text,
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                )
+
+                effective_reasoning_effort = (
+                    main_session.metadata.get("reasoning_effort") or self.reasoning_effort
+                )
+
+                # A btw turn only consumes steers when no main turn is active
+                # (avoids double-consumption when both could target the queue).
+                steer_queue = (
+                    main_session.steer_queue if key not in self._active_main_turns else None
+                )
+
+                async def _btw_progress(content: str, *, tool_hint: bool = False) -> None:
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=content,
+                            metadata={
+                                "_btw": True,
+                                "_progress": True,
+                                "_tool_hint": tool_hint,
+                            },
+                        )
+                    )
+
+                final_content, _, all_msgs, _ = await self._run_agent_loop(
+                    messages,
+                    on_progress=_btw_progress,
+                    reasoning_effort=effective_reasoning_effort,
+                    channel=msg.channel,
+                    steer_queue=steer_queue,
+                )
+
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=final_content or "⚠️ No response.",
+                        metadata={"_btw": True, "_final": True},
+                    )
+                )
+
+                # Persist only the side exchange into the side session — the
+                # main session's history is never touched.
+                self._save_turn(side_session, all_msgs, 1 + len(snapshot))
+                self.sessions.save(side_session)
+            finally:
+                if mt is not None and saved_state is not None:
+                    (
+                        mt._default_channel,
+                        mt._default_chat_id,
+                        mt._default_message_id,
+                    ) = saved_state[:3]
+                    mt._turn_sends = list(saved_state[3])
+                    mt._response_metadata = dict(saved_state[4])
+        except Exception as e:
+            logger.exception("Side (/btw) turn failed for session {}", key)
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"⚠️ Side question failed: {e}",
+                    metadata={"_btw": True, "_final": True},
+                )
+            )
+        finally:
+            self._active_btw_turns.discard(key)
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message under the global lock."""
@@ -541,6 +753,23 @@ class AgentLoop:
         return bool(self.runtime.apply_to(self))
 
     async def _process_message(
+        self,
+        msg: InboundMessage,
+        session_key: str | None = None,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> OutboundMessage | None:
+        """Process a single inbound message and return the response.
+
+        Records the session as an active main turn so /steer can target it.
+        """
+        key = session_key or msg.session_key
+        self._active_main_turns.add(key)
+        try:
+            return await self._process_message_inner(msg, session_key, on_progress)
+        finally:
+            self._active_main_turns.discard(key)
+
+    async def _process_message_inner(
         self,
         msg: InboundMessage,
         session_key: str | None = None,
@@ -704,6 +933,7 @@ class AgentLoop:
             reasoning_effort=effective_reasoning_effort,
             channel=msg.channel,
             session_metadata=session.metadata,
+            steer_queue=session.steer_queue,
         )
 
         if final_content is None:
@@ -725,6 +955,27 @@ class AgentLoop:
 
         if self.reviewer and all_msgs:
             await self.reviewer.enqueue(all_msgs, session.key)
+
+        # Late-steer handling: steers that arrived during the final response
+        # generation were never injected into the loop. Drain them and dispatch
+        # each as a follow-up normal turn (they wait on the lock, run right after).
+        leftover = []
+        q = session.steer_queue
+        if q is not None:
+            while not q.empty():
+                try:
+                    leftover.append(q.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+        for text in leftover:
+            followup = InboundMessage(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+                chat_id=msg.chat_id,
+                content=text,
+                metadata=dict(msg.metadata or {}),
+            )
+            self._spawn_dispatch(followup)
 
         metadata = dict(msg.metadata or {})
         metadata["_stats"] = stats

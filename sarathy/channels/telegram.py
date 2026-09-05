@@ -344,6 +344,11 @@ class TelegramChannel(BaseChannel):
         if not msg.content:
             return
 
+        # /btw side turns never touch the per-chat streaming draft — the main
+        # turn owns that draft and a btw message must not clobber it.
+        if msg.metadata.get("_btw"):
+            return
+
         chat_id_str = str(msg.chat_id)
         try:
             chat_id_int = int(chat_id_str)
@@ -395,6 +400,7 @@ class TelegramChannel(BaseChannel):
             return
 
         is_final = msg.metadata.get("_final", True)
+        is_btw = msg.metadata.get("_btw", False)
         draft_id = self._active_drafts.get(chat_id_int)
         draft_finalized = False
 
@@ -423,7 +429,9 @@ class TelegramChannel(BaseChannel):
                     remaining,
                     chat_id_str,
                 )
-            if draft_id:
+            # /btw finals are delivered as standalone messages and must never
+            # finalize the main turn's active draft (it owns _active_drafts).
+            if draft_id and not is_btw:
                 try:
                     content = msg.content or ""
                     if content and content != "[empty message]":

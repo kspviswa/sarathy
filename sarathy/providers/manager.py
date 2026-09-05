@@ -7,6 +7,7 @@ running gateway pick up model/provider/parameter changes without a restart.
 
 from __future__ import annotations
 
+import time as _time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
     from sarathy.providers.base import LLMProvider
 
 LOCAL_KINDS = {"ollama", "lmstudio", "vllm"}
+
+_CONTEXT_LENGTH_TTL_S = 600
+_CONTEXT_LENGTH_CACHE: dict[tuple[str, str], tuple[float, int | None]] = {}
 
 
 def build_provider(name: str, cfg: "ProviderConfig", model: str) -> "LLMProvider":
@@ -118,6 +122,105 @@ def list_models(name: str, config: "Config") -> list[str]:
     if kind == "ollama":
         return [m.get("name") for m in data.get("models", []) if m.get("name")]
     return [m.get("id") for m in data.get("data", []) if m.get("id")]
+
+
+# ---------------------------------------------------------------------------
+# Context-length detection (best-effort, cached, never raises)
+# ---------------------------------------------------------------------------
+
+_OPENAI_CONTEXT_KEYS = ("context_length", "max_model_len")
+_OLLAMA_CONTEXT_KEYS = ("context_length", "max_model_len", "num_ctx")
+_LITELLM_CONTEXT_KEYS = ("max_input_tokens", "max_model_len", "context_window")
+
+
+def _find_context_field(data: Any, keys: tuple[str, ...]) -> int | None:
+    """Recursively find the first integer value for one of ``keys``."""
+    if isinstance(data, dict):
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+                return int(value)
+        for value in data.values():
+            hit = _find_context_field(value, keys)
+            if hit is not None:
+                return hit
+    elif isinstance(data, list):
+        for value in data:
+            hit = _find_context_field(value, keys)
+            if hit is not None:
+                return hit
+    return None
+
+
+def _detect_context_length(name: str, config: "Config", model: str) -> int | None:
+    """Detect the model context length from the live provider endpoint.
+
+    Raises on any failure; :func:`get_context_length` is the safe wrapper.
+    """
+    cfg = config.providers.get(name)
+    if cfg is None:
+        return None
+    kind = resolve_kind(name, cfg)
+    spec = provider_spec_for(kind)
+    api_base = cfg.api_base or (spec.default_api_base if spec else None)
+
+    if kind == "ollama":
+        if not api_base:
+            return None
+        resp = httpx.get(
+            f"{api_base.rstrip('/')}/api/show/{model}",
+            headers=_model_list_headers(cfg),
+            timeout=5,
+        )
+        resp.raise_for_status()
+        return _find_context_field(resp.json(), _OLLAMA_CONTEXT_KEYS)
+
+    openai_compat = kind in ("custom", "openai") or (api_base and api_base.endswith("/v1"))
+    if openai_compat:
+        if not api_base:
+            return None
+        resp = httpx.get(
+            _model_list_url(kind, api_base),
+            headers=_model_list_headers(cfg),
+            timeout=5,
+        )
+        resp.raise_for_status()
+        for entry in resp.json().get("data", []):
+            if isinstance(entry, dict) and entry.get("id") == model:
+                return _find_context_field(entry, _OPENAI_CONTEXT_KEYS)
+        return None
+
+    # LiteLLM hosted (best-effort).
+    try:
+        import litellm
+
+        info = litellm.get_model_info(model)
+        return _find_context_field(info, _LITELLM_CONTEXT_KEYS)
+    except Exception:
+        return None
+
+
+def get_context_length(name: str, config: "Config", model: str) -> int | None:
+    """Best-effort context-length detection for a (provider, model).
+
+    Cached per ``(provider, model)`` for 600s, HTTP timeout ≤ 5s, and NEVER
+    raises — returns ``None`` on any failure so callers fall back to config.
+    """
+    cache_key = (name, model)
+    now = _time.monotonic()
+    cached = _CONTEXT_LENGTH_CACHE.get(cache_key)
+    if cached and now - cached[0] < _CONTEXT_LENGTH_TTL_S:
+        return cached[1]
+
+    try:
+        result = _detect_context_length(name, config, model)
+    except Exception:
+        result = None
+
+    _CONTEXT_LENGTH_CACHE[cache_key] = (now, result)
+    return result
 
 
 async def list_models_async(name: str, config: "Config") -> list[str]:

@@ -10,6 +10,72 @@ from typing import Any
 
 from sarathy.agent.skills import SkillsLoader
 from sarathy.session.memory import MemoryStore
+from sarathy.utils.tokens import estimate_messages_tokens
+
+_TRUNCATE_TEXT_CHARS = 200
+_TRUNCATE_SUFFIX = "…[truncated]"
+_TOOL_RESULT_OMITTED = "[tool result omitted]"
+
+
+def trim_history(
+    history: list[dict[str, Any]],
+    budget_tokens: int,
+    keep_recent: int = 8,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    """Shed stale content from a history (oldest first) to fit a token budget.
+
+    Operates on a copy — the input list (and ``session.messages``) is never
+    mutated. The newest ``keep_recent`` messages and the most recent user
+    message are always kept fully intact. While over budget, oldest tool
+    results are replaced with ``[tool result omitted]`` first, then older
+    user/assistant text is truncated to 200 chars.
+    """
+    trimmed = [dict(m) for m in history]
+    if not trimmed or budget_tokens is None:
+        return trimmed
+
+    protected = set(range(max(0, len(trimmed) - keep_recent), len(trimmed)))
+    for i in range(len(trimmed) - 1, -1, -1):
+        if trimmed[i].get("role") == "user":
+            protected.add(i)
+            break
+
+    while estimate_messages_tokens(trimmed, model) > budget_tokens:
+        fixed = False
+
+        # Pass 1: shed the oldest tool result (keep role + tool_call_id).
+        for i in range(len(trimmed)):
+            if i in protected:
+                continue
+            msg = trimmed[i]
+            if msg.get("role") == "tool" and msg.get("content") != _TOOL_RESULT_OMITTED:
+                msg["content"] = _TOOL_RESULT_OMITTED
+                fixed = True
+                break
+
+        if fixed:
+            continue
+
+        # Pass 2: truncate the oldest long text content (user/assistant).
+        for i in range(len(trimmed)):
+            if i in protected:
+                continue
+            msg = trimmed[i]
+            content = msg.get("content")
+            if (
+                isinstance(content, str)
+                and len(content) > _TRUNCATE_TEXT_CHARS
+                and not content.endswith(_TRUNCATE_SUFFIX)
+            ):
+                msg["content"] = content[: _TRUNCATE_TEXT_CHARS] + _TRUNCATE_SUFFIX
+                fixed = True
+                break
+
+        if not fixed:
+            break
+
+    return trimmed
 
 
 class ContextBuilder:
@@ -47,12 +113,13 @@ class ContextBuilder:
 
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
-            parts.append(f"""# Skills
+            parts.append(
+                f"""# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
+To use a skill, read its SKILL.md via read_file: {self.workspace}/skills/{{skill-name}}/SKILL.md
 
-{skills_summary}""")
+{skills_summary}"""
+            )
 
         return "\n\n---\n\n".join(parts)
 
@@ -121,8 +188,14 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
+        history_budget_tokens: int | None = None,
+        model: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
+        if history_budget_tokens is not None:
+            history = trim_history(
+                history, budget_tokens=history_budget_tokens, model=model
+            )
         runtime_context = self._build_runtime_context(channel, chat_id)
         user_content = self._build_user_content(current_message, media)
 

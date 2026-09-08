@@ -29,6 +29,9 @@ class CronPayload:
     deliver: bool = False
     channel: str | None = None  # e.g. "telegram", "discord", "email"
     to: str | None = None  # e.g. phone number
+    # Provider role for this job: "main" | "local" | "" (empty = active).
+    # Task-declared routing: the payload chooses the provider, not the system.
+    provider_role: str = ""
 
 
 @dataclass

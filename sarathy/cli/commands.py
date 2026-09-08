@@ -748,6 +748,11 @@ def cron_add(
     channel: str = typer.Option(
         None, "--channel", help="Channel for delivery (e.g. 'telegram', 'discord', 'email')"
     ),
+    provider_role: str = typer.Option(
+        "",
+        "--provider-role",
+        help="Provider role for this job: 'local' (async/cheap) or 'main'. Empty = active provider.",
+    ),
 ):
     """Add a scheduled job."""
     from sarathy.config.loader import get_data_dir
@@ -783,6 +788,7 @@ def cron_add(
             deliver=deliver,
             to=to,
             channel=channel,
+            provider_role=provider_role,
         )
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")

@@ -418,10 +418,13 @@ class DashboardChannel(BaseChannel):
         media: list[str] | None = None,
         reply_to: str | None = None,
         session_key: str | None = None,
+        provider_role: str | None = None,
     ) -> InboundMessage:
         metadata: dict = {"device_id": device_id}
         if reply_to:
             metadata["reply_to"] = reply_to
+        if provider_role:
+            metadata["provider_role"] = provider_role
         effective_key = session_key or DASHBOARD_SESSION_KEY
         chat_id = session_key or "console"
         return InboundMessage(
@@ -443,6 +446,7 @@ class DashboardChannel(BaseChannel):
         media_paths = data.get("media") or []
         reply_to = data.get("reply_to")
         session_key = data.get("session_key") or None
+        provider_role = data.get("provider_role")
         if not content and not media_paths:
             return web.json_response({"error": "empty message"}, status=400)
         if media_paths:
@@ -453,7 +457,7 @@ class DashboardChannel(BaseChannel):
         if not content:
             content = "[empty message]"
         await self.bus.publish_inbound(
-            self._inbound(content, request.get("device_id", ""), media=media_paths, reply_to=reply_to, session_key=session_key)
+            self._inbound(content, request.get("device_id", ""), media=media_paths, reply_to=reply_to, session_key=session_key, provider_role=provider_role)
         )
         return web.json_response({"ok": True})
 

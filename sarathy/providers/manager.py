@@ -395,3 +395,98 @@ class RuntimeProvider:
             "reasoning_effort": self.reasoning_effort,
             "providers": list(self.config.providers.keys()),
         }
+
+    # ------------------------------------------------------------------ roles
+
+    ROLE_MAIN = "main"
+    ROLE_LOCAL = "local"
+
+    def provider_for(self, role: str) -> "LLMProvider | None":
+        """Resolve the provider tagged ``role`` (``main`` | ``local``).
+
+        Returns ``None`` when no provider carries that role, so callers can
+        fall back to the active provider. ``main`` falls back to the current
+        active provider when unassigned (the interactive voice is the crown).
+        """
+        if role == self.ROLE_MAIN:
+            for name, cfg in self.config.providers.items():
+                if cfg.role == self.ROLE_MAIN:
+                    return build_provider(name, cfg, cfg.model or self.model)
+            # No explicit main → the active provider is the main voice.
+            return self.provider
+        if role == self.ROLE_LOCAL:
+            for name, cfg in self.config.providers.items():
+                if cfg.role == self.ROLE_LOCAL:
+                    try:
+                        return build_provider(name, cfg, cfg.model or self.model)
+                    except Exception as e:
+                        logger.warning(
+                            "Local provider '{}' failed to build ({}); falling back to main",
+                            name,
+                            e,
+                        )
+                        return self.provider
+            return None
+        return None
+
+    def role_status(self) -> dict[str, Any]:
+        """Return role designations for /provider roles.
+
+        ``main`` resolves to the explicit main tag, else the active provider.
+        ``local`` is the tagged local name or None. Each role reports the
+        model that would actually run: the provider's own override when set,
+        else the active/default model.
+        """
+        main_name = None
+        local_name = None
+        main_model = None
+        local_model = None
+        for name, cfg in self.config.providers.items():
+            if cfg.role == self.ROLE_MAIN:
+                main_name = name
+                main_model = cfg.model or self.model
+            elif cfg.role == self.ROLE_LOCAL:
+                local_name = name
+                local_model = cfg.model or self.model
+        if main_name is None:
+            main_name = self.config.agents.defaults.provider
+            main_model = self.model
+        return {
+            "main": main_name,
+            "main_model": main_model,
+            "local": local_name,
+            "local_model": local_model,
+            "active": self.config.agents.defaults.provider,
+        }
+
+    def set_role(self, role: str, provider_name: str, model: str | None = None) -> None:
+        """Tag ``provider_name`` with ``role`` (``main`` | ``local``) and persist.
+
+        Both roles are exclusive: assigning a new main or local clears the
+        previously tagged provider of that role. There is exactly one main and
+        at most one local at any time. When ``model`` is given, it is stored as
+        the provider's per-provider model override (receiving the tag alone
+        leaves any previously stored model untouched).
+        """
+        if role not in (self.ROLE_MAIN, self.ROLE_LOCAL):
+            raise ValueError("role must be 'main' or 'local'")
+        cfg = load_config(self.config_path)
+        if provider_name not in cfg.providers:
+            raise ValueError(
+                f"Provider '{provider_name}' is not configured. "
+                f"Available: {', '.join(cfg.providers.keys())}"
+            )
+        for name, p in cfg.providers.items():
+            if p.role == role and name != provider_name:
+                p.role = ""
+        cfg.providers[provider_name].role = role
+        if model:
+            cfg.providers[provider_name].model = model
+        save_config(cfg, self.config_path)
+        self.config = cfg
+        self._mtime = self._file_mtime()
+        if self._on_change:
+            try:
+                self._on_change()
+            except Exception as e:
+                logger.warning("Runtime on_change callback failed: {}", e)

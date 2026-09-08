@@ -168,6 +168,8 @@ class ProviderConfig(Base):
     api_base: str | None = "http://localhost:11434"
     extra_headers: dict[str, str] | None = None
     label: str = ""  # Optional human-readable name shown in UIs
+    role: str = ""  # "main" (interactive voice) | "local" (async/cheap) | "" (ad-hoc)
+    model: str = ""  # Per-provider model override; "" = use active/agent-default model
 
 
 class ProvidersConfig(RootModel[dict[str, ProviderConfig]]):

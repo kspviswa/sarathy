@@ -30,6 +30,37 @@ def test_add_job_accepts_valid_timezone(tmp_path) -> None:
     assert job.state.next_run_at_ms is not None
 
 
+def test_add_job_with_provider_role_persists(tmp_path) -> None:
+    service = CronService(tmp_path / "cron" / "jobs.json")
+
+    job = service.add_job(
+        name="local job",
+        schedule=CronSchedule(kind="every", every_ms=3600_000),
+        message="run the weekly cleanup",
+        provider_role="local",
+    )
+
+    assert job.payload.provider_role == "local"
+
+    # Reload from disk — role must survive serialization.
+    reloaded = CronService(tmp_path / "cron" / "jobs.json")
+    loaded = reloaded.list_jobs(include_disabled=True)
+    assert len(loaded) == 1
+    assert loaded[0].payload.provider_role == "local"
+
+
+def test_add_job_provider_role_defaults_empty(tmp_path) -> None:
+    service = CronService(tmp_path / "cron" / "jobs.json")
+
+    job = service.add_job(
+        name="plain job",
+        schedule=CronSchedule(kind="every", every_ms=3600_000),
+        message="hello",
+    )
+
+    assert job.payload.provider_role == ""
+
+
 @pytest.mark.asyncio
 async def test_on_job_error_invoked_when_job_execution_fails(tmp_path) -> None:
     """The on_job_error callback fires when a cron job raises, without masking

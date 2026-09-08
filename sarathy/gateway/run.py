@@ -99,11 +99,15 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
             logger.warning("Dashboard notification failed: {}", e)
 
     async def on_cron_job(job: CronJob) -> str | None:
+        meta = {}
+        if job.payload.provider_role:
+            meta["provider_role"] = job.payload.provider_role
         response = await agent.process_direct(
             job.payload.message,
             session_key=f"cron:{job.id}",
             channel=job.payload.channel or "cli",
             chat_id=job.payload.to or "direct",
+            metadata=meta,
         )
         if job.payload.deliver and job.payload.to:
             from sarathy.bus.events import OutboundMessage

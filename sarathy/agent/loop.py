@@ -776,6 +776,23 @@ class AgentLoop:
         finally:
             self._active_main_turns.discard(key)
 
+    def _maybe_stamp_provider(
+        self, content: str | None, role: str, provider: Any
+    ) -> str | None:
+        """Append a small provider stamp to an async-task response when verbose.
+
+        Keeps cost/behavior transparent without disturbing the main voice.
+        """
+        if content is None:
+            return content
+        try:
+            name = getattr(provider, "provider_name", None) or getattr(
+                provider, "api_base", None
+            ) or "local"
+        except Exception:
+            name = "local"
+        return f"{content}\n\n— run via {role} provider ({name})"
+
     def _history_budget_tokens(self) -> int:
         """Token budget for history trimming: 60% of context minus system + tools.
 
@@ -965,6 +982,44 @@ class AgentLoop:
         effective_reasoning_effort = (
             session.metadata.get("reasoning_effort") or self.reasoning_effort
         )
+        # Per-turn provider override: a task payload may declare which provider
+        # role should run this turn (e.g. {"provider_role": "local"} for cron /
+        # manana-fill / wiki-lint async work). Resolve once, swap for the turn,
+        # restore after. Fall back to the active provider when unset or unresolvable.
+        override_provider = None
+        override_model = None
+        provider_role = (msg.metadata or {}).get("provider_role")
+        if provider_role and self.runtime is not None:
+            try:
+                override_provider = self.runtime.provider_for(provider_role)
+            except Exception as e:
+                logger.warning("Provider override '{}' failed ({}); using active", provider_role, e)
+                override_provider = None
+            if override_provider is not None:
+                override_model = override_provider.get_default_model()
+                _saved = (self.provider, self.model)
+                self.provider = override_provider
+                self.model = override_model
+                try:
+                    final_content, _, all_msgs, stats = await self._run_agent_loop(
+                        initial_messages,
+                        on_progress=on_progress or _bus_progress,
+                        on_thinking=_bus_thinking,
+                        reasoning_effort=effective_reasoning_effort,
+                        channel=msg.channel,
+                        session_metadata=session.metadata,
+                        steer_queue=session.steer_queue,
+                    )
+                finally:
+                    self.provider, self.model = _saved
+                final_content = self._maybe_stamp_provider(final_content, provider_role, override_provider)
+                self._save_turn(session, all_msgs, 1 + len(history))
+                self.sessions.save(session)
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=final_content or "Background task completed.",
+                )
         final_content, _, all_msgs, stats = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
@@ -1398,7 +1453,7 @@ Remaining: ~{remaining:,} tokens
                 mark = "→" if name == s["provider"] else " "
                 lines.append(f" {mark} {name}")
             lines.append("")
-            lines.append("Usage: /provider list · /provider set <name> [model] · /provider models <name>")
+            lines.append("Usage: /provider list · /provider set <name> [model] · /provider models <name> · /provider role main|local <name> [model] · /provider roles")
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
 
         if sub == "list":
@@ -1447,10 +1502,53 @@ Remaining: ~{remaining:,} tokens
         if sub == "add":
             return await self._handle_provider_add(session, msg, rest)
 
+        if sub == "roles":
+            r = self.runtime.role_status()
+            lines = [
+                "🎭 Provider roles:",
+                f"  🎙 main  → {r['main']} ({r.get('main_model') or '—'})",
+                f"  🏷 local → {r['local'] or '(none — async jobs fall back to main)'}"
+                + (f" ({r.get('local_model') or '—'})" if r["local"] else ""),
+                f"  🔌 active → {r['active']}",
+            ]
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
+
+        if sub == "role" and rest:
+            rparts = rest.split()
+            role = rparts[0].lower()
+            pname = rparts[1] if len(rparts) > 1 else None
+            model = rparts[2] if len(rparts) > 2 else None
+            if role not in ("main", "local"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Usage: /provider role main|local <provider-name> [model]",
+                )
+            if not pname:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="Usage: /provider role main|local <provider-name> [model]",
+                )
+            try:
+                self.runtime.set_role(role, pname, model)
+            except ValueError as e:
+                return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"⚠️ {e}")
+            self._refresh_runtime()
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    f"✅ Tagged {pname} as {role} provider"
+                    + (f" with model {model}." if model else ".")
+                    + " Model changes apply immediately."
+                ),
+            )
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
-            content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name> · /provider add <name> [--api-base <url>] [--kind <kind>] [--set-active]",
+            content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name> · /provider add <name> [--api-base <url>] [--kind <kind>] [--set-active] · /provider role main|local <name> [model] · /provider roles",
         )
 
     async def _handle_provider_add(
@@ -1635,10 +1733,17 @@ Remaining: ~{remaining:,} tokens
         channel: str = "cli",
         chat_id: str = "direct",
         on_progress: Callable[[str], Awaitable[None]] | None = None,
+        metadata: dict | None = None,
     ) -> str:
         """Process a message directly (for CLI or cron usage)."""
         await self._connect_mcp()
-        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
+        msg = InboundMessage(
+            channel=channel,
+            sender_id="user",
+            chat_id=chat_id,
+            content=content,
+            metadata=metadata or {},
+        )
         response = await self._process_message(
             msg, session_key=session_key, on_progress=on_progress
         )

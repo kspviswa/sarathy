@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from pathlib import Path
 
@@ -718,7 +719,16 @@ class TelegramChannel(BaseChannel):
                 media_dir = Path.home() / ".sarathy" / "media"
                 media_dir.mkdir(parents=True, exist_ok=True)
 
-                file_path = media_dir / f"{media_file.file_id[:16]}{ext}"
+                # Telegram file_ids share a long common prefix (every document
+                # in a chat starts with e.g. "BQACAgEAAxkBAAI"), so naming by
+                # file_id[:16] collided across attachments and each download
+                # silently overwrote the previous one. Hash the *full* file_id
+                # for a stable, unique, filesystem-safe name, and keep the
+                # sender's own filename as a readable prefix when available.
+                digest = hashlib.sha1(media_file.file_id.encode()).hexdigest()[:10]
+                stem = self._safe_stem(original_name)
+                name = f"{stem}-{digest}{ext}" if stem else f"{digest}{ext}"
+                file_path = media_dir / name
                 await file.download_to_drive(str(file_path))
 
                 media_paths.append(str(file_path))
@@ -826,6 +836,18 @@ class TelegramChannel(BaseChannel):
     async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Log polling / handler errors instead of silently swallowing them."""
         logger.error("Telegram error: {}", context.error)
+
+    def _safe_stem(self, file_name: str, max_len: int = 60) -> str:
+        """Reduce a sender-supplied filename to a safe, readable stem.
+
+        Telegram filenames are attacker-controlled; strip anything that could
+        escape the media directory or confuse the filesystem.
+        """
+        if not file_name:
+            return ""
+        stem = Path(file_name).stem
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+        return stem[:max_len]
 
     def _get_extension(self, media_type: str, mime_type: str | None, file_name: str = "") -> str:
         """Get file extension based on media type.

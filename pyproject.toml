@@ -1,6 +1,6 @@
 [project]
 name = "sarathy"
-version = "0.9.3"
+version = "0.9.4"
 description = "Sarathy : My Personal _claw style_ Assistant"
 readme = "README.md"
 requires-python = ">=3.11"

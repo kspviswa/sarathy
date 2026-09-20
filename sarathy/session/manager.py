@@ -171,6 +171,34 @@ class SessionManager:
         safe_key = safe_filename(key.replace(":", "_"))
         return self.active_sessions_dir / f"{safe_key}.jsonl"
 
+    @staticmethod
+    def _is_cron_session(key: str) -> bool:
+        """Cron jobs use a stable per-job key 'cron:<job_id>'."""
+        return key.startswith("cron:")
+
+    def _max_size_for(self, key: str) -> int | None:
+        """Per-session mid-turn rotation threshold.
+
+        Cron sessions must NOT rotate mid-turn (that would break a run in
+        progress); they rotate between runs in get_or_create() instead.
+        """
+        return None if self._is_cron_session(key) else self.max_session_size
+
+    def _should_rotate(self, key: str, session: Session) -> bool:
+        """Decide whether a session must be archived and started fresh.
+
+        Interactive sessions rotate at the (large) max_session_size threshold.
+        Cron sessions rotate at the trim cap instead: they hold a stable
+        'cron:<job_id>' key reused across every run, so without this they are
+        truncated forever and never rotate — the context eventually blows up
+        and the run no-ops silently while still reporting ok. See KB #305.
+        """
+        if not self.auto_create_new_session:
+            return False
+        if self._is_cron_session(key):
+            return len(session.messages) > self._max_session_messages
+        return len(session.messages) >= self.max_session_size
+
     def _get_legacy_session_path(self, key: str) -> Path:
         """Legacy global session path (~/.sarathy/sessions/)."""
         safe_key = safe_filename(key.replace(":", "_"))
@@ -194,7 +222,7 @@ class SessionManager:
             session = self._cache[key]
 
             # Check if existing session is full and auto-create new one
-            if self.auto_create_new_session and len(session.messages) >= self.max_session_size:
+            if self._should_rotate(key, session):
                 logger.info(
                     "Session {} full ({} messages), auto-creating new session",
                     key,
@@ -206,7 +234,18 @@ class SessionManager:
 
         session = self._load(key)
         if session is None:
-            session = Session(key=key, max_size=self.max_session_size)
+            session = Session(key=key, max_size=self._max_size_for(key))
+        elif self._should_rotate(key, session):
+            # A session loaded cold from disk (e.g. after a gateway restart)
+            # may already be over threshold — rotate it before this run.
+            logger.info(
+                "Session {} over threshold ({} messages) on load, auto-creating new session",
+                key,
+                len(session.messages),
+            )
+            session._manager = self
+            self._cache[key] = session
+            return self._create_new_session(key)
 
         session._manager = self
         self._cache[key] = session
@@ -273,11 +312,25 @@ class SessionManager:
             return None
 
     def save(self, session: Session) -> None:
-        """Save a session to disk, truncating if too many messages."""
+        """Save a session to disk, truncating if too many messages.
+
+        Cron sessions are exempt from the trim cap: they rotate between runs
+        (see _should_rotate) and must keep their full history so the archive
+        captures it. A generous safety cap still guards pathological growth.
+        """
         path = self._get_active_session_path(session.key)
 
         messages_to_save = session.messages
-        if len(messages_to_save) > self._max_session_messages:
+        if self._is_cron_session(session.key):
+            safety_cap = self._max_session_messages * 10
+            if len(messages_to_save) > safety_cap:
+                messages_to_save = messages_to_save[-safety_cap:]
+                logger.warning(
+                    "Cron session {} exceeded safety cap, truncated to {} messages",
+                    session.key,
+                    safety_cap,
+                )
+        elif len(messages_to_save) > self._max_session_messages:
             truncated = messages_to_save[-self._max_session_messages :]
             logger.debug(
                 "Truncated session {} from {} to {} messages",
@@ -334,7 +387,7 @@ class SessionManager:
 
     def _create_new_session(self, key: str) -> Session:
         """Create a new session file with same key."""
-        new_session = Session(key=key, max_size=self.max_session_size)
+        new_session = Session(key=key, max_size=self._max_size_for(key))
         new_session._manager = self
 
         old_session = self._load(key)
@@ -462,3 +515,44 @@ class SessionManager:
                 continue
 
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    def prune_archives(self, max_age_days: int = 30, keep_unverified: bool = True) -> dict[str, int]:
+        """Delete archived session files older than max_age_days.
+
+        Retention for archived_sessions/ — nothing else reaps this directory,
+        so without it the archive grows without bound. Files still stamped
+        archived=False (not yet reviewed for durable facts) are kept by
+        default so pending learning is never discarded.
+
+        Returns a dict of counts: {"scanned", "deleted", "kept_unverified", "freed_bytes"}.
+        """
+        import time
+
+        archive_dir = self.workspace / "archived_sessions"
+        stats = {"scanned": 0, "deleted": 0, "kept_unverified": 0, "freed_bytes": 0}
+        if not archive_dir.exists():
+            return stats
+
+        cutoff = time.time() - max_age_days * 86400
+        for filepath in archive_dir.glob("session-*.jsonl"):
+            stats["scanned"] += 1
+            try:
+                if filepath.stat().st_mtime >= cutoff:
+                    continue
+                if keep_unverified:
+                    with open(filepath, encoding="utf-8") as f:
+                        first_line = f.readline().strip()
+                    if first_line:
+                        meta = json.loads(first_line)
+                        if meta.get("_type") == "metadata" and not meta.get("archived", False):
+                            stats["kept_unverified"] += 1
+                            continue
+                size = filepath.stat().st_size
+                filepath.unlink()
+                stats["deleted"] += 1
+                stats["freed_bytes"] += size
+                logger.info("Pruned archived session {} (older than {}d)", filepath.name, max_age_days)
+            except Exception as e:
+                logger.warning("Failed to prune archive {}: {}", filepath, e)
+
+        return stats

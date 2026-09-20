@@ -3,6 +3,7 @@
 import asyncio
 import html
 import imaplib
+import mimetypes
 import re
 import smtplib
 import ssl
@@ -12,6 +13,7 @@ from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import parseaddr
+from pathlib import Path
 from typing import Any
 
 import markdown
@@ -143,9 +145,40 @@ class EmailChannel(BaseChannel):
 
         content = msg.content or ""
         if content:
-            html_content = markdown.markdown(content, extensions=["extra", "nl2br"])
-            email_msg.set_content(content, subtype="plain")
+            if self._looks_like_html(content):
+                # Content is already HTML (e.g. a formatted report body). Use it as
+                # the HTML part verbatim and derive a plain-text fallback — running
+                # it through Markdown would mangle it (nl2br injects <br> tags).
+                html_content = content
+                plain_content = self._html_to_text(content)
+            else:
+                html_content = markdown.markdown(content, extensions=["extra", "nl2br"])
+                plain_content = content
+            email_msg.set_content(plain_content, subtype="plain")
             email_msg.add_alternative(html_content, subtype="html")
+
+        # Attach any media files. The message may already be multipart/alternative;
+        # add_attachment() promotes it to multipart/mixed automatically.
+        for media_path in msg.media or []:
+            try:
+                path = Path(media_path).expanduser()
+                if not path.is_file():
+                    logger.warning("Email attachment missing, skipping: {}", media_path)
+                    continue
+                ctype, _ = mimetypes.guess_type(str(path))
+                if ctype and "/" in ctype:
+                    maintype, subtype = ctype.split("/", 1)
+                else:
+                    maintype, subtype = "application", "octet-stream"
+                email_msg.add_attachment(
+                    path.read_bytes(),
+                    maintype=maintype,
+                    subtype=subtype,
+                    filename=path.name,
+                )
+                logger.info("Email attachment added: {} ({})", path.name, ctype or "unknown")
+            except Exception as e:
+                logger.error("Failed to attach {}: {}", media_path, e)
 
         in_reply_to = self._last_message_id_by_chat.get(to_addr)
         if in_reply_to:
@@ -416,6 +449,25 @@ class EmailChannel(BaseChannel):
         if msg.get_content_type() == "text/html":
             return cls._html_to_text(payload).strip()
         return payload.strip()
+
+    @staticmethod
+    def _looks_like_html(text: str) -> bool:
+        """Heuristic: does this body already contain HTML markup?"""
+        stripped = text.lstrip()
+        if not stripped:
+            return False
+        if stripped.lower().startswith(("<!doctype html", "<html")):
+            return True
+        # A closing tag, or a handful of common opening tags, is enough to tell.
+        if re.search(r"</(p|div|table|h[1-6]|ul|ol|span|a|strong|em)\s*>", text, re.IGNORECASE):
+            return True
+        return bool(
+            re.search(
+                r"<(p|div|table|h[1-6]|ul|ol|br|img|a|strong|em|blockquote)\b",
+                text,
+                re.IGNORECASE,
+            )
+        )
 
     @staticmethod
     def _html_to_text(raw_html: str) -> str:

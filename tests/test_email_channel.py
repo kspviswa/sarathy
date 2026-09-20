@@ -366,3 +366,107 @@ def test_fetch_messages_between_dates_uses_imap_since_before_without_mark_seen(m
     assert fake.search_args is not None
     assert fake.search_args[1:] == ("SINCE", "06-Feb-2026", "BEFORE", "07-Feb-2026")
     assert fake.store_calls == []
+
+
+class _CapturingSMTP:
+    """Minimal SMTP stub that records the messages handed to it."""
+
+    instances: list["_CapturingSMTP"] = []
+
+    def __init__(self, _host: str, _port: int, timeout: int = 30) -> None:
+        self.sent_messages: list[EmailMessage] = []
+        _CapturingSMTP.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def starttls(self, context=None):
+        return None
+
+    def login(self, _user: str, _pw: str):
+        return None
+
+    def send_message(self, msg: EmailMessage):
+        self.sent_messages.append(msg)
+
+
+@pytest.fixture
+def capturing_smtp(monkeypatch):
+    _CapturingSMTP.instances = []
+    monkeypatch.setattr("sarathy.channels.email.smtplib.SMTP", _CapturingSMTP)
+    return _CapturingSMTP
+
+
+def test_looks_like_html_detects_markup() -> None:
+    assert EmailChannel._looks_like_html("<h1>Title</h1><p>Body</p>") is True
+    assert EmailChannel._looks_like_html("<div style='x'>report</div>") is True
+    assert EmailChannel._looks_like_html("<!DOCTYPE html><html><body>x</body></html>") is True
+    assert EmailChannel._looks_like_html("<table><tr><td>a</td></tr></table>") is True
+    assert EmailChannel._looks_like_html("plain text\n\nwith paragraphs") is False
+    assert EmailChannel._looks_like_html("# Markdown\n\nsome *text*") is False
+    assert EmailChannel._looks_like_html("") is False
+
+
+@pytest.mark.asyncio
+async def test_send_attaches_media_files(capturing_smtp, tmp_path) -> None:
+    png = tmp_path / "chart.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+    txt = tmp_path / "notes.txt"
+    txt.write_text("hello")
+
+    channel = EmailChannel(_make_config(), MessageBus())
+    await channel.send(
+        OutboundMessage(
+            channel="email",
+            chat_id="alice@example.com",
+            content="Report attached.",
+            media=[str(png), str(txt)],
+        )
+    )
+
+    sent = capturing_smtp.instances[0].sent_messages[0]
+    attachments = list(sent.iter_attachments())
+    assert [a.get_filename() for a in attachments] == ["chart.png", "notes.txt"]
+    assert attachments[0].get_content_type() == "image/png"
+    assert attachments[1].get_content_type() == "text/plain"
+    # The body must survive alongside the attachments.
+    assert any(p.get_content_type() == "text/plain" for p in sent.walk())
+
+
+@pytest.mark.asyncio
+async def test_send_survives_missing_attachment(capturing_smtp, tmp_path) -> None:
+    channel = EmailChannel(_make_config(), MessageBus())
+    await channel.send(
+        OutboundMessage(
+            channel="email",
+            chat_id="alice@example.com",
+            content="Body still sent.",
+            media=[str(tmp_path / "does-not-exist.png")],
+        )
+    )
+
+    sent = capturing_smtp.instances[0].sent_messages[0]
+    assert list(sent.iter_attachments()) == []
+    assert "Body still sent." in sent.get_body(("plain",)).get_content()
+
+
+@pytest.mark.asyncio
+async def test_send_preserves_html_body_verbatim(capturing_smtp) -> None:
+    html_body = "<h1>Title</h1><p>Hello <b>world</b></p>"
+
+    channel = EmailChannel(_make_config(), MessageBus())
+    await channel.send(
+        OutboundMessage(channel="email", chat_id="alice@example.com", content=html_body)
+    )
+
+    sent = capturing_smtp.instances[0].sent_messages[0]
+    html_part = sent.get_body(("html",)).get_content()
+    # Verbatim: no markdown mangling, no injected <br>. (The MIME encoder may
+    # append a trailing newline, so compare after stripping it.)
+    assert html_part.rstrip("\n") == html_body
+    assert "<br" not in html_part
+    plain = sent.get_body(("plain",)).get_content()
+    assert "Title" in plain and "world" in plain

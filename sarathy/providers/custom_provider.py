@@ -33,6 +33,7 @@ class CustomProvider(LLMProvider):
         stream: bool = False,
         on_progress: callable | None = None,
         on_thinking: callable | None = None,
+        session_id: str | None = None,
     ) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": model or self.default_model,
@@ -49,12 +50,26 @@ class CustomProvider(LLMProvider):
         if tools:
             kwargs.update(tools=tools, tool_choice="auto")
 
+        # Add session_id for OpenRouter sticky routing if applicable (non-streaming)
+        if session_id and "openrouter.ai" in (self.api_base or ""):
+            try:
+                kwargs["session_id"] = session_id
+            except Exception:
+                pass  # Benign
+
         if stream and on_progress:
-            return await self._stream_chat(kwargs, on_progress, on_thinking=on_thinking)
+            return await self._stream_chat(kwargs, on_progress, on_thinking=on_thinking, session_id=session_id)
 
         try:
             return self._parse(await self._client.chat.completions.create(**kwargs))
         except Exception as e:
+            # If session_id caused the error, retry once without it
+            if session_id and "session_id" in str(e).lower():
+                try:
+                    kwargs.pop("session_id", None)
+                    return self._parse(await self._client.chat.completions.create(**kwargs))
+                except Exception:
+                    pass
             return LLMResponse(content=f"Error: {e}", finish_reason="error")
 
     async def _stream_chat(
@@ -62,12 +77,29 @@ class CustomProvider(LLMProvider):
         kwargs: dict,
         on_progress: callable,
         on_thinking: callable | None = None,
+        session_id: str | None = None,
     ) -> LLMResponse:
         """Handle streaming chat completion."""
         accumulated_content = ""
         accumulated_reasoning = ""
         accumulated_tool_calls = []
         finish_reason = "unknown"
+        usage: dict[str, Any] = {}
+
+        # Add session_id for OpenRouter sticky routing if applicable
+        if session_id and "openrouter.ai" in (self.api_base or ""):
+            try:
+                kwargs["session_id"] = session_id
+            except Exception:
+                pass  # Benign
+
+        # Try to include usage in streaming response
+        stream_options_added = False
+        try:
+            kwargs["stream_options"] = {"include_usage": True}
+            stream_options_added = True
+        except Exception:
+            pass
 
         try:
             async for chunk in await self._client.chat.completions.create(**kwargs, stream=True):
@@ -119,37 +151,78 @@ class CustomProvider(LLMProvider):
 
                 finish_reason = chunk.choices[0].finish_reason or "unknown"
 
-            has_tool_calls = len(accumulated_tool_calls) > 0 and any(
-                tc.get("function", {}).get("name") for tc in accumulated_tool_calls
-            )
-
-            tool_calls = []
-            if has_tool_calls:
-                for tc in accumulated_tool_calls:
-                    if tc.get("function", {}).get("name"):
-                        import json
-
-                        args = tc["function"].get("arguments", "")
-                        try:
-                            args = json.loads(args) if args else {}
-                        except json.JSONDecodeError:
-                            args = {"_raw": args}
-                        tool_calls.append(
-                            ToolCallRequest(
-                                id=tc.get("id", ""),
-                                name=tc["function"]["name"],
-                                arguments=args,
-                            )
-                        )
-
-            return LLMResponse(
-                content=accumulated_content or None,
-                tool_calls=tool_calls,
-                finish_reason=finish_reason,
-                reasoning_content=accumulated_reasoning or None,
-            )
+                # Capture usage from final chunk if present
+                if hasattr(chunk, "usage") and chunk.usage:
+                    try:
+                        u = chunk.usage
+                        usage = {
+                            "prompt_tokens": u.prompt_tokens,
+                            "completion_tokens": u.completion_tokens,
+                            "total_tokens": u.total_tokens,
+                        }
+                        # Extract cache fields
+                        details = getattr(u, "prompt_tokens_details", None)
+                        cached = None
+                        cache_write = None
+                        cache_discount = None
+                        if details is not None:
+                            cached = getattr(details, "cached_tokens", None)
+                            cache_write = getattr(details, "cache_write_tokens", None)
+                            if cached is None and isinstance(details, dict):
+                                cached = details.get("cached_tokens")
+                            if cache_write is None and isinstance(details, dict):
+                                cache_write = details.get("cache_write_tokens")
+                        cache_discount = getattr(u, "cache_discount", None)
+                        if cache_discount is None and isinstance(u, dict):
+                            cache_discount = u.get("cache_discount")
+                        if cached is not None:
+                            usage["cached_tokens"] = cached
+                        if cache_write is not None:
+                            usage["cache_write_tokens"] = cache_write
+                        if cache_discount is not None:
+                            usage["cache_discount"] = cache_discount
+                    except Exception:
+                        pass  # Benign
         except Exception as e:
+            # If stream_options caused the error, retry without it
+            if stream_options_added and "stream_options" in str(e).lower():
+                try:
+                    kwargs.pop("stream_options", None)
+                    return await self._stream_chat(kwargs, on_progress, on_thinking, session_id)
+                except Exception:
+                    pass
             return LLMResponse(content=f"Error streaming: {e}", finish_reason="error")
+
+        has_tool_calls = len(accumulated_tool_calls) > 0 and any(
+            tc.get("function", {}).get("name") for tc in accumulated_tool_calls
+        )
+
+        tool_calls = []
+        if has_tool_calls:
+            for tc in accumulated_tool_calls:
+                if tc.get("function", {}).get("name"):
+                    import json
+
+                    args = tc["function"].get("arguments", "")
+                    try:
+                        args = json.loads(args) if args else {}
+                    except json.JSONDecodeError:
+                        args = {"_raw": args}
+                    tool_calls.append(
+                        ToolCallRequest(
+                            id=tc.get("id", ""),
+                            name=tc["function"]["name"],
+                            arguments=args,
+                        )
+                    )
+
+        return LLMResponse(
+            content=accumulated_content or None,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            reasoning_content=accumulated_reasoning or None,
+            usage=usage,
+        )
 
     def _parse(self, response: Any) -> LLMResponse:
         choice = response.choices[0]
@@ -167,17 +240,51 @@ class CustomProvider(LLMProvider):
         u = response.usage
         reasoning_content = getattr(msg, "reasoning_content", None) or None
         thinking_blocks = getattr(msg, "thinking_blocks", None) or None
-        return LLMResponse(
-            content=msg.content,
-            tool_calls=tool_calls,
-            finish_reason=choice.finish_reason or "stop",
-            usage={
+
+        usage_dict: dict[str, Any] = {}
+        if u:
+            usage_dict = {
                 "prompt_tokens": u.prompt_tokens,
                 "completion_tokens": u.completion_tokens,
                 "total_tokens": u.total_tokens,
             }
-            if u
-            else {},
+            # Extract cache-related fields from prompt_tokens_details (attribute or dict)
+            try:
+                details = getattr(u, "prompt_tokens_details", None)
+                cached = None
+                cache_write = None
+                cache_discount = None
+
+                if details is not None:
+                    # Attribute-style access
+                    cached = getattr(details, "cached_tokens", None)
+                    cache_write = getattr(details, "cache_write_tokens", None)
+                    # If details is a dict-like object, also try dict access
+                    if cached is None and isinstance(details, dict):
+                        cached = details.get("cached_tokens")
+                    if cache_write is None and isinstance(details, dict):
+                        cache_write = details.get("cache_write_tokens")
+
+                # Also check top-level usage for cache_discount (some providers)
+                cache_discount = getattr(u, "cache_discount", None)
+                if cache_discount is None and isinstance(u, dict):
+                    cache_discount = u.get("cache_discount")
+
+                if cached is not None:
+                    usage_dict["cached_tokens"] = cached
+                if cache_write is not None:
+                    usage_dict["cache_write_tokens"] = cache_write
+                if cache_discount is not None:
+                    usage_dict["cache_discount"] = cache_discount
+            except Exception:
+                # Benign: never fail the turn for telemetry
+                pass
+
+        return LLMResponse(
+            content=msg.content,
+            tool_calls=tool_calls,
+            finish_reason=choice.finish_reason or "stop",
+            usage=usage_dict,
             reasoning_content=reasoning_content,
             thinking_blocks=thinking_blocks,
         )

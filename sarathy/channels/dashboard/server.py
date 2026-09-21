@@ -306,6 +306,7 @@ class DashboardChannel(BaseChannel):
         app.router.add_get("/api/workspace/file", self._api_workspace_get)
         app.router.add_put("/api/workspace/file", self._api_workspace_put)
         app.router.add_get("/api/status", self._api_status)
+        app.router.add_get("/api/usage/summary", self._api_usage_summary)
         app.router.add_get("/ws", self._ws_handler)
 
     def _device_kind(self, request: web.Request) -> str:
@@ -883,6 +884,40 @@ class DashboardChannel(BaseChannel):
                 },
             }
         )
+
+    async def _api_usage_summary(self, request: web.Request) -> web.Response:
+        """Return usage telemetry summary. Never 500s - returns empty shape on error."""
+        try:
+            from sarathy.usage.store import get_usage_store
+
+            # Parse days parameter with clamping
+            try:
+                days = int(request.query.get("days", "7"))
+            except (ValueError, TypeError):
+                days = 7
+            days = max(1, min(365, days))
+
+            summary = get_usage_store().summary(days)
+            return web.json_response(summary)
+        except Exception:
+            # Benign: never 500, return empty shape
+            return web.json_response(
+                {
+                    "available": False,
+                    "window_days": days if "days" in locals() else 7,
+                    "totals": {
+                        "requests": 0,
+                        "prompt_tokens": 0,
+                        "cached_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "cache_hit_pct": 0.0,
+                    },
+                    "by_model": [],
+                    "timeseries": [],
+                },
+                status=200,
+            )
 
     # ------------------------------------------------------------------ websocket
 

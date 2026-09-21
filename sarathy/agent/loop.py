@@ -7,6 +7,7 @@ import json
 import re
 import uuid
 from contextlib import AsyncExitStack
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -279,6 +280,7 @@ class AgentLoop:
         channel: str | None = None,
         session_metadata: dict | None = None,
         steer_queue: asyncio.Queue | None = None,
+        session_key: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], dict]:
         """Run the agent iteration loop. Returns (final_content, tools_used, messages, stats)."""
         import time
@@ -338,11 +340,15 @@ class AgentLoop:
                     stream=should_stream,
                     on_progress=on_progress if should_stream else None,
                     on_thinking=on_thinking if should_stream else None,
+                    session_id=session_key,
                 )
             finally:
                 if self.reviewer:
                     self.reviewer.mark_idle()
             elapsed = time.perf_counter() - start_time
+
+            # Record usage telemetry (benign - never fails the turn)
+            self._record_usage(response, session_key=session_key, channel=channel, elapsed=elapsed)
 
             if response.usage:
                 total_tokens += response.usage.get("completion_tokens", 0)
@@ -475,6 +481,43 @@ class AgentLoop:
         }
 
         return final_content, tools_used, messages, stats
+
+    def _record_usage(
+        self,
+        response: Any,
+        session_key: str | None,
+        channel: str | None,
+        elapsed: float,
+    ) -> None:
+        """Record usage telemetry for a single LLM call. Never raises."""
+        try:
+            from sarathy.usage.store import get_usage_store
+
+            usage = response.usage or {}
+            provider_name = (
+                getattr(self.provider, "provider_name", None)
+                or getattr(self.provider, "api_base", None)
+                or "local"
+            )
+            event = {
+                "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "session_key": session_key,
+                "channel": channel,
+                "model": self.model or "",
+                "provider": provider_name,
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "cached_tokens": usage.get("cached_tokens", 0),
+                "cache_write_tokens": usage.get("cache_write_tokens"),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+                "cache_discount": usage.get("cache_discount"),
+                "duration_ms": int(elapsed * 1000),
+                "finish_reason": response.finish_reason,
+            }
+            get_usage_store().record(event)
+        except Exception:
+            # Benign: telemetry failure must never break a turn
+            pass
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -670,6 +713,7 @@ class AgentLoop:
                     reasoning_effort=effective_reasoning_effort,
                     channel=msg.channel,
                     steer_queue=steer_queue,
+                    session_key=side_key,
                 )
 
                 await self.bus.publish_outbound(
@@ -849,7 +893,7 @@ class AgentLoop:
                 history_budget_tokens=self._history_budget_tokens(),
                 model=self.model,
             )
-            final_content, _, all_msgs, _ = await self._run_agent_loop(messages, channel=channel)
+            final_content, _, all_msgs, _ = await self._run_agent_loop(messages, channel=channel, session_key=key)
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
             return OutboundMessage(
@@ -1009,6 +1053,7 @@ class AgentLoop:
                         channel=msg.channel,
                         session_metadata=session.metadata,
                         steer_queue=session.steer_queue,
+                        session_key=key,
                     )
                 finally:
                     self.provider, self.model = _saved
@@ -1028,6 +1073,7 @@ class AgentLoop:
             channel=msg.channel,
             session_metadata=session.metadata,
             steer_queue=session.steer_queue,
+            session_key=key,
         )
 
         if final_content is None:

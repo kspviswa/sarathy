@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { clearToken, api } from "@/lib/api";
 import type { StatusResponse } from "@/lib/types";
+import { UsageCard } from "@/components/UsageCard";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -146,6 +147,8 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
             )}
           </CardContent>
         </Card>
+
+        <UsageCard />
       </div>
     </div>
   );

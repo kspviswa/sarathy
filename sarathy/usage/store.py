@@ -1,0 +1,276 @@
+"""Usage telemetry store — SQLite-backed, append-only event log with aggregates."""
+
+from __future__ import annotations
+
+import logging
+import os
+import sqlite3
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from sarathy.utils.helpers import get_data_path
+
+logger = logging.getLogger(__name__)
+
+_schema_sql = """
+CREATE TABLE IF NOT EXISTS usage_events (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts                 TEXT    NOT NULL,
+  session_key        TEXT,
+  channel            TEXT,
+  model              TEXT    NOT NULL DEFAULT '',
+  provider           TEXT    NOT NULL DEFAULT '',
+  prompt_tokens      INTEGER NOT NULL DEFAULT 0,
+  cached_tokens      INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER,
+  completion_tokens  INTEGER NOT NULL DEFAULT 0,
+  total_tokens       INTEGER NOT NULL DEFAULT 0,
+  cache_discount     REAL,
+  duration_ms        INTEGER,
+  finish_reason      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_usage_ts    ON usage_events(ts);
+CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_events(model, ts);
+PRAGMA user_version = 1;
+"""
+
+_usage_store_instance: "UsageStore | None" = None
+_store_lock = threading.Lock()
+
+
+def get_usage_store() -> "UsageStore":
+    """Module-level lazy singleton for UsageStore."""
+    global _usage_store_instance
+    with _store_lock:
+        if _usage_store_instance is None:
+            _usage_store_instance = UsageStore()
+        return _usage_store_instance
+
+
+class UsageStore:
+    """SQLite-backed append-only usage event store with aggregate queries."""
+
+    def __init__(self, db_path: Path | None = None):
+        self._db_path = db_path or self._default_db_path()
+        self._local = threading.local()
+        self._init_db()
+
+    def _default_db_path(self) -> Path:
+        env_path = os.environ.get("SARATHY_USAGE_DB")
+        if env_path:
+            return Path(env_path).expanduser()
+        return get_data_path() / "usage.db"
+
+    def _get_conn(self) -> sqlite3.Connection:
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            self._local.conn = sqlite3.connect(
+                self._db_path,
+                check_same_thread=False,
+                isolation_level=None,
+            )
+            self._local.conn.execute("PRAGMA journal_mode=WAL;")
+            self._local.conn.execute("PRAGMA busy_timeout=5000;")
+            self._local.conn.row_factory = sqlite3.Row
+        return self._local.conn
+
+    def _init_db(self) -> None:
+        try:
+            with self._get_conn() as conn:
+                conn.executescript(_schema_sql)
+        except Exception as e:
+            logger.debug("Usage store init failed: %s", e)
+
+    def record(self, event: dict[str, Any]) -> None:
+        """Insert one usage event row. Never raises."""
+        try:
+            ts = event.get("ts") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            with self._get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO usage_events (
+                        ts, session_key, channel, model, provider,
+                        prompt_tokens, cached_tokens, cache_write_tokens,
+                        completion_tokens, total_tokens, cache_discount,
+                        duration_ms, finish_reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ts,
+                        event.get("session_key"),
+                        event.get("channel"),
+                        event.get("model", ""),
+                        event.get("provider", ""),
+                        event.get("prompt_tokens", 0),
+                        event.get("cached_tokens", 0),
+                        event.get("cache_write_tokens"),
+                        event.get("completion_tokens", 0),
+                        event.get("total_tokens", 0),
+                        event.get("cache_discount"),
+                        event.get("duration_ms"),
+                        event.get("finish_reason"),
+                    ),
+                )
+        except Exception as e:
+            logger.debug("Usage store record failed: %s", e)
+
+    def summary(self, days: int = 7) -> dict[str, Any]:
+        """Aggregate usage over the given window."""
+        try:
+            days = max(1, min(365, days))
+            cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+            cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+            with self._get_conn() as conn:
+                # Check if any data exists
+                row = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM usage_events WHERE ts >= ?",
+                    (cutoff_iso,),
+                ).fetchone()
+                if not row or row["cnt"] == 0:
+                    return self._empty_summary(days)
+
+                # Totals
+                totals_row = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) as requests,
+                        COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                        COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+                        COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                        COALESCE(SUM(total_tokens), 0) as total_tokens
+                    FROM usage_events
+                    WHERE ts >= ?
+                    """,
+                    (cutoff_iso,),
+                ).fetchone()
+
+                prompt_total = totals_row["prompt_tokens"] or 0
+                cached_total = totals_row["cached_tokens"] or 0
+                cache_hit_pct = round(100.0 * cached_total / prompt_total, 1) if prompt_total > 0 else 0.0
+
+                # By model
+                by_model_rows = conn.execute(
+                    """
+                    SELECT
+                        model,
+                        provider,
+                        COUNT(*) as requests,
+                        COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                        COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+                        COALESCE(SUM(completion_tokens), 0) as completion_tokens
+                    FROM usage_events
+                    WHERE ts >= ?
+                    GROUP BY model, provider
+                    ORDER BY requests DESC
+                    """,
+                    (cutoff_iso,),
+                ).fetchall()
+
+                by_model = []
+                for r in by_model_rows:
+                    pm = r["prompt_tokens"] or 0
+                    cm = r["cached_tokens"] or 0
+                    hit_pct = round(100.0 * cm / pm, 1) if pm > 0 else 0.0
+                    by_model.append(
+                        {
+                            "model": r["model"] or "",
+                            "provider": r["provider"] or "",
+                            "requests": r["requests"],
+                            "prompt_tokens": pm,
+                            "cached_tokens": cm,
+                            "completion_tokens": r["completion_tokens"] or 0,
+                            "cache_hit_pct": hit_pct,
+                        }
+                    )
+
+                # Timeseries bucketing: hourly for <=2 days, daily otherwise
+                bucket = "hour" if days <= 2 else "day"
+                strftime_fmt = "%Y-%m-%dT%H:00:00Z" if bucket == "hour" else "%Y-%m-%dT00:00:00Z"
+
+                ts_rows = conn.execute(
+                    f"""
+                    SELECT
+                        strftime('{strftime_fmt}', ts) as bucket,
+                        COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                        COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+                        COALESCE(SUM(completion_tokens), 0) as completion_tokens
+                    FROM usage_events
+                    WHERE ts >= ?
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    """,
+                    (cutoff_iso,),
+                ).fetchall()
+
+                timeseries = []
+                for r in ts_rows:
+                    pt = r["prompt_tokens"] or 0
+                    ct = r["cached_tokens"] or 0
+                    hit_pct = round(100.0 * ct / pt, 1) if pt > 0 else 0.0
+                    timeseries.append(
+                        {
+                            "ts": r["bucket"],
+                            "prompt_tokens": pt,
+                            "cached_tokens": ct,
+                            "completion_tokens": r["completion_tokens"] or 0,
+                            "cache_hit_pct": hit_pct,
+                        }
+                    )
+
+                return {
+                    "available": True,
+                    "window_days": days,
+                    "totals": {
+                        "requests": totals_row["requests"],
+                        "prompt_tokens": prompt_total,
+                        "cached_tokens": cached_total,
+                        "completion_tokens": totals_row["completion_tokens"] or 0,
+                        "total_tokens": totals_row["total_tokens"] or 0,
+                        "cache_hit_pct": cache_hit_pct,
+                    },
+                    "by_model": by_model,
+                    "timeseries": timeseries,
+                }
+        except Exception as e:
+            logger.debug("Usage store summary failed: %s", e)
+            return self._empty_summary(days)
+
+    def available(self) -> bool:
+        """Check if DB exists and has at least one row."""
+        try:
+            with self._get_conn() as conn:
+                row = conn.execute("SELECT 1 FROM usage_events LIMIT 1").fetchone()
+                return row is not None
+        except Exception:
+            return False
+
+    def _empty_summary(self, days: int) -> dict[str, Any]:
+        return {
+            "available": False,
+            "window_days": days,
+            "totals": {
+                "requests": 0,
+                "prompt_tokens": 0,
+                "cached_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cache_hit_pct": 0.0,
+            },
+            "by_model": [],
+            "timeseries": [],
+        }
+
+
+def reset_usage_store() -> None:
+    """Reset the singleton (for testing)."""
+    global _usage_store_instance
+    with _store_lock:
+        if _usage_store_instance is not None:
+            try:
+                if hasattr(_usage_store_instance._local, "conn") and _usage_store_instance._local.conn:
+                    _usage_store_instance._local.conn.close()
+            except Exception:
+                pass
+        _usage_store_instance = None

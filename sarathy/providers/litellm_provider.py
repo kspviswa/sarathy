@@ -376,11 +376,40 @@ class LiteLLMProvider(LLMProvider):
 
         usage = {}
         if hasattr(response, "usage") and response.usage:
+            u = response.usage
             usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
+                "prompt_tokens": u.prompt_tokens,
+                "completion_tokens": u.completion_tokens,
+                "total_tokens": u.total_tokens,
             }
+            # Extract cache-related fields (attribute or dict)
+            try:
+                details = getattr(u, "prompt_tokens_details", None)
+                cached = None
+                cache_write = None
+                cache_discount = None
+
+                if details is not None:
+                    cached = getattr(details, "cached_tokens", None)
+                    cache_write = getattr(details, "cache_write_tokens", None)
+                    if cached is None and isinstance(details, dict):
+                        cached = details.get("cached_tokens")
+                    if cache_write is None and isinstance(details, dict):
+                        cache_write = details.get("cache_write_tokens")
+
+                cache_discount = getattr(u, "cache_discount", None)
+                if cache_discount is None and isinstance(u, dict):
+                    cache_discount = u.get("cache_discount")
+
+                if cached is not None:
+                    usage["cached_tokens"] = cached
+                if cache_write is not None:
+                    usage["cache_write_tokens"] = cache_write
+                if cache_discount is not None:
+                    usage["cache_discount"] = cache_discount
+            except Exception:
+                # Benign: never fail the turn for telemetry
+                pass
 
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None

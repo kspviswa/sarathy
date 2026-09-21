@@ -50,12 +50,10 @@ class CustomProvider(LLMProvider):
         if tools:
             kwargs.update(tools=tools, tool_choice="auto")
 
-        # Add session_id for OpenRouter sticky routing if applicable (non-streaming)
-        if session_id and "openrouter.ai" in (self.api_base or ""):
-            try:
-                kwargs["session_id"] = session_id
-            except Exception:
-                pass  # Benign
+        # Add session_id for OpenRouter sticky routing if applicable.
+        # It MUST travel in extra_body: the OpenAI SDK has no catch-all **kwargs
+        # and rejects unknown top-level arguments with a TypeError.
+        self._apply_session_id(kwargs, session_id)
 
         if stream and on_progress:
             return await self._stream_chat(kwargs, on_progress, on_thinking=on_thinking, session_id=session_id)
@@ -63,14 +61,69 @@ class CustomProvider(LLMProvider):
         try:
             return self._parse(await self._client.chat.completions.create(**kwargs))
         except Exception as e:
-            # If session_id caused the error, retry once without it
+            # If the session_id body field caused the error, retry once without it
             if session_id and "session_id" in str(e).lower():
                 try:
-                    kwargs.pop("session_id", None)
+                    kwargs.pop("extra_body", None)
                     return self._parse(await self._client.chat.completions.create(**kwargs))
                 except Exception:
                     pass
             return LLMResponse(content=f"Error: {e}", finish_reason="error")
+
+    def _apply_session_id(self, kwargs: dict[str, Any], session_id: str | None) -> None:
+        """Inject OpenRouter's session_id into extra_body (never top-level). Benign."""
+        if not session_id or "openrouter.ai" not in (self.api_base or ""):
+            return
+        try:
+            extra = dict(kwargs.get("extra_body") or {})
+            extra["session_id"] = session_id
+            kwargs["extra_body"] = extra
+        except Exception:
+            pass  # Benign
+
+    @staticmethod
+    def _usage_from(u: Any) -> dict[str, Any]:
+        """Build a usage dict from a provider usage object, capturing cache fields.
+
+        Handles both attribute-style and dict-style ``prompt_tokens_details``.
+        Never raises; returns ``{}`` when usage is absent or malformed.
+        """
+        if not u:
+            return {}
+        try:
+            usage: dict[str, Any] = {
+                "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
+                "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
+                "total_tokens": getattr(u, "total_tokens", 0) or 0,
+            }
+            details = getattr(u, "prompt_tokens_details", None)
+            if details is None and isinstance(u, dict):
+                details = u.get("prompt_tokens_details")
+
+            cached = None
+            cache_write = None
+            if details is not None:
+                cached = getattr(details, "cached_tokens", None)
+                cache_write = getattr(details, "cache_write_tokens", None)
+                if isinstance(details, dict):
+                    if cached is None:
+                        cached = details.get("cached_tokens")
+                    if cache_write is None:
+                        cache_write = details.get("cache_write_tokens")
+
+            cache_discount = getattr(u, "cache_discount", None)
+            if cache_discount is None and isinstance(u, dict):
+                cache_discount = u.get("cache_discount")
+
+            if cached is not None:
+                usage["cached_tokens"] = cached
+            if cache_write is not None:
+                usage["cache_write_tokens"] = cache_write
+            if cache_discount is not None:
+                usage["cache_discount"] = cache_discount
+            return usage
+        except Exception:
+            return {}
 
     async def _stream_chat(
         self,
@@ -87,11 +140,7 @@ class CustomProvider(LLMProvider):
         usage: dict[str, Any] = {}
 
         # Add session_id for OpenRouter sticky routing if applicable
-        if session_id and "openrouter.ai" in (self.api_base or ""):
-            try:
-                kwargs["session_id"] = session_id
-            except Exception:
-                pass  # Benign
+        self._apply_session_id(kwargs, session_id)
 
         # Try to include usage in streaming response
         stream_options_added = False
@@ -103,6 +152,15 @@ class CustomProvider(LLMProvider):
 
         try:
             async for chunk in await self._client.chat.completions.create(**kwargs, stream=True):
+                # Usage may arrive on a final chunk that carries no choices
+                # (stream_options.include_usage). Capture it before touching choices.
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage:
+                    usage = self._usage_from(chunk_usage)
+
+                if not chunk.choices:
+                    continue
+
                 delta = chunk.choices[0].delta
 
                 # Extract reasoning/thinking content from delta
@@ -150,39 +208,6 @@ class CustomProvider(LLMProvider):
                             )
 
                 finish_reason = chunk.choices[0].finish_reason or "unknown"
-
-                # Capture usage from final chunk if present
-                if hasattr(chunk, "usage") and chunk.usage:
-                    try:
-                        u = chunk.usage
-                        usage = {
-                            "prompt_tokens": u.prompt_tokens,
-                            "completion_tokens": u.completion_tokens,
-                            "total_tokens": u.total_tokens,
-                        }
-                        # Extract cache fields
-                        details = getattr(u, "prompt_tokens_details", None)
-                        cached = None
-                        cache_write = None
-                        cache_discount = None
-                        if details is not None:
-                            cached = getattr(details, "cached_tokens", None)
-                            cache_write = getattr(details, "cache_write_tokens", None)
-                            if cached is None and isinstance(details, dict):
-                                cached = details.get("cached_tokens")
-                            if cache_write is None and isinstance(details, dict):
-                                cache_write = details.get("cache_write_tokens")
-                        cache_discount = getattr(u, "cache_discount", None)
-                        if cache_discount is None and isinstance(u, dict):
-                            cache_discount = u.get("cache_discount")
-                        if cached is not None:
-                            usage["cached_tokens"] = cached
-                        if cache_write is not None:
-                            usage["cache_write_tokens"] = cache_write
-                        if cache_discount is not None:
-                            usage["cache_discount"] = cache_discount
-                    except Exception:
-                        pass  # Benign
         except Exception as e:
             # If stream_options caused the error, retry without it
             if stream_options_added and "stream_options" in str(e).lower():
@@ -241,44 +266,7 @@ class CustomProvider(LLMProvider):
         reasoning_content = getattr(msg, "reasoning_content", None) or None
         thinking_blocks = getattr(msg, "thinking_blocks", None) or None
 
-        usage_dict: dict[str, Any] = {}
-        if u:
-            usage_dict = {
-                "prompt_tokens": u.prompt_tokens,
-                "completion_tokens": u.completion_tokens,
-                "total_tokens": u.total_tokens,
-            }
-            # Extract cache-related fields from prompt_tokens_details (attribute or dict)
-            try:
-                details = getattr(u, "prompt_tokens_details", None)
-                cached = None
-                cache_write = None
-                cache_discount = None
-
-                if details is not None:
-                    # Attribute-style access
-                    cached = getattr(details, "cached_tokens", None)
-                    cache_write = getattr(details, "cache_write_tokens", None)
-                    # If details is a dict-like object, also try dict access
-                    if cached is None and isinstance(details, dict):
-                        cached = details.get("cached_tokens")
-                    if cache_write is None and isinstance(details, dict):
-                        cache_write = details.get("cache_write_tokens")
-
-                # Also check top-level usage for cache_discount (some providers)
-                cache_discount = getattr(u, "cache_discount", None)
-                if cache_discount is None and isinstance(u, dict):
-                    cache_discount = u.get("cache_discount")
-
-                if cached is not None:
-                    usage_dict["cached_tokens"] = cached
-                if cache_write is not None:
-                    usage_dict["cache_write_tokens"] = cache_write
-                if cache_discount is not None:
-                    usage_dict["cache_discount"] = cache_discount
-            except Exception:
-                # Benign: never fail the turn for telemetry
-                pass
+        usage_dict = self._usage_from(u)
 
         return LLMResponse(
             content=msg.content,

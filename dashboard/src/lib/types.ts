@@ -89,3 +89,32 @@ export interface RuntimeSetResponse {
   applied: boolean;
   error?: string;
 }
+
+export interface UsageSummary {
+  available: boolean;
+  window_days: number;
+  totals: {
+    requests: number;
+    prompt_tokens: number;
+    cached_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cache_hit_pct: number;
+  };
+  by_model: Array<{
+    model: string;
+    provider: string;
+    requests: number;
+    prompt_tokens: number;
+    cached_tokens: number;
+    completion_tokens: number;
+    cache_hit_pct: number;
+  }>;
+  timeseries: Array<{
+    ts: string;
+    prompt_tokens: number;
+    cached_tokens: number;
+    completion_tokens: number;
+    cache_hit_pct: number;
+  }>;
+}

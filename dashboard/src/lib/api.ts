@@ -8,6 +8,7 @@ import type {
   SessionDetail,
   SessionInfo,
   StatusResponse,
+  UsageSummary,
   WorkspaceTree,
 } from "./types";
 
@@ -150,4 +151,7 @@ export const api = {
     }),
 
   status: () => request<StatusResponse>("/api/status"),
+
+  usageSummary: (days = 7) =>
+    request<UsageSummary>(`/api/usage/summary?days=${days}`),
 };

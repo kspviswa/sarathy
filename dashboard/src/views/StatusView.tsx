@@ -16,6 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { clearToken, api } from "@/lib/api";
 import type { StatusResponse } from "@/lib/types";
 import { useTheme } from "@/lib/theme";
+import { UsageCard } from "@/components/UsageCard";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -175,6 +176,8 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
           )}
         </CardContent>
       </Card>
+
+      <UsageCard />
     </div>
   );
 }

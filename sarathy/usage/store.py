@@ -61,6 +61,13 @@ class UsageStore:
         env_path = os.environ.get("SARATHY_USAGE_DB")
         if env_path:
             return Path(env_path).expanduser()
+        # Safety net: never touch the production DB from a test run, even if a
+        # test forgets to set SARATHY_USAGE_DB. conftest isolates per-test; this
+        # guards direct/standalone test invocations.
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            import tempfile
+
+            return Path(tempfile.gettempdir()) / f"sarathy_usage_test_{os.getpid()}.db"
         return get_data_path() / "usage.db"
 
     def _get_conn(self) -> sqlite3.Connection:

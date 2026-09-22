@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS usage_events (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts    ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_events(model, ts);
+
+-- Authoritative current epoch per session (persisted on /new reset).
+CREATE TABLE IF NOT EXISTS usage_sessions (
+  session_key TEXT PRIMARY KEY,
+  epoch       INTEGER NOT NULL DEFAULT 0
+);
 """
 
 _usage_store_instance: "UsageStore | None" = None
@@ -171,6 +177,16 @@ class UsageStore:
                         event.get("finish_reason"),
                         epoch,
                     ),
+                )
+                # Keep the session meta table in sync so get_session_epoch never
+                # falls behind events recorded by older code paths.
+                conn.execute(
+                    """
+                    INSERT INTO usage_sessions (session_key, epoch) VALUES (?, ?)
+                    ON CONFLICT(session_key) DO UPDATE SET
+                        epoch = MAX(usage_sessions.epoch, excluded.epoch)
+                    """,
+                    (event.get("session_key"), epoch),
                 )
         except Exception as e:
             logger.debug("Usage store record failed: %s", e)
@@ -365,32 +381,53 @@ class UsageStore:
             return None
 
     def reset_session_epoch(self, session_key: str) -> int:
-        """Advance the session epoch to the next value and return it.
+        """Advance the session epoch to the next value, persist it, and return it.
 
-        Returns COALESCE(MAX(epoch), -1) + 1 for the given session_key.
-        Monotonic per key; does not delete rows.
+        The new epoch is COALESCE(MAX(meta.epoch, events.epoch), -1) + 1 for the
+        given session_key, stored in the usage_sessions meta table so subsequent
+        /new resets keep advancing even across restarts. Monotonic per key; does
+        not delete rows.
         """
         try:
             with self._get_conn() as conn:
                 row = conn.execute(
-                    "SELECT COALESCE(MAX(epoch), -1) + 1 as next_epoch FROM usage_events WHERE session_key = ?",
-                    (session_key,),
+                    """
+                    SELECT COALESCE(MAX((
+                        SELECT COALESCE(MAX(epoch), 0) FROM usage_sessions WHERE session_key = ?),
+                        (SELECT COALESCE(MAX(epoch), 0) FROM usage_events WHERE session_key = ?)
+                    ), 0) + 1 as next_epoch
+                    """,
+                    (session_key, session_key),
                 ).fetchone()
-                next_epoch = row["next_epoch"] if row else 0
-                return int(next_epoch)
+                next_epoch = int(row["next_epoch"]) if row else 1
+                conn.execute(
+                    """
+                    INSERT INTO usage_sessions (session_key, epoch) VALUES (?, ?)
+                    ON CONFLICT(session_key) DO UPDATE SET epoch = excluded.epoch
+                    """,
+                    (session_key, next_epoch),
+                )
+                return next_epoch
         except Exception:
             return 0
 
     def get_session_epoch(self, session_key: str) -> int:
         """Return the current (latest) epoch for a session without advancing it.
 
-        Returns 0 if no rows exist for the session_key.
+        Reads the persisted usage_sessions meta table, falling back to the max
+        epoch seen across events for legacy sessions that predate the meta table.
+        Returns 0 if neither exists for the session_key.
         """
         try:
             with self._get_conn() as conn:
                 row = conn.execute(
-                    "SELECT COALESCE(MAX(epoch), 0) as current_epoch FROM usage_events WHERE session_key = ?",
-                    (session_key,),
+                    """
+                    SELECT MAX((
+                        SELECT COALESCE(MAX(epoch), 0) FROM usage_sessions WHERE session_key = ?),
+                        (SELECT COALESCE(MAX(epoch), 0) FROM usage_events WHERE session_key = ?)
+                    ) as current_epoch
+                    """,
+                    (session_key, session_key),
                 ).fetchone()
                 return int(row["current_epoch"]) if row else 0
         except Exception:

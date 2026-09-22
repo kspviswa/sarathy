@@ -29,7 +29,7 @@ function TruncateModelId(model: string, maxLen = 40): string {
 
 function SparklineSvg({
   data,
-  color = "hsl(var(--primary))",
+  color = "var(--primary)",
   height = 160,
   width = 280,
   maxValue,
@@ -248,7 +248,7 @@ export function UsageCard() {
             {/* Prompt tokens (background) */}
             <SparklineSvg
               data={promptSeries}
-              color="hsl(var(--muted-foreground) / 0.5)"
+              color="color-mix(in oklab, var(--muted-foreground) 50%, transparent)"
               height={160}
               maxValue={sharedMax}
               className="absolute inset-0 w-full h-full"
@@ -256,7 +256,7 @@ export function UsageCard() {
             {/* Cached tokens (foreground) */}
             <SparklineSvg
               data={cachedSeries}
-              color="hsl(var(--primary))"
+              color="var(--primary)"
               height={160}
               maxValue={sharedMax}
               className="absolute inset-0 w-full h-full"

@@ -274,3 +274,23 @@ describe("UsageCard — per-model filter", () => {
     expect(api.usageSummary).toHaveBeenLastCalledWith(7, "local/llama-3.1-8b");
   });
 });
+
+describe("UsageCard — chart colors resolve against theme variables", () => {
+  it("does not wrap theme vars in hsl() (theme uses oklch — hsl(var(--x)) is invalid and renders black)", async () => {
+    render(<UsageCard />);
+
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    const svgs = document.querySelectorAll("svg[aria-label='Token usage over time']");
+    expect(svgs.length).toBeGreaterThan(0);
+
+    const combined = Array.from(svgs).map((svg) => svg.outerHTML).join("");
+    // The invalid hsl(var(--x)) pattern must never come back (theme vars are oklch).
+    expect(combined).not.toMatch(/hsl\(var\(/);
+    // Colors must reference the theme variables directly (they resolve to oklch).
+    expect(combined).toContain("var(--primary)");
+    expect(combined).toContain("var(--muted-foreground)");
+  });
+});

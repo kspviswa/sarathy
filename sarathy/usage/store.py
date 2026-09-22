@@ -28,12 +28,13 @@ CREATE TABLE IF NOT EXISTS usage_events (
   completion_tokens  INTEGER NOT NULL DEFAULT 0,
   total_tokens       INTEGER NOT NULL DEFAULT 0,
   cache_discount     REAL,
+  cost               REAL,
   duration_ms        INTEGER,
   finish_reason      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts    ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_events(model, ts);
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 """
 
 _usage_store_instance: "UsageStore | None" = None
@@ -86,8 +87,28 @@ class UsageStore:
         try:
             with self._get_conn() as conn:
                 conn.executescript(_schema_sql)
+                self._migrate_schema_if_needed(conn)
         except Exception as e:
             logger.debug("Usage store init failed: %s", e)
+
+    def _migrate_schema_if_needed(self, conn: sqlite3.Connection) -> None:
+        """Idempotent migration: add cost column and bump user_version to 2."""
+        try:
+            # Check current user_version
+            row = conn.execute("PRAGMA user_version;").fetchone()
+            current_version = row[0] if row else 0
+
+            if current_version < 2:
+                # Check if cost column already exists (fresh DB with new schema but old version)
+                cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
+                has_cost = any(col[1] == "cost" for col in cols)
+
+                if not has_cost:
+                    conn.execute("ALTER TABLE usage_events ADD COLUMN cost REAL;")
+
+                conn.execute("PRAGMA user_version = 2;")
+        except Exception as e:
+            logger.debug("Usage store migration failed: %s", e)
 
     def record(self, event: dict[str, Any]) -> None:
         """Insert one usage event row. Never raises."""
@@ -99,9 +120,9 @@ class UsageStore:
                     INSERT INTO usage_events (
                         ts, session_key, channel, model, provider,
                         prompt_tokens, cached_tokens, cache_write_tokens,
-                        completion_tokens, total_tokens, cache_discount,
+                        completion_tokens, total_tokens, cache_discount, cost,
                         duration_ms, finish_reason
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ts,
@@ -115,6 +136,7 @@ class UsageStore:
                         event.get("completion_tokens", 0),
                         event.get("total_tokens", 0),
                         event.get("cache_discount"),
+                        event.get("cost"),
                         event.get("duration_ms"),
                         event.get("finish_reason"),
                     ),
@@ -292,6 +314,23 @@ class UsageStore:
                 return row is not None
         except Exception:
             return False
+
+    def session_cost(self, session_key: str) -> float | None:
+        """Return cumulative cost for a session, or None if no cost data exists.
+
+        Never raises; returns None on any error or when no rows have cost.
+        """
+        try:
+            with self._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT SUM(cost) as total FROM usage_events WHERE session_key = ? AND cost IS NOT NULL",
+                    (session_key,),
+                ).fetchone()
+                if row and row["total"] is not None:
+                    return float(row["total"])
+                return None
+        except Exception:
+            return None
 
     def _empty_summary(self, days: int, model: str | None = None) -> dict[str, Any]:
         return {

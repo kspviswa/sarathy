@@ -511,6 +511,7 @@ class AgentLoop:
                 "completion_tokens": usage.get("completion_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
                 "cache_discount": usage.get("cache_discount"),
+                "cost": usage.get("cost"),
                 "duration_ms": int(elapsed * 1000),
                 "finish_reason": response.finish_reason,
             }

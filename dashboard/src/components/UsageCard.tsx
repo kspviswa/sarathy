@@ -244,12 +244,12 @@ export function UsageCard() {
               {timeseries.length} bucket{timeseries.length !== 1 ? "s" : ""}
             </span>
           </div>
-          <div className="relative h-40 w-full">
+          <div className="relative h-32 w-full">
             {/* Prompt tokens (background) */}
             <SparklineSvg
               data={promptSeries}
               color="hsl(var(--muted-foreground) / 0.5)"
-              height={160}
+              height={128}
               maxValue={sharedMax}
               className="absolute inset-0 w-full h-full"
             />
@@ -257,7 +257,7 @@ export function UsageCard() {
             <SparklineSvg
               data={cachedSeries}
               color="hsl(var(--primary))"
-              height={160}
+              height={128}
               maxValue={sharedMax}
               className="absolute inset-0 w-full h-full"
             />

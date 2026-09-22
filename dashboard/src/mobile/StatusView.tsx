@@ -79,6 +79,8 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
           </div>
         </div>
 
+        <UsageCard />
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -147,8 +149,6 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
             )}
           </CardContent>
         </Card>
-
-        <UsageCard />
       </div>
     </div>
   );

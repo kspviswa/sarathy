@@ -121,6 +121,13 @@ class CustomProvider(LLMProvider):
                 usage["cache_write_tokens"] = cache_write
             if cache_discount is not None:
                 usage["cache_discount"] = cache_discount
+
+            cost = getattr(u, "cost", None)
+            if cost is None and isinstance(u, dict):
+                cost = u.get("cost")
+            if cost is not None:
+                usage["cost"] = cost
+
             return usage
         except Exception:
             return {}

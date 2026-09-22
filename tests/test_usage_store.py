@@ -349,3 +349,177 @@ def test_available_method(temp_db):
         }
     )
     assert store.available() is True
+
+
+def test_migration_v1_to_v2_idempotent(temp_db):
+    """Test v1 -> v2 migration is idempotent and lossless."""
+    import sqlite3
+    from datetime import datetime, timezone
+
+    # Create a v1 database (no cost column, user_version = 1)
+    conn = sqlite3.connect(temp_db)
+    conn.execute("""
+        CREATE TABLE usage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            session_key TEXT,
+            channel TEXT,
+            model TEXT NOT NULL DEFAULT '',
+            provider TEXT NOT NULL DEFAULT '',
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            cached_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_write_tokens INTEGER,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_discount REAL,
+            duration_ms INTEGER,
+            finish_reason TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_events(model, ts);")
+    conn.execute("PRAGMA user_version = 1;")
+
+    # Insert some v1 data with recent timestamps
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    conn.execute("""
+        INSERT INTO usage_events (ts, session_key, model, provider, prompt_tokens, cached_tokens, completion_tokens, total_tokens)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (now, "test:1", "model-a", "openrouter", 1000, 300, 200, 1200))
+    conn.execute("""
+        INSERT INTO usage_events (ts, session_key, model, provider, prompt_tokens, cached_tokens, completion_tokens, total_tokens)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (now, "test:2", "model-b", "local", 500, 100, 150, 650))
+    conn.commit()
+    conn.close()
+
+    # Reset store to pick up the v1 DB
+    reset_usage_store()
+    store = UsageStore(temp_db)
+
+    # Migration should have run: cost column exists, user_version = 2
+    conn = sqlite3.connect(temp_db)
+    cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
+    has_cost = any(col[1] == "cost" for col in cols)
+    version = conn.execute("PRAGMA user_version;").fetchone()[0]
+    conn.close()
+
+    assert has_cost, "cost column should exist after migration"
+    assert version == 2, "user_version should be 2 after migration"
+
+    # Existing data should be intact
+    summary = store.summary(days=7)
+    assert summary["totals"]["requests"] == 2
+    assert summary["totals"]["prompt_tokens"] == 1500
+
+    # Re-running init should be idempotent (no error, no data loss)
+    store2 = UsageStore(temp_db)
+    summary2 = store2.summary(days=7)
+    assert summary2["totals"]["requests"] == 2
+    assert summary2["totals"]["prompt_tokens"] == 1500
+
+
+def test_fresh_db_has_cost_column_and_version_2(temp_db):
+    """Test fresh database gets cost column and user_version = 2 from schema."""
+    store = UsageStore(temp_db)
+
+    import sqlite3
+    conn = sqlite3.connect(temp_db)
+    cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
+    has_cost = any(col[1] == "cost" for col in cols)
+    version = conn.execute("PRAGMA user_version;").fetchone()[0]
+    conn.close()
+
+    assert has_cost, "fresh DB should have cost column"
+    assert version == 2, "fresh DB should have user_version = 2"
+
+
+def test_session_cost_sums_real_costs(temp_db):
+    """Test session_cost returns sum of costs for a session."""
+    store = UsageStore(temp_db)
+    session_key = "test:session_cost"
+
+    # Record events with costs
+    store.record({
+        "ts": "2026-01-01T00:00:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "provider": "openrouter",
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "cost": 0.01,
+    })
+    store.record({
+        "ts": "2026-01-01T00:01:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "provider": "openrouter",
+        "prompt_tokens": 2000,
+        "completion_tokens": 1000,
+        "total_tokens": 3000,
+        "cost": 0.02,
+    })
+    # Event without cost (should be ignored in sum)
+    store.record({
+        "ts": "2026-01-01T00:02:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "provider": "local",
+        "prompt_tokens": 500,
+        "completion_tokens": 250,
+        "total_tokens": 750,
+    })
+
+    cost = store.session_cost(session_key)
+    assert cost is not None
+    assert abs(cost - 0.03) < 0.0001  # 0.01 + 0.02
+
+
+def test_session_cost_returns_none_when_no_cost_rows(temp_db):
+    """Test session_cost returns None when no rows have cost."""
+    store = UsageStore(temp_db)
+    session_key = "test:no_cost"
+
+    # Record events WITHOUT cost
+    store.record({
+        "ts": "2026-01-01T00:00:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "provider": "local",
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+    })
+
+    cost = store.session_cost(session_key)
+    assert cost is None
+
+
+def test_session_cost_returns_none_for_unknown_session(temp_db):
+    """Test session_cost returns None for unknown session."""
+    store = UsageStore(temp_db)
+    cost = store.session_cost("nonexistent:session")
+    assert cost is None
+
+
+def test_session_cost_never_raises(temp_db, monkeypatch):
+    """Test session_cost never raises even on DB error."""
+    store = UsageStore(temp_db)
+
+    original_get_conn = store._get_conn
+
+    def failing_get_conn():
+        conn = original_get_conn()
+        original_execute = conn.execute
+
+        def failing_execute(*args, **kwargs):
+            raise Exception("DB error")
+
+        conn.execute = failing_execute
+        return conn
+
+    monkeypatch.setattr(store, "_get_conn", failing_get_conn)
+
+    cost = store.session_cost("test:session")
+    assert cost is None

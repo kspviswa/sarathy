@@ -25,12 +25,14 @@ class MockUsage:
         total_tokens=0,
         prompt_tokens_details=None,
         cache_discount=None,
+        cost=None,
     ):
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
         self.total_tokens = total_tokens
         self.prompt_tokens_details = prompt_tokens_details
         self.cache_discount = cache_discount
+        self.cost = cost
 
 
 class MockDelta:
@@ -168,3 +170,81 @@ async def test_session_id_omitted_for_non_openrouter_base():
 
     assert "extra_body" not in captured
     assert "session_id" not in captured
+
+
+def test_usage_from_captures_cost_attribute_style():
+    """Test _usage_from captures cost from attribute-style usage object."""
+    usage_obj = MockUsage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        cost=0.0123,
+    )
+
+    result = CustomProvider._usage_from(usage_obj)
+
+    assert "cost" in result
+    assert result["cost"] == 0.0123
+    assert result["prompt_tokens"] == 1000
+    assert result["completion_tokens"] == 500
+    assert result["total_tokens"] == 1500
+
+
+def test_usage_from_captures_cost_dict_style():
+    """Test _usage_from captures cost from dict-style usage object."""
+    usage_dict = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "cost": 0.0123,
+    }
+
+    result = CustomProvider._usage_from(usage_dict)
+
+    assert "cost" in result
+    assert result["cost"] == 0.0123
+    assert result["prompt_tokens"] == 1000
+    assert result["completion_tokens"] == 500
+    assert result["total_tokens"] == 1500
+
+
+def test_usage_from_no_cost_when_absent():
+    """Test _usage_from does not include cost key when absent."""
+    usage_obj = MockUsage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+    )
+
+    result = CustomProvider._usage_from(usage_obj)
+
+    assert "cost" not in result
+    assert result["prompt_tokens"] == 1000
+
+
+def test_usage_from_cost_none_not_included():
+    """Test _usage_from does not include cost when explicitly None."""
+    usage_obj = MockUsage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        cost=None,
+    )
+
+    result = CustomProvider._usage_from(usage_obj)
+
+    assert "cost" not in result
+
+
+def test_usage_from_dict_cost_none_not_included():
+    """Test _usage_from does not include cost when dict has None cost."""
+    usage_dict = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "cost": None,
+    }
+
+    result = CustomProvider._usage_from(usage_dict)
+
+    assert "cost" not in result

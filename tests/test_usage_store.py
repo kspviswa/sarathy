@@ -352,7 +352,7 @@ def test_available_method(temp_db):
 
 
 def test_migration_v1_to_v2_idempotent(temp_db):
-    """Test v1 -> v2 migration is idempotent and lossless."""
+    """Test v1 -> v2 -> v3 migration is idempotent and lossless."""
     import sqlite3
     from datetime import datetime, timezone
 
@@ -397,15 +397,17 @@ def test_migration_v1_to_v2_idempotent(temp_db):
     reset_usage_store()
     store = UsageStore(temp_db)
 
-    # Migration should have run: cost column exists, user_version = 2
+    # Migration should have run: cost column exists, epoch column exists, user_version = 3
     conn = sqlite3.connect(temp_db)
     cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
     has_cost = any(col[1] == "cost" for col in cols)
+    has_epoch = any(col[1] == "epoch" for col in cols)
     version = conn.execute("PRAGMA user_version;").fetchone()[0]
     conn.close()
 
     assert has_cost, "cost column should exist after migration"
-    assert version == 2, "user_version should be 2 after migration"
+    assert has_epoch, "epoch column should exist after migration"
+    assert version == 3, "user_version should be 3 after migration"
 
     # Existing data should be intact
     summary = store.summary(days=7)
@@ -420,18 +422,20 @@ def test_migration_v1_to_v2_idempotent(temp_db):
 
 
 def test_fresh_db_has_cost_column_and_version_2(temp_db):
-    """Test fresh database gets cost column and user_version = 2 from schema."""
+    """Test fresh database gets cost column, epoch column, and user_version = 3 from schema."""
     store = UsageStore(temp_db)
 
     import sqlite3
     conn = sqlite3.connect(temp_db)
     cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
     has_cost = any(col[1] == "cost" for col in cols)
+    has_epoch = any(col[1] == "epoch" for col in cols)
     version = conn.execute("PRAGMA user_version;").fetchone()[0]
     conn.close()
 
     assert has_cost, "fresh DB should have cost column"
-    assert version == 2, "fresh DB should have user_version = 2"
+    assert has_epoch, "fresh DB should have epoch column"
+    assert version == 3, "fresh DB should have user_version = 3"
 
 
 def test_session_cost_sums_real_costs(temp_db):
@@ -523,3 +527,271 @@ def test_session_cost_never_raises(temp_db, monkeypatch):
 
     cost = store.session_cost("test:session")
     assert cost is None
+
+
+def test_session_cost_defaults_to_epoch_0(temp_db):
+    """Test session_cost defaults to epoch 0 for backward compatibility."""
+    store = UsageStore(temp_db)
+    session_key = "test:epoch_default"
+
+    # Record events at epoch 0 (default)
+    store.record({
+        "ts": "2026-01-01T00:00:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "provider": "openrouter",
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "cost": 0.01,
+    })
+
+    # Call without epoch parameter (should default to 0)
+    cost = store.session_cost(session_key)
+    assert cost is not None
+    assert abs(cost - 0.01) < 0.0001
+
+
+def test_record_with_epoch_1_isolated(temp_db):
+    """Test record with epoch 1 -> session_cost(key, 1) returns only those rows."""
+    store = UsageStore(temp_db)
+    session_key = "test:epoch_isolation"
+
+    # Record at epoch 0
+    store.record({
+        "ts": "2026-01-01T00:00:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "provider": "openrouter",
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "cost": 0.01,
+        "epoch": 0,
+    })
+
+    # Record at epoch 1
+    store.record({
+        "ts": "2026-01-01T00:01:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "provider": "openrouter",
+        "prompt_tokens": 2000,
+        "completion_tokens": 1000,
+        "total_tokens": 3000,
+        "cost": 0.02,
+        "epoch": 1,
+    })
+
+    # session_cost(key, 0) should only see epoch 0
+    cost_0 = store.session_cost(session_key, 0)
+    assert cost_0 is not None
+    assert abs(cost_0 - 0.01) < 0.0001
+
+    # session_cost(key, 1) should only see epoch 1
+    cost_1 = store.session_cost(session_key, 1)
+    assert cost_1 is not None
+    assert abs(cost_1 - 0.02) < 0.0001
+
+    # session_cost(key) without epoch defaults to 0
+    cost_default = store.session_cost(session_key)
+    assert cost_default is not None
+    assert abs(cost_default - 0.01) < 0.0001
+
+
+def test_reset_session_epoch_monotonic(temp_db):
+    """Test reset_session_epoch returns 0 on empty key, then 1, 2... monotonically."""
+    store = UsageStore(temp_db)
+    session_key = "test:epoch_monotonic"
+
+    # Empty key -> should return 0
+    epoch0 = store.reset_session_epoch(session_key)
+    assert epoch0 == 0
+
+    # Record at epoch 0
+    store.record({
+        "ts": "2026-01-01T00:00:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "epoch": 0,
+        "cost": 0.01,
+    })
+
+    # Reset -> should return 1
+    epoch1 = store.reset_session_epoch(session_key)
+    assert epoch1 == 1
+
+    # Record at epoch 1
+    store.record({
+        "ts": "2026-01-01T00:01:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "epoch": 1,
+        "cost": 0.02,
+    })
+
+    # Reset -> should return 2
+    epoch2 = store.reset_session_epoch(session_key)
+    assert epoch2 == 2
+
+
+def test_get_session_epoch_non_advancing(temp_db):
+    """Test get_session_epoch returns current epoch without advancing."""
+    store = UsageStore(temp_db)
+    session_key = "test:epoch_get"
+
+    # Empty key -> should return 0
+    epoch = store.get_session_epoch(session_key)
+    assert epoch == 0
+
+    # Record at epoch 0
+    store.record({
+        "ts": "2026-01-01T00:00:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "epoch": 0,
+    })
+
+    # get_session_epoch should return 0
+    epoch = store.get_session_epoch(session_key)
+    assert epoch == 0
+
+    # Record at epoch 1
+    store.record({
+        "ts": "2026-01-01T00:01:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "epoch": 1,
+    })
+
+    # get_session_epoch should return 1 (latest)
+    epoch = store.get_session_epoch(session_key)
+    assert epoch == 1
+
+    # Multiple calls should not advance
+    epoch2 = store.get_session_epoch(session_key)
+    assert epoch2 == 1
+
+
+def test_new_style_flow_footer_shows_only_current_epoch(temp_db):
+    """Test /new-style flow: record at epoch 0, reset -> record at epoch 1 -> footer shows only epoch-1 sum."""
+    store = UsageStore(temp_db)
+    from sarathy.usage.footer import format_usage_footer
+    session_key = "test:new_flow"
+
+    # Simulate first conversation (epoch 0)
+    store.record({
+        "ts": "2026-01-01T00:00:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "provider": "openrouter",
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+        "cost": 0.05,
+        "epoch": 0,
+    })
+
+    # /new -> reset epoch
+    new_epoch = store.reset_session_epoch(session_key)
+    assert new_epoch == 1
+
+    # Simulate second conversation (epoch 1)
+    store.record({
+        "ts": "2026-01-01T00:01:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "provider": "openrouter",
+        "prompt_tokens": 2000,
+        "completion_tokens": 1000,
+        "total_tokens": 3000,
+        "cost": 0.03,
+        "epoch": 1,
+    })
+
+    # Footer with epoch=1 should show only epoch 1 cost
+    stats = {"total_tokens": 3000, "total_time": 10.0, "tokens_per_sec": 300.0}
+    footer = format_usage_footer(stats, session_key, epoch=1)
+
+    assert footer is not None
+    assert "💵 $0.0300 session" in footer  # Only epoch 1 cost
+    assert "💵 $0.0500 session" not in footer  # Not epoch 0 cost
+    assert "💵 $0.0800 session" not in footer  # Not sum of both
+
+
+def test_migration_v2_to_v3_preserves_rows_as_epoch_0(temp_db):
+    """Test migration v2->v3: existing rows get epoch = 0, user_version becomes 3."""
+    import sqlite3
+    from datetime import datetime, timezone
+
+    # Create a v2 database (with cost column, user_version = 2)
+    conn = sqlite3.connect(temp_db)
+    conn.execute("""
+        CREATE TABLE usage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            session_key TEXT,
+            channel TEXT,
+            model TEXT NOT NULL DEFAULT '',
+            provider TEXT NOT NULL DEFAULT '',
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            cached_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_write_tokens INTEGER,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_discount REAL,
+            cost REAL,
+            duration_ms INTEGER,
+            finish_reason TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_events(model, ts);")
+    conn.execute("PRAGMA user_version = 2;")
+
+    # Insert some v2 data with recent timestamps
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    conn.execute("""
+        INSERT INTO usage_events (ts, session_key, model, provider, prompt_tokens, cached_tokens, completion_tokens, total_tokens, cost)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (now, "test:1", "model-a", "openrouter", 1000, 300, 200, 1200, 0.01))
+    conn.execute("""
+        INSERT INTO usage_events (ts, session_key, model, provider, prompt_tokens, cached_tokens, completion_tokens, total_tokens, cost)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (now, "test:2", "model-b", "local", 500, 100, 150, 650, 0.02))
+    conn.commit()
+    conn.close()
+
+    # Reset store to pick up the v2 DB
+    from sarathy.usage.store import reset_usage_store
+    reset_usage_store()
+    store = UsageStore(temp_db)
+
+    # Migration should have run: epoch column exists, user_version = 3
+    conn = sqlite3.connect(temp_db)
+    cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
+    has_epoch = any(col[1] == "epoch" for col in cols)
+    version = conn.execute("PRAGMA user_version;").fetchone()[0]
+    conn.close()
+
+    assert has_epoch, "epoch column should exist after migration"
+    assert version == 3, "user_version should be 3 after migration"
+
+    # Existing data should be intact and have epoch = 0
+    summary = store.summary(days=7)
+    assert summary["totals"]["requests"] == 2
+    assert summary["totals"]["prompt_tokens"] == 1500
+
+    # session_cost should work with default epoch=0
+    cost1 = store.session_cost("test:1")
+    cost2 = store.session_cost("test:2")
+    assert cost1 is not None
+    assert abs(cost1 - 0.01) < 0.0001
+    assert cost2 is not None
+    assert abs(cost2 - 0.02) < 0.0001
+
+    # Re-running init should be idempotent (no error, no data loss)
+    store2 = UsageStore(temp_db)
+    summary2 = store2.summary(days=7)
+    assert summary2["totals"]["requests"] == 2
+    assert summary2["totals"]["prompt_tokens"] == 1500

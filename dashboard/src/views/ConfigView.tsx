@@ -253,6 +253,7 @@ export function ConfigView() {
           setModelSuggestions([]);
         }}
       />
+      <ImageModelControl providers={providers} />
       {restartRequired ? (
         <Card className="border-primary/40 bg-primary/5">
           <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -416,6 +417,106 @@ function FieldRow({
 }
 
 const KINDS = ["custom", "ollama", "lmstudio", "vllm", "litellm"] as const;
+
+function ImageModelControl({ providers }: { providers: ProviderInfo[] }) {
+  const [imageProvider, setImageProvider] = useState<ProviderInfo | null>(null);
+  const [imageModel, setImageModel] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const current = providers.find((p) => p.role === "image");
+    if (current) {
+      setImageProvider(current);
+    }
+  }, [providers]);
+
+  async function handleSave() {
+    if (!imageProvider) return;
+    setSaving(true);
+    try {
+      await api.setProviderRole(imageProvider.name, "image", imageModel || undefined);
+      toast.success(`Image provider set to ${imageProvider.label}${imageModel ? ` (${imageModel})` : ""}`);
+      // Refresh will be triggered by parent
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set image provider");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleClear() {
+    if (!imageProvider) return;
+    setSaving(true);
+    try {
+      // Clear the image role by setting it to empty string - we need a different approach
+      // The backend doesn't support clearing a role directly, so we'd need to implement that
+      // For now, we just show a message
+      toast.info("To clear the image provider, assign the image role to a different provider");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to clear image provider");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Image Model</CardTitle>
+        <CardDescription>
+          Dedicated vision model for describing images. When set, all image content is sent to this provider
+          for description before the main model processes the turn.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="flex-1">
+            <Label htmlFor="image-provider">Provider</Label>
+            <Select value={imageProvider?.name ?? ""} onValueChange={(v) => {
+              const p = providers.find((p) => p.name === v);
+              setImageProvider(p ?? null);
+              if (p) setImageModel("");
+            }}>
+              <SelectTrigger id="image-provider">
+                <SelectValue placeholder="Select image provider" />
+              </SelectTrigger>
+              <SelectContent>
+                {providers.map((p) => (
+                  <SelectItem key={p.name} value={p.name}>
+                    {p.label} ({p.kind})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex-1">
+            <Label htmlFor="image-model">Model (optional)</Label>
+            <Input
+              id="image-model"
+              value={imageModel}
+              onChange={(e) => setImageModel(e.target.value)}
+              placeholder="e.g. gpt-4o, claude-3-5-sonnet"
+              spellCheck={false}
+            />
+          </div>
+          <Button onClick={() => void handleSave()} disabled={saving || !imageProvider}>
+            <Save className="size-4" />
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </div>
+        {imageProvider && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Badge variant="secondary">Current: {imageProvider.label}</Badge>
+            {imageModel && <span>Model: {imageModel}</span>}
+            <Button variant="ghost" size="sm" onClick={handleClear}>
+              Clear
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function ProvidersManager({ onActiveChanged }: { onActiveChanged: (name: string) => void }) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);

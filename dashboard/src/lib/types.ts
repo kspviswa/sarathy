@@ -72,6 +72,7 @@ export interface ProviderInfo {
   hasApiKey: boolean;
   isLocal: boolean;
   active: boolean;
+  role: string;
 }
 
 export interface ProvidersResponse {
@@ -82,6 +83,16 @@ export interface ProvidersResponse {
 export interface ProviderModelsResponse {
   provider: string;
   models: string[];
+}
+
+export interface RoleStatusResponse {
+  main: string;
+  main_model: string | null;
+  local: string | null;
+  local_model: string | null;
+  image: string | null;
+  image_model: string | null;
+  active: string;
 }
 
 export interface RuntimeSetResponse {

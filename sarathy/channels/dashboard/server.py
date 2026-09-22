@@ -296,6 +296,7 @@ class DashboardChannel(BaseChannel):
         app.router.add_put("/api/providers/{name}", self._api_providers_edit)
         app.router.add_delete("/api/providers/{name}", self._api_providers_remove)
         app.router.add_get("/api/providers/{name}/models", self._api_providers_models)
+        app.router.add_post("/api/providers/{name}/role", self._api_providers_set_role)
         app.router.add_post("/api/runtime", self._api_runtime_set)
         app.router.add_post("/api/restart", self._api_restart)
         app.router.add_get("/api/sessions", self._api_sessions)
@@ -650,6 +651,35 @@ class DashboardChannel(BaseChannel):
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=502)
         return web.json_response({"provider": name, "models": models})
+
+    async def _api_providers_set_role(self, request: web.Request) -> web.Response:
+        from sarathy.config.loader import save_config
+
+        name = request.match_info["name"]
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+
+        cfg = self._load_full_config()
+        if name not in cfg.providers:
+            return web.json_response({"error": "provider not found"}, status=404)
+
+        role = (data.get("role") or "").strip()
+        if role not in ("main", "local", "image"):
+            return web.json_response({"error": "role must be 'main', 'local', or 'image'"}, status=400)
+
+        model = (data.get("model") or "").strip() or None
+
+        if self.runtime is None:
+            return web.json_response({"error": "runtime not available"}, status=503)
+
+        try:
+            self.runtime.set_role(role, name, model)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+        return web.json_response(self.runtime.role_status())
 
     async def _api_runtime_set(self, request: web.Request) -> web.Response:
         from sarathy.config.loader import save_config

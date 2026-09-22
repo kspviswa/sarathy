@@ -401,6 +401,16 @@ class AgentLoop:
             elif channel == "dashboard":
                 streaming_enabled = self.channels_config.dashboard.streaming
 
+        # Resolve the current session epoch for this turn (non-advancing read)
+        epoch = 0
+        if session_key:
+            try:
+                from sarathy.usage.store import get_usage_store
+
+                epoch = get_usage_store().get_session_epoch(session_key)
+            except Exception:
+                epoch = 0
+
         messages = initial_messages
         iteration = 0
         final_content = None
@@ -468,7 +478,9 @@ class AgentLoop:
             elapsed = time.perf_counter() - start_time
 
             # Record usage telemetry (benign - never fails the turn)
-            self._record_usage(response, session_key=session_key, channel=channel, elapsed=elapsed)
+            self._record_usage(
+                response, session_key=session_key, channel=channel, elapsed=elapsed, epoch=epoch
+            )
 
             if response.usage:
                 total_tokens += response.usage.get("completion_tokens", 0)
@@ -598,6 +610,7 @@ class AgentLoop:
             "total_tokens": total_tokens,
             "total_time": total_time,
             "tokens_per_sec": (total_tokens / total_time) if total_time > 0 else 0,
+            "epoch": epoch,
         }
 
         return final_content, tools_used, messages, stats
@@ -608,6 +621,7 @@ class AgentLoop:
         session_key: str | None,
         channel: str | None,
         elapsed: float,
+        epoch: int = 0,
     ) -> None:
         """Record usage telemetry for a single LLM call. Never raises."""
         try:
@@ -634,6 +648,7 @@ class AgentLoop:
                 "cost": usage.get("cost"),
                 "duration_ms": int(elapsed * 1000),
                 "finish_reason": response.finish_reason,
+                "epoch": epoch,
             }
             get_usage_store().record(event)
         except Exception:
@@ -1208,7 +1223,8 @@ class AgentLoop:
         if verbose_flag:
             from sarathy.usage.footer import format_usage_footer
 
-            footer = format_usage_footer(stats, key)
+            epoch = stats.get("epoch", 0)
+            footer = format_usage_footer(stats, key, epoch)
             if footer:
                 final_content = f"{final_content}{footer}"
 
@@ -1293,6 +1309,15 @@ class AgentLoop:
         session.clear()
         self.sessions.save(session)
         self.sessions.invalidate(session.key)
+
+        # Advance the session epoch so the next conversation starts a fresh cost bucket
+        try:
+            from sarathy.usage.store import get_usage_store
+
+            new_epoch = get_usage_store().reset_session_epoch(session.key)
+            logger.info("Advanced session epoch for {} to {}", session.key, new_epoch)
+        except Exception as e:
+            logger.debug("Failed to advance session epoch for {}: {}", session.key, e)
 
         return OutboundMessage(
             channel=msg.channel,

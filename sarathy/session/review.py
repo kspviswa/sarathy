@@ -266,7 +266,7 @@ class BackgroundReviewer:
             if fact.strip() and fact.strip() not in current:
                 updated = f"{current}\n- {fact.strip()}" if current.strip() else f"- {fact.strip()}"
                 updated = self._memory.enforce_max_size(updated, is_user=False)
-                self._memory.write_memory(updated)
+                await self._memory.write_memory(updated)
                 saved.append(f"memory: {fact[:60]}")
 
         for trait in result.get("user", []):
@@ -274,7 +274,7 @@ class BackgroundReviewer:
             if trait.strip() and trait.strip() not in current:
                 updated = f"{current}\n- {trait.strip()}" if current.strip() else f"- {trait.strip()}"
                 updated = self._memory.enforce_max_size(updated, is_user=True)
-                self._memory.write_user(updated)
+                await self._memory.write_user(updated)
                 saved.append(f"user: {trait[:60]}")
 
         for skill in result.get("skills", []):

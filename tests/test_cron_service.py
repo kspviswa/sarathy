@@ -4,11 +4,12 @@ from sarathy.cron.service import CronService
 from sarathy.cron.types import CronJob, CronSchedule
 
 
-def test_add_job_rejects_unknown_timezone(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_add_job_rejects_unknown_timezone(tmp_path) -> None:
     service = CronService(tmp_path / "cron" / "jobs.json")
 
     with pytest.raises(ValueError, match="unknown timezone 'America/Vancovuer'"):
-        service.add_job(
+        await service.add_job(
             name="tz typo",
             schedule=CronSchedule(kind="cron", expr="0 9 * * *", tz="America/Vancovuer"),
             message="hello",
@@ -17,10 +18,11 @@ def test_add_job_rejects_unknown_timezone(tmp_path) -> None:
     assert service.list_jobs(include_disabled=True) == []
 
 
-def test_add_job_accepts_valid_timezone(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_add_job_accepts_valid_timezone(tmp_path) -> None:
     service = CronService(tmp_path / "cron" / "jobs.json")
 
-    job = service.add_job(
+    job = await service.add_job(
         name="tz ok",
         schedule=CronSchedule(kind="cron", expr="0 9 * * *", tz="America/Vancouver"),
         message="hello",
@@ -30,10 +32,11 @@ def test_add_job_accepts_valid_timezone(tmp_path) -> None:
     assert job.state.next_run_at_ms is not None
 
 
-def test_add_job_with_provider_role_persists(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_add_job_with_provider_role_persists(tmp_path) -> None:
     service = CronService(tmp_path / "cron" / "jobs.json")
 
-    job = service.add_job(
+    job = await service.add_job(
         name="local job",
         schedule=CronSchedule(kind="every", every_ms=3600_000),
         message="run the weekly cleanup",
@@ -49,10 +52,11 @@ def test_add_job_with_provider_role_persists(tmp_path) -> None:
     assert loaded[0].payload.provider_role == "local"
 
 
-def test_add_job_provider_role_defaults_empty(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_add_job_provider_role_defaults_empty(tmp_path) -> None:
     service = CronService(tmp_path / "cron" / "jobs.json")
 
-    job = service.add_job(
+    job = await service.add_job(
         name="plain job",
         schedule=CronSchedule(kind="every", every_ms=3600_000),
         message="hello",

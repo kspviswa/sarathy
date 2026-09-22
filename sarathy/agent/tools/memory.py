@@ -81,8 +81,11 @@ class MemoryTool(Tool):
                 )
             if content.strip() in current:
                 return f"Entry already exists in {target}."
-            updated = f"{current}\n- {content.strip()}" if current.strip() else f"- {content.strip()}"
-            self._write(updated, is_user)
+            # Use atomic append to avoid cross-session race conditions
+            if is_user:
+                await self._store.append_user(content)
+            else:
+                await self._store.append_memory(content)
             return f"Added to {target}."
 
         if action == "replace":
@@ -91,7 +94,7 @@ class MemoryTool(Tool):
             if old_text not in current:
                 return f"Error: old_text not found in {target}."
             updated = current.replace(old_text, content, 1)
-            self._write(updated, is_user)
+            await self._write(updated, is_user)
             return f"Replaced in {target}."
 
         if action == "remove":
@@ -100,14 +103,14 @@ class MemoryTool(Tool):
             if old_text not in current:
                 return f"Error: old_text not found in {target}."
             updated = current.replace(old_text, "", 1).strip()
-            self._write(updated, is_user)
+            await self._write(updated, is_user)
             return f"Removed from {target}."
 
         return f"Error: unknown action '{action}'."
 
-    def _write(self, content: str, is_user: bool) -> None:
+    async def _write(self, content: str, is_user: bool) -> None:
         content = self._store.enforce_max_size(content, is_user=is_user)
         if is_user:
-            self._store.write_user(content)
+            await self._store.write_user(content)
         else:
-            self._store.write_memory(content)
+            await self._store.write_memory(content)

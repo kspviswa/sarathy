@@ -780,21 +780,25 @@ def cron_add(
     store_path = get_data_dir() / "cron" / "jobs.json"
     service = CronService(store_path)
 
-    try:
-        job = service.add_job(
-            name=name,
-            schedule=schedule,
-            message=message,
-            deliver=deliver,
-            to=to,
-            channel=channel,
-            provider_role=provider_role,
-        )
-    except ValueError as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1) from e
+    async def _run() -> None:
+        try:
+            job = await service.add_job(
+                name=name,
+                schedule=schedule,
+                message=message,
+                deliver=deliver,
+                to=to,
+                channel=channel,
+                provider_role=provider_role,
+            )
+        except ValueError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from e
 
-    console.print(f"[green]✓[/green] Added job '{job.name}' ({job.id})")
+        console.print(f"Created job '{job.name}' (id: {job.id})")
+
+    import asyncio
+    asyncio.run(_run())
 
 
 @cron_app.command("remove")
@@ -808,10 +812,14 @@ def cron_remove(
     store_path = get_data_dir() / "cron" / "jobs.json"
     service = CronService(store_path)
 
-    if service.remove_job(job_id):
-        console.print(f"[green]✓[/green] Removed job {job_id}")
-    else:
-        console.print(f"[red]Job {job_id} not found[/red]")
+    async def _run() -> None:
+        if await service.remove_job(job_id):
+            console.print(f"[green]✓[/green] Removed job {job_id}")
+        else:
+            console.print(f"[red]Job {job_id} not found[/red]")
+
+    import asyncio
+    asyncio.run(_run())
 
 
 @cron_app.command("enable")
@@ -826,12 +834,16 @@ def cron_enable(
     store_path = get_data_dir() / "cron" / "jobs.json"
     service = CronService(store_path)
 
-    job = service.enable_job(job_id, enabled=not disable)
-    if job:
-        status = "disabled" if disable else "enabled"
-        console.print(f"[green]✓[/green] Job '{job.name}' {status}")
-    else:
-        console.print(f"[red]Job {job_id} not found[/red]")
+    async def _run() -> None:
+        job = await service.enable_job(job_id, enabled=not disable)
+        if job:
+            status = "disabled" if disable else "enabled"
+            console.print(f"[green]✓[/green] Job '{job.name}' {status}")
+        else:
+            console.print(f"[red]Job {job_id} not found[/red]")
+
+    import asyncio
+    asyncio.run(_run())
 
 
 @cron_app.command("run")

@@ -113,6 +113,7 @@ class AgentDefaults(Base):
     reasoning_effort: str | None = (
         None  # "off", "low", "medium", "high", "xhigh" for thinking-enabled models
     )
+    max_concurrent_sessions: int = 4  # Max sessions that can run concurrently (1..16)
 
 
 class MemoryArchivalConfig(Base):

@@ -1,4 +1,4 @@
-import { BarChart3, ChevronDown } from "lucide-react";
+import { BarChart3, ChevronDown, Filter } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,8 @@ import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
 import type { UsageSummary } from "@/lib/types";
 
+const ALL_MODELS = "__all__";
+
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
@@ -28,34 +30,40 @@ function TruncateModelId(model: string, maxLen = 40): string {
 function SparklineSvg({
   data,
   color = "hsl(var(--primary))",
-  height = 60,
+  height = 160,
   width = 280,
+  maxValue,
+  className = "w-full h-full",
 }: {
   data: number[];
   color?: string;
   height?: number;
   width?: number;
+  /** Shared y-axis maximum so multiple series are directly comparable. */
+  maxValue?: number;
+  className?: string;
 }) {
   if (data.length === 0) return null;
 
-  const maxVal = Math.max(...data, 1);
-  const minVal = Math.min(...data);
+  const maxVal = Math.max(maxValue ?? Math.max(...data, 1), 1);
+  const minVal = 0;
   const range = maxVal - minVal || 1;
 
   const points = data.map((val, i) => {
-    const x = (i / (data.length - 1 || 1)) * width;
+    const x = data.length === 1 ? width / 2 : (i / (data.length - 1)) * width;
     const y = height - ((val - minVal) / range) * (height - 10) - 5;
     return `${x},${y}`;
   });
 
-  const path = `M${points.join(" L")}`;
+  const path =
+    data.length === 1 ? `M${points[0]} L${points[0]}` : `M${points.join(" L")}`;
 
   // Area path (fill to bottom)
   const areaPoints = [
     `M${points[0]}`,
     ...points.slice(1),
-    `L${width},${height}`,
-    `L0,${height}`,
+    `L${points[points.length - 1].split(",")[0]},${height}`,
+    `L${points[0].split(",")[0]},${height}`,
     "Z",
   ].join(" ");
 
@@ -63,7 +71,7 @@ function SparklineSvg({
     <svg
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
-      className="w-full h-full"
+      className={className}
       role="img"
       aria-label="Token usage over time"
     >
@@ -91,6 +99,7 @@ export function UsageCard() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(7);
+  const [model, setModel] = useState<string>(ALL_MODELS);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -98,7 +107,7 @@ export function UsageCard() {
     setLoading(true);
     setError(null);
     api
-      .usageSummary(days)
+      .usageSummary(days, model === ALL_MODELS ? null : model)
       .then((data) => {
         if (mounted) setSummary(data);
       })
@@ -111,7 +120,7 @@ export function UsageCard() {
     return () => {
       mounted = false;
     };
-  }, [days]);
+  }, [days, model]);
 
   if (loading) {
     return (
@@ -154,30 +163,57 @@ export function UsageCard() {
 
   const { totals, by_model, timeseries } = summary;
 
-  // Prepare time-series data for chart: plot both prompt and cached tokens
+  // Unique model ids for the filter dropdown (providers may repeat a model id).
+  const modelOptions = Array.from(new Set(by_model.map((m) => m.model))).filter(Boolean);
+
+  // Prepare time-series data for chart: plot both prompt and cached tokens.
   const promptSeries = timeseries.map((d) => d.prompt_tokens);
   const cachedSeries = timeseries.map((d) => d.cached_tokens);
+  // Shared y-scale so the two series are visually comparable.
+  const sharedMax = Math.max(...promptSeries, ...cachedSeries, 1);
 
   return (
     <Card data-testid="usage-card">
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <CardTitle className="flex items-center gap-2">
             <BarChart3 className="size-4 text-primary" />
             Token Usage
           </CardTitle>
-          <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-            <SelectTrigger className="w-auto min-w-[140px]">
-              <SelectValue placeholder="Window" />
-              <ChevronDown className="size-4 opacity-50" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="7">Last 7 days</SelectItem>
-              <SelectItem value="30">Last 30 days</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-2">
+            {modelOptions.length > 0 && (
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger className="w-auto min-w-[150px]" aria-label="Filter by model">
+                  <Filter className="size-4 opacity-50" />
+                  <SelectValue placeholder="All models" />
+                  <ChevronDown className="size-4 opacity-50" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_MODELS}>All models</SelectItem>
+                  {modelOptions.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {TruncateModelId(m, 32)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
+              <SelectTrigger className="w-auto min-w-[140px]" aria-label="Time window">
+                <SelectValue placeholder="Window" />
+                <ChevronDown className="size-4 opacity-50" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="7">Last 7 days</SelectItem>
+                <SelectItem value="30">Last 30 days</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-        <div className="text-sm text-muted-foreground">Window: {days} day{days > 1 ? "s" : ""}</div>
+        <div className="text-sm text-muted-foreground">
+          Window: {days} day{days > 1 ? "s" : ""}
+          {model !== ALL_MODELS ? ` · ${TruncateModelId(model, 40)}` : " · all models"}
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Headline stats */}
@@ -208,18 +244,22 @@ export function UsageCard() {
               {timeseries.length} bucket{timeseries.length !== 1 ? "s" : ""}
             </span>
           </div>
-          <div className="h-40 relative" style={{ minHeight: "160px" }}>
+          <div className="relative h-40 w-full">
             {/* Prompt tokens (background) */}
             <SparklineSvg
               data={promptSeries}
-              color="hsl(var(--muted-foreground) / 0.4)"
+              color="hsl(var(--muted-foreground) / 0.5)"
               height={160}
+              maxValue={sharedMax}
+              className="absolute inset-0 w-full h-full"
             />
             {/* Cached tokens (foreground) */}
             <SparklineSvg
               data={cachedSeries}
               color="hsl(var(--primary))"
               height={160}
+              maxValue={sharedMax}
+              className="absolute inset-0 w-full h-full"
             />
             {/* Legend */}
             <div className="absolute bottom-2 left-2 flex items-center gap-4 text-xs text-muted-foreground">
@@ -228,7 +268,7 @@ export function UsageCard() {
                 <span>Cached</span>
               </div>
               <div className="flex items-center gap-1">
-                <span className="w-3 h-0.5 bg-muted-foreground/40" />
+                <span className="w-3 h-0.5 bg-muted-foreground/50" />
                 <span>Prompt</span>
               </div>
             </div>
@@ -246,11 +286,16 @@ export function UsageCard() {
             </div>
             <div className="space-y-1 max-h-60 overflow-y-auto">
               {by_model.map((m, i) => (
-                <div
+                <button
+                  type="button"
                   key={`${m.model}-${m.provider}-${i}`}
-                  className="flex items-center justify-between gap-2 px-2 py-1.5 rounded text-sm hover:bg-muted/50"
+                  onClick={() => setModel(model === m.model ? ALL_MODELS : m.model)}
+                  title={model === m.model ? "Clear filter" : `Show only ${m.model}`}
+                  className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded text-sm hover:bg-muted/50 ${
+                    model === m.model ? "bg-muted/60 ring-1 ring-primary/40" : ""
+                  }`}
                 >
-                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <div className="flex items-center gap-2 min-w-0 flex-1 text-left">
                     <Badge variant="outline" className="text-xs font-mono whitespace-nowrap shrink-0">
                       {TruncateModelId(m.model)}
                     </Badge>
@@ -264,7 +309,7 @@ export function UsageCard() {
                       {m.cache_hit_pct.toFixed(1)}%
                     </span>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>

@@ -152,6 +152,9 @@ export const api = {
 
   status: () => request<StatusResponse>("/api/status"),
 
-  usageSummary: (days = 7) =>
-    request<UsageSummary>(`/api/usage/summary?days=${days}`),
+  usageSummary: (days = 7, model?: string | null) => {
+    const params = new URLSearchParams({ days: String(days) });
+    if (model) params.set("model", model);
+    return request<UsageSummary>(`/api/usage/summary?${params.toString()}`);
+  },
 };

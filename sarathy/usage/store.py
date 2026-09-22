@@ -122,12 +122,25 @@ class UsageStore:
         except Exception as e:
             logger.debug("Usage store record failed: %s", e)
 
-    def summary(self, days: int = 7) -> dict[str, Any]:
-        """Aggregate usage over the given window."""
+    def summary(self, days: int = 7, model: str | None = None) -> dict[str, Any]:
+        """Aggregate usage over the given window.
+
+        When ``model`` is given, totals and timeseries are restricted to that
+        model (``by_model`` always lists every model, so the UI can offer the
+        full set of filter options).
+        """
         try:
             days = max(1, min(365, days))
+            model_filter = model.strip() if isinstance(model, str) and model.strip() else None
             cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
             cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+            # WHERE fragments shared by the filtered aggregates.
+            where = "WHERE ts >= ?"
+            where_args: list[Any] = [cutoff_iso]
+            if model_filter is not None:
+                where += " AND model = ?"
+                where_args.append(model_filter)
 
             with self._get_conn() as conn:
                 # Check if any data exists
@@ -140,7 +153,7 @@ class UsageStore:
 
                 # Totals
                 totals_row = conn.execute(
-                    """
+                    f"""
                     SELECT
                         COUNT(*) as requests,
                         COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
@@ -148,9 +161,9 @@ class UsageStore:
                         COALESCE(SUM(completion_tokens), 0) as completion_tokens,
                         COALESCE(SUM(total_tokens), 0) as total_tokens
                     FROM usage_events
-                    WHERE ts >= ?
+                    {where}
                     """,
-                    (cutoff_iso,),
+                    tuple(where_args),
                 ).fetchone()
 
                 prompt_total = totals_row["prompt_tokens"] or 0
@@ -204,11 +217,11 @@ class UsageStore:
                         COALESCE(SUM(cached_tokens), 0) as cached_tokens,
                         COALESCE(SUM(completion_tokens), 0) as completion_tokens
                     FROM usage_events
-                    WHERE ts >= ?
+                    {where}
                     GROUP BY bucket
                     ORDER BY bucket
                     """,
-                    (cutoff_iso,),
+                    tuple(where_args),
                 ).fetchall()
 
                 timeseries = []
@@ -229,6 +242,7 @@ class UsageStore:
                 return {
                     "available": True,
                     "window_days": days,
+                    "model": model_filter,
                     "totals": {
                         "requests": totals_row["requests"],
                         "prompt_tokens": prompt_total,
@@ -242,7 +256,7 @@ class UsageStore:
                 }
         except Exception as e:
             logger.debug("Usage store summary failed: %s", e)
-            return self._empty_summary(days)
+            return self._empty_summary(days, model_filter)
 
     def available(self) -> bool:
         """Check if DB exists and has at least one row."""
@@ -253,10 +267,11 @@ class UsageStore:
         except Exception:
             return False
 
-    def _empty_summary(self, days: int) -> dict[str, Any]:
+    def _empty_summary(self, days: int, model: str | None = None) -> dict[str, Any]:
         return {
             "available": False,
             "window_days": days,
+            "model": model,
             "totals": {
                 "requests": 0,
                 "prompt_tokens": 0,

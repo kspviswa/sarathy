@@ -897,7 +897,10 @@ class DashboardChannel(BaseChannel):
                 days = 7
             days = max(1, min(365, days))
 
-            summary = get_usage_store().summary(days)
+            # Optional per-model filter ("" / absent => all models).
+            model = (request.query.get("model") or "").strip() or None
+
+            summary = get_usage_store().summary(days, model=model)
             return web.json_response(summary)
         except Exception:
             # Benign: never 500, return empty shape
@@ -905,6 +908,7 @@ class DashboardChannel(BaseChannel):
                 {
                     "available": False,
                     "window_days": days if "days" in locals() else 7,
+                    "model": None,
                     "totals": {
                         "requests": 0,
                         "prompt_tokens": 0,

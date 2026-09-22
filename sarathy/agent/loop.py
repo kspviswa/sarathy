@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import mimetypes
 import re
 import uuid
 from contextlib import AsyncExitStack
@@ -238,6 +240,21 @@ class AgentLoop:
                     return True
         return False
 
+    def _local_image_to_data_url(self, path: str) -> str | None:
+        """Convert a local image path to a data URL.
+        
+        Returns the data URL if the file exists and is an image, None otherwise.
+        """
+        p = Path(path)
+        if not p.is_absolute():
+            # Resolve relative paths against workspace/media
+            p = self.workspace / "media" / path
+        mime, _ = mimetypes.guess_type(str(p))
+        if not p.is_file() or not mime or not mime.startswith("image/"):
+            return None
+        b64 = base64.b64encode(p.read_bytes()).decode()
+        return f"data:{mime};base64,{b64}"
+
     async def _describe_images_with_image_provider(
         self,
         messages: list[dict],
@@ -281,7 +298,16 @@ class AgentLoop:
             parts = re.split(r"(\[image: [^\]]+\])", content)
             for part in parts:
                 if part.startswith("[image:") and part.endswith("]"):
-                    image_parts.append({"type": "image_url", "image_url": {"url": part[7:-1]}})
+                    url = part[7:-1].strip()
+                    # http(s) URLs pass through unchanged
+                    if url.startswith("http://") or url.startswith("https://"):
+                        image_parts.append({"type": "image_url", "image_url": {"url": url}})
+                    else:
+                        # Local path: resolve and base64-encode
+                        data_url = self._local_image_to_data_url(url)
+                        if data_url is not None:
+                            image_parts.append({"type": "image_url", "image_url": {"url": data_url}})
+                        # Missing file or non-image -> skip (drop marker)
                 elif part.strip():
                     text_parts.append({"type": "text", "text": part})
 

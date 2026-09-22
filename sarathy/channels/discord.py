@@ -14,6 +14,7 @@ from sarathy.bus.queue import MessageBus
 from sarathy.channels.base import BaseChannel
 from sarathy.channels.utils import detect_and_convert_tables
 from sarathy.config.schema import DiscordConfig
+from sarathy.usage.footer import format_usage_footer
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
@@ -111,13 +112,13 @@ class DiscordChannel(BaseChannel):
 
         content = detect_and_convert_tables(content)
 
-        # Append tokens/sec if verbose is enabled
+        # Append usage footer if verbose is enabled
         if msg.metadata.get("_verbose") and msg.metadata.get("_stats"):
             stats = msg.metadata["_stats"]
-            tps = stats.get("tokens_per_sec", 0)
-            tokens = stats.get("total_tokens", 0)
-            if tps > 0 and tokens > 0:
-                content = f"{content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
+            session_key = f"discord:{msg.chat_id}"
+            footer = format_usage_footer(stats, session_key)
+            if footer:
+                content = f"{content}{footer}"
 
         try:
             # Send media attachments first

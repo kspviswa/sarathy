@@ -4,6 +4,7 @@ from typing import Any, Awaitable, Callable
 
 from sarathy.agent.tools.base import Tool
 from sarathy.bus.events import OutboundMessage
+from sarathy.usage.footer import format_usage_footer
 
 
 class MessageTool(Tool):
@@ -138,10 +139,11 @@ class MessageTool(Tool):
         # Append verbose stats if enabled
         if self._response_metadata.get("_verbose") and self._response_metadata.get("_stats"):
             stats = self._response_metadata["_stats"]
-            tps = stats.get("tokens_per_sec", 0)
-            tokens = stats.get("total_tokens", 0)
-            if tps > 0 and tokens > 0:
-                content = f"{content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
+            # Construct session_key from channel:chat_id for cost aggregation
+            session_key = f"{channel}:{chat_id}" if channel and chat_id else None
+            footer = format_usage_footer(stats, session_key)
+            if footer:
+                content = f"{content}{footer}"
 
         msg = OutboundMessage(
             channel=channel,

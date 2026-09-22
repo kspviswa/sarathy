@@ -119,7 +119,7 @@ describe("Last session load — desktop App", () => {
       createdAt: "t",
       messages: [
         { role: "user", content: "hello prior", timestamp: "t1" },
-        { role: "assistant", content: null, timestamp: "t2" },
+        { role: "assistant", content: "", timestamp: "t2" },
         { role: "tool", content: "some tool result", timestamp: "t3" },
         { role: "assistant", content: "hi back prior", timestamp: "t4" },
       ],

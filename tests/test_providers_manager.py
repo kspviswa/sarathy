@@ -428,8 +428,138 @@ def test_set_role_unknown_raises(tmp_path):
     runtime = RuntimeProvider(cfg, config_path=config_path)
     import pytest
 
-    with pytest.raises(ValueError, match="main' or 'local"):
+    with pytest.raises(ValueError, match="main', 'local', or 'image"):
         runtime.set_role("bogus", "adhoc")
+
+
+# ---------------------------------------------------------------------------
+# Image role tests
+# ---------------------------------------------------------------------------
+
+
+def test_provider_role_status_includes_image(tmp_path):
+    """role_status() includes image and image_model fields."""
+    cfg, config_path = _role_config(tmp_path)
+    # Add an image provider
+    cfg.providers["imageprov"] = ProviderConfig(
+        kind="custom", api_base="http://image/v1", api_key="k", role="image", model="gpt-4o"
+    )
+    from sarathy.config.loader import save_config
+    save_config(cfg, config_path)
+
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    roles = runtime.role_status()
+    assert "image" in roles
+    assert "image_model" in roles
+    assert roles["image"] == "imageprov"
+    assert roles["image_model"] == "gpt-4o"
+
+
+def test_provider_for_image(tmp_path):
+    """provider_for('image') returns the image-tagged provider."""
+    cfg, config_path = _role_config(tmp_path)
+    cfg.providers["imageprov"] = ProviderConfig(
+        kind="custom", api_base="http://image/v1", api_key="k", role="image"
+    )
+    from sarathy.config.loader import save_config
+    save_config(cfg, config_path)
+
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    p = runtime.provider_for("image")
+    assert p is not None
+    assert p.api_base == "http://image/v1"
+
+
+def test_provider_for_image_uses_own_model(tmp_path):
+    """provider_for('image') uses the provider's own model override."""
+    cfg, config_path = _role_config(tmp_path)
+    cfg.providers["imageprov"] = ProviderConfig(
+        kind="custom", api_base="http://image/v1", api_key="k", role="image", model="gpt-4o"
+    )
+    from sarathy.config.loader import save_config
+    save_config(cfg, config_path)
+
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    p = runtime.provider_for("image")
+    assert p is not None
+    assert p.get_default_model() == "gpt-4o"
+
+
+def test_provider_for_image_missing_returns_none(tmp_path):
+    """provider_for('image') returns None when no image provider configured."""
+    runtime, config_path = _runtime(tmp_path)
+    assert runtime.provider_for("image") is None
+
+
+def test_provider_for_image_broken_falls_back(tmp_path):
+    """Broken image provider degrades gracefully (returns None, not main)."""
+    cfg, config_path = _role_config(tmp_path)
+    # Invalid config - litellm without real API key
+    cfg.providers["badimage"] = ProviderConfig(
+        kind="litellm", api_base=None, api_key="dummy", role="image"
+    )
+    from sarathy.config.loader import save_config
+    save_config(cfg, config_path)
+
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    p = runtime.provider_for("image")
+    # Should return None (not fall back to main), so caller can handle gracefully
+    assert p is None
+
+
+def test_set_role_image_persists(tmp_path):
+    """set_role('image', ...) persists and is exclusive."""
+    cfg, config_path = _role_config(tmp_path)
+    cfg.providers["imageprov"] = ProviderConfig(
+        kind="custom", api_base="http://image/v1", api_key="k"
+    )
+    from sarathy.config.loader import save_config
+    save_config(cfg, config_path)
+
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    runtime.set_role("image", "imageprov", model="gpt-4v")
+
+    from sarathy.config.loader import load_config
+    reloaded = load_config(config_path)
+    assert reloaded.providers["imageprov"].role == "image"
+    assert reloaded.providers["imageprov"].model == "gpt-4v"
+    assert runtime.provider_for("image").get_default_model() == "gpt-4v"
+
+
+def test_set_role_image_is_exclusive(tmp_path):
+    """Assigning a new image provider clears the previous one."""
+    cfg, config_path = _role_config(tmp_path)
+    cfg.providers["imageprov1"] = ProviderConfig(
+        kind="custom", api_base="http://image1/v1", api_key="k", role="image"
+    )
+    cfg.providers["imageprov2"] = ProviderConfig(
+        kind="custom", api_base="http://image2/v1", api_key="k"
+    )
+    from sarathy.config.loader import save_config
+    save_config(cfg, config_path)
+
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    runtime.set_role("image", "imageprov2")
+
+    from sarathy.config.loader import load_config
+    reloaded = load_config(config_path)
+    assert reloaded.providers["imageprov2"].role == "image"
+    assert reloaded.providers["imageprov1"].role == ""
+
+
+def test_set_role_image_accepts_image_role(tmp_path):
+    """set_role accepts 'image' as a valid role."""
+    cfg, config_path = _role_config(tmp_path)
+    cfg.providers["imageprov"] = ProviderConfig(
+        kind="custom", api_base="http://image/v1", api_key="k"
+    )
+    from sarathy.config.loader import save_config
+    save_config(cfg, config_path)
+
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    # Should not raise
+    runtime.set_role("image", "imageprov")
+    assert runtime.provider_for("image") is not None
 
 
 # ---------------------------------------------------------------------------

@@ -1084,12 +1084,13 @@ class AgentLoop:
                 "or model issues. Try /clear or starting a new conversation."
             )
 
-        # Append tokens/sec if verbose is enabled
-        if verbose_flag and stats:
-            tps = stats.get("tokens_per_sec", 0)
-            tokens = stats.get("total_tokens", 0)
-            if tps > 0 and tokens > 0:
-                final_content = f"{final_content}\n\n⚡ {tokens} tokens @ {tps:.1f} tokens/sec"
+        # Append usage footer if verbose is enabled
+        if verbose_flag:
+            from sarathy.usage.footer import format_usage_footer
+
+            footer = format_usage_footer(stats, key)
+            if footer:
+                final_content = f"{final_content}{footer}"
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)

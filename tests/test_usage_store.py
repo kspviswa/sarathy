@@ -177,15 +177,19 @@ def test_summary_model_filter(temp_db):
     assert filtered["totals"]["total_tokens"] == 1200
     # by_model stays complete so the UI can offer every filter option
     assert len(filtered["by_model"]) == 2
-    # timeseries is filtered too
-    assert len(filtered["timeseries"]) == 1
-    assert filtered["timeseries"][0]["prompt_tokens"] == 1000
+    # timeseries is filtered but still zero-fills the full window
+    # (7-day daily window is inclusive of both end buckets -> 8 buckets)
+    assert len(filtered["timeseries"]) == 8
+    nonzero = [b for b in filtered["timeseries"] if b["prompt_tokens"] > 0]
+    assert len(nonzero) == 1
+    assert nonzero[0]["prompt_tokens"] == 1000
 
     # Unknown model -> zeroed totals, still available (window has data)
     unknown = store.summary(days=7, model="nope")
     assert unknown["available"] is True
     assert unknown["totals"]["requests"] == 0
-    assert unknown["timeseries"] == []
+    assert len(unknown["timeseries"]) == 8
+    assert all(b["prompt_tokens"] == 0 for b in unknown["timeseries"])
 
 
 def test_timeseries_buckets(temp_db):
@@ -217,21 +221,67 @@ def test_timeseries_buckets(temp_db):
         {"ts": ts3, "model": "model-a", "prompt_tokens": 150, "cached_tokens": 10, "completion_tokens": 50}
     )
 
-    # 1 day window -> hourly buckets
+    # 1 day window -> hourly buckets, zero-filled across the full window
+    # (24h span, inclusive of both end buckets -> 25 buckets)
     summary = store.summary(days=1)
-    assert len(summary["timeseries"]) == 2
+    assert len(summary["timeseries"]) >= 24
+    assert len(summary["timeseries"]) <= 26
 
-    # First bucket should have combined values from ts1 + ts2
-    bucket1 = summary["timeseries"][0]
-    assert bucket1["ts"] == first_bucket
+    by_ts = {b["ts"]: b for b in summary["timeseries"]}
+
+    # First data bucket should have combined values from ts1 + ts2
+    bucket1 = by_ts[first_bucket]
     assert bucket1["prompt_tokens"] == 300
     assert bucket1["cached_tokens"] == 50
     assert bucket1["cache_hit_pct"] == round(100 * 50 / 300, 1)
 
-    # Second bucket
-    bucket2 = summary["timeseries"][1]
-    assert bucket2["ts"] == second_bucket
+    # Second data bucket
+    bucket2 = by_ts[second_bucket]
     assert bucket2["prompt_tokens"] == 150
+
+    # Every other bucket in the window is zero-filled (no gaps -> no dots)
+    data_buckets = {first_bucket, second_bucket}
+    for bucket in summary["timeseries"]:
+        if bucket["ts"] not in data_buckets:
+            assert bucket["prompt_tokens"] == 0
+            assert bucket["cached_tokens"] == 0
+            assert bucket["cache_hit_pct"] == 0.0
+
+
+def test_sparse_model_zero_filled_not_single_dot(temp_db):
+    """A model active on one day must still get a full-window timeseries.
+
+    Regression: the backend only returned buckets that had rows, so a model
+    whose usage was concentrated on a single day produced a 1-point series,
+    which the chart rendered as the '2 black dots' (one circle per series).
+    """
+    store = UsageStore(temp_db)
+
+    # Model-a: only today. Model-b: yesterday too (so the window is non-empty
+    # even if the model filter has no match).
+    today = datetime.now(timezone.utc)
+    yesterday = today - timedelta(days=1)
+
+    def _iso(dt: datetime) -> str:
+        return dt.isoformat().replace("+00:00", "Z")
+
+    store.record(
+        {"ts": _iso(today), "model": "model-a", "prompt_tokens": 800, "cached_tokens": 400, "completion_tokens": 50}
+    )
+    store.record(
+        {"ts": _iso(yesterday), "model": "model-b", "prompt_tokens": 100, "cached_tokens": 0, "completion_tokens": 10}
+    )
+
+    summary = store.summary(days=7, model="model-a")
+
+    # Full 7-day window, not a single point (inclusive ends -> 8 buckets)
+    assert len(summary["timeseries"]) == 8
+    assert summary["timeseries"][0]["ts"] < summary["timeseries"][-1]["ts"]
+    assert summary["timeseries"][-1]["prompt_tokens"] == 800
+    assert summary["timeseries"][-1]["cached_tokens"] == 400
+    # Zero-filled days stay zero
+    assert sum(1 for b in summary["timeseries"][:-1] if b["prompt_tokens"] == 0) == 7
+    assert all(b["cache_hit_pct"] == 0.0 for b in summary["timeseries"][:-1])
 
 
 def test_empty_db_returns_available_false(temp_db):

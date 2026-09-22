@@ -7,12 +7,15 @@ from typing import Any
 from sarathy.usage.store import get_usage_store
 
 
-def format_usage_footer(stats: dict[str, Any] | None, session_key: str | None) -> str | None:
+def format_usage_footer(
+    stats: dict[str, Any] | None, session_key: str | None, epoch: int = 0
+) -> str | None:
     """Format the usage footer for a response.
 
     Args:
         stats: Dict with total_tokens, total_time, tokens_per_sec (from AgentLoop stats).
         session_key: Session key for cost aggregation (channel:chat_id format).
+        epoch: Session epoch for cost filtering (default 0 for backward compatibility).
 
     Returns:
         Formatted footer string with compact tokens/sec and cost line, or None if
@@ -31,7 +34,7 @@ def format_usage_footer(stats: dict[str, Any] | None, session_key: str | None) -
     if session_key:
         cost_line = "💵 $xx.xx session"
         try:
-            cost = get_usage_store().session_cost(session_key)
+            cost = get_usage_store().session_cost(session_key, epoch)
             if cost is not None:
                 cost_line = f"💵 ${cost:.4f} session"
         except Exception:

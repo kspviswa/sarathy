@@ -135,7 +135,15 @@ class TestUsageSummaryAPI(AioHTTPTestCase):
         assert data["by_model"][0]["model"] == "model-a"
         assert data["by_model"][0]["cache_hit_pct"] == 30.0
 
-        assert len(data["timeseries"]) == 1
+        # Zero-filled full window (7-day daily window, inclusive ends -> 8 buckets)
+        assert len(data["timeseries"]) == 8
+        sep21 = next(b for b in data["timeseries"] if b["ts"] == "2026-09-21T00:00:00Z")
+        assert sep21["prompt_tokens"] == 1000
+        assert sep21["cached_tokens"] == 300
+        assert sum(1 for b in data["timeseries"] if b["ts"] != "2026-09-21T00:00:00Z") == 7
+        assert all(
+            b["prompt_tokens"] == 0 for b in data["timeseries"] if b["ts"] != "2026-09-21T00:00:00Z"
+        )
 
     @unittest_run_loop
     async def test_usage_summary_days_clamp(self):

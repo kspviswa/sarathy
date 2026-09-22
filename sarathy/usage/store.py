@@ -6,7 +6,7 @@ import logging
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -205,7 +205,9 @@ class UsageStore:
                         }
                     )
 
-                # Timeseries bucketing: hourly for <=2 days, daily otherwise
+                # Timeseries bucketing: hourly for <=2 days, daily otherwise.
+                # The window is zero-filled so sparse models (e.g. one busy day)
+                # still render a full timeline instead of 1-2 isolated points.
                 bucket = "hour" if days <= 2 else "day"
                 strftime_fmt = "%Y-%m-%dT%H:00:00Z" if bucket == "hour" else "%Y-%m-%dT00:00:00Z"
 
@@ -224,20 +226,44 @@ class UsageStore:
                     tuple(where_args),
                 ).fetchall()
 
-                timeseries = []
+                ts_map: dict[str, dict[str, Any]] = {}
                 for r in ts_rows:
-                    pt = r["prompt_tokens"] or 0
-                    ct = r["cached_tokens"] or 0
+                    ts_map[r["bucket"]] = {
+                        "prompt_tokens": r["prompt_tokens"] or 0,
+                        "cached_tokens": r["cached_tokens"] or 0,
+                        "completion_tokens": r["completion_tokens"] or 0,
+                    }
+
+                # Full window of buckets from cutoff to now (inclusive), zero-filled.
+                now = datetime.now(timezone.utc)
+                if bucket == "hour":
+                    cur = datetime.fromtimestamp(cutoff, tz=timezone.utc).replace(
+                        minute=0, second=0, microsecond=0
+                    )
+                    step = timedelta(hours=1)
+                else:
+                    cur = datetime.fromtimestamp(cutoff, tz=timezone.utc).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+                    step = timedelta(days=1)
+
+                timeseries = []
+                while cur <= now:
+                    label = cur.strftime("%Y-%m-%dT%H:00:00Z" if bucket == "hour" else "%Y-%m-%dT00:00:00Z")
+                    row = ts_map.get(label, {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0})
+                    pt = row["prompt_tokens"]
+                    ct = row["cached_tokens"]
                     hit_pct = round(100.0 * ct / pt, 1) if pt > 0 else 0.0
                     timeseries.append(
                         {
-                            "ts": r["bucket"],
+                            "ts": label,
                             "prompt_tokens": pt,
                             "cached_tokens": ct,
-                            "completion_tokens": r["completion_tokens"] or 0,
+                            "completion_tokens": row["completion_tokens"],
                             "cache_hit_pct": hit_pct,
                         }
                     )
+                    cur += step
 
                 return {
                     "available": True,

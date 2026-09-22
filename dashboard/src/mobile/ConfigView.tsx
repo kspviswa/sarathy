@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
@@ -44,6 +45,85 @@ function setPath(obj: ConfigResponse, path: string, value: unknown): void {
     cur = cur[k] as Record<string, unknown>;
   }
   cur[parts[parts.length - 1]] = value;
+}
+
+function ImageModelControl({ providers }: { providers: ProviderInfo[] }) {
+  const [imageProvider, setImageProvider] = useState<ProviderInfo | null>(null);
+  const [imageModel, setImageModel] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const current = providers.find((p) => p.role === "image");
+    if (current) {
+      setImageProvider(current);
+    }
+  }, [providers]);
+
+  async function handleSave() {
+    if (!imageProvider) return;
+    setSaving(true);
+    try {
+      await api.setProviderRole(imageProvider.name, "image", imageModel || undefined);
+      toast.success(`Image provider set to ${imageProvider.label}${imageModel ? ` (${imageModel})` : ""}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set image provider");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Image Model</CardTitle>
+        <CardDescription>
+          Dedicated vision model for describing images. When set, all image content is sent to this provider
+          for description before the main model processes the turn.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="mob-image-provider">Provider</Label>
+          <Select value={imageProvider?.name ?? ""} onValueChange={(v) => {
+            const p = providers.find((p) => p.name === v);
+            setImageProvider(p ?? null);
+            if (p) setImageModel("");
+          }}>
+            <SelectTrigger id="mob-image-provider">
+              <SelectValue placeholder="Select image provider" />
+            </SelectTrigger>
+            <SelectContent>
+              {providers.map((p) => (
+                <SelectItem key={p.name} value={p.name}>
+                  {p.label} ({p.kind})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="mob-image-model">Model (optional)</Label>
+          <Input
+            id="mob-image-model"
+            value={imageModel}
+            onChange={(e) => setImageModel(e.target.value)}
+            placeholder="e.g. gpt-4o, claude-3-5-sonnet"
+            spellCheck={false}
+          />
+        </div>
+        <Button onClick={() => void handleSave()} disabled={saving || !imageProvider} className="w-full">
+          <Save className="size-4" />
+          {saving ? "Saving…" : "Save"}
+        </Button>
+        {imageProvider && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
+            <span className="px-2 py-1 rounded bg-secondary text-secondary-foreground text-xs">Current: {imageProvider.label}</span>
+            {imageModel && <span className="text-xs">Model: {imageModel}</span>}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function ConfigView() {
@@ -175,6 +255,8 @@ export function ConfigView() {
             {restarting ? "Restarting…" : "Restart gateway"}
           </Button>
         )}
+
+        <ImageModelControl providers={providers} />
 
         <Card>
           <CardHeader className="flex-row items-center justify-between gap-2">

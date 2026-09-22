@@ -4,6 +4,7 @@ import type {
   PairResponse,
   ProviderModelsResponse,
   ProvidersResponse,
+  RoleStatusResponse,
   RuntimeSetResponse,
   SessionDetail,
   SessionInfo,
@@ -123,6 +124,12 @@ export const api = {
 
   removeProvider: (name: string) =>
     request<{ ok: boolean }>(`/api/providers/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  setProviderRole: (name: string, role: string, model?: string) =>
+    request<RoleStatusResponse>(`/api/providers/${encodeURIComponent(name)}/role`, {
+      method: "POST",
+      body: JSON.stringify({ role, model }),
+    }),
 
   setRuntime: (data: { provider?: string; model?: string }) =>
     request<RuntimeSetResponse>("/api/runtime", {

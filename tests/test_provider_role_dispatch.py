@@ -38,15 +38,18 @@ class FakeProvider:
 class FakeRuntime:
     """RuntimeProvider stand-in: returns a provider per role, records lookups."""
 
-    def __init__(self, local_provider=None):
+    def __init__(self, local_provider=None, image_provider=None):
         self.main_provider = FakeProvider("main")
         self.local_provider = local_provider
+        self.image_provider = image_provider
         self.lookups: list[str] = []
 
     def provider_for(self, role: str):
         self.lookups.append(role)
         if role == "local":
             return self.local_provider
+        if role == "image":
+            return self.image_provider
         return self.main_provider
 
     def apply_to(self, agent) -> bool:
@@ -148,3 +151,134 @@ async def test_provider_role_local_missing_falls_back_to_active(tmp_path):
 
     assert runtime.lookups == ["local"]
     assert main.calls, "fell back to active provider"
+
+
+@pytest.mark.asyncio
+async def test_image_provider_describes_then_main_drives(tmp_path):
+    """When messages contain images and an image provider is configured,
+    the image provider is called for description, then messages are rewritten
+    with [image description: ...] hint, and the main provider drives the turn."""
+    image = FakeProvider("image")
+    runtime = FakeRuntime(local_provider=None, image_provider=image)
+    main = FakeProvider("main")
+    loop, bus = _make_loop(tmp_path, main, runtime)
+
+    # Override the class method for this instance
+    def mock_has_image_content(msgs):
+        return any(
+            isinstance(m.get("content"), list) and any(p.get("type") == "image_url" for p in m.get("content", []))
+            for m in msgs
+        )
+    loop._has_image_content = mock_has_image_content
+
+    # Track if _describe_images_with_image_provider was called
+    describe_called = {"called": False, "provider": None}
+    original_describe = loop._describe_images_with_image_provider
+    async def mock_describe(msgs, img_provider, **kwargs):
+        describe_called["called"] = True
+        describe_called["provider"] = img_provider
+        # Rewrite user message content
+        new_msgs = []
+        for m in msgs:
+            if m.get("role") == "user" and isinstance(m.get("content"), list):
+                new_msgs.append({**m, "content": [{"type": "text", "text": "[image description: a cat sitting on a mat]"}]} )
+            else:
+                new_msgs.append(m)
+        return new_msgs
+    loop._describe_images_with_image_provider = mock_describe
+
+    msg = InboundMessage(
+        channel="cli",
+        sender_id="user",
+        chat_id="direct",
+        content="What's in this image?",
+        metadata={},
+    )
+    # Inject image content into the messages that will be built
+    loop.context.build_messages.return_value = [
+        {"role": "user", "content": [
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}}
+        ]}
+    ]
+
+    out = await loop._process_message(msg, session_key="test:image")
+
+    # Image provider should have been looked up
+    assert "image" in runtime.lookups
+    # _describe_images_with_image_provider should have been called with the image provider
+    assert describe_called["called"], "_describe_images_with_image_provider should have been called"
+    assert describe_called["provider"] is image, "image provider should be passed to describe method"
+
+    # Main provider should have been called with rewritten messages
+    assert main.calls, "main provider should drive the turn"
+    # Check that the main provider received the description hint
+    main_call_messages = main.calls[0]["messages"]
+    user_msgs = [m for m in main_call_messages if m.get("role") == "user"]
+    assert user_msgs, "should have user message"
+    # The user message should have the description hint
+    found_hint = False
+    for m in user_msgs:
+        content = m.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if part.get("type") == "text" and "[image description:" in part.get("text", ""):
+                    found_hint = True
+    assert found_hint, "main provider should receive [image description: ...] hint"
+
+
+@pytest.mark.asyncio
+async def test_plain_text_turn_skips_image_description(tmp_path):
+    """A plain text turn without images skips the image description step entirely."""
+    image = FakeProvider("image")
+    runtime = FakeRuntime(local_provider=None, image_provider=image)
+    main = FakeProvider("main")
+    loop, bus = _make_loop(tmp_path, main, runtime)
+
+    msg = InboundMessage(
+        channel="cli", sender_id="user", chat_id="direct", content="hello", metadata={}
+    )
+    loop.context.build_messages.return_value = [{"role": "user", "content": "hello"}]
+
+    out = await loop._process_message(msg, session_key="test:plain")
+
+    # Image provider should NOT be called
+    assert "image" not in runtime.lookups
+    assert image.calls == [], "image provider should not be called for plain text"
+
+    # Main provider should serve the turn normally
+    assert main.calls, "active provider should serve the turn"
+
+
+@pytest.mark.asyncio
+async def test_no_image_provider_falls_back_to_raw_images(tmp_path):
+    """When no image provider is configured, messages with images pass through unchanged."""
+    runtime = FakeRuntime(local_provider=None, image_provider=None)
+    main = FakeProvider("main")
+    loop, bus = _make_loop(tmp_path, main, runtime)
+
+    loop._has_image_content = lambda msgs: any(
+        isinstance(m.get("content"), list) and any(p.get("type") == "image_url" for p in m.get("content", []))
+        for m in msgs
+    )
+
+    msg = InboundMessage(
+        channel="cli",
+        sender_id="user",
+        chat_id="direct",
+        content="What's in this image?",
+        metadata={},
+    )
+    loop.context.build_messages.return_value = [
+        {"role": "user", "content": [
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}}
+        ]}
+    ]
+
+    out = await loop._process_message(msg, session_key="test:noimage")
+
+    # Image provider should be looked up but return None
+    assert "image" in runtime.lookups
+    # Main provider should handle the turn with raw images
+    assert main.calls, "main provider should handle the turn with raw images"

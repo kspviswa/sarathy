@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
   cache_discount     REAL,
   cost               REAL,
   duration_ms        INTEGER,
-  finish_reason      TEXT
+  finish_reason      TEXT,
+  epoch              INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts    ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_events(model, ts);
@@ -91,14 +92,14 @@ class UsageStore:
             logger.debug("Usage store init failed: %s", e)
 
     def _migrate_schema_if_needed(self, conn: sqlite3.Connection) -> None:
-        """Idempotent migration: add cost column and bump user_version to 2."""
+        """Idempotent migration: add cost column (v2), epoch column (v3)."""
         try:
             # Check current user_version
             row = conn.execute("PRAGMA user_version;").fetchone()
             current_version = row[0] if row else 0
 
+            # v1 -> v2: add cost column
             if current_version < 2:
-                # Check if cost column already exists (fresh DB with new schema but old version)
                 cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
                 has_cost = any(col[1] == "cost" for col in cols)
 
@@ -106,12 +107,35 @@ class UsageStore:
                     conn.execute("ALTER TABLE usage_events ADD COLUMN cost REAL;")
 
                 conn.execute("PRAGMA user_version = 2;")
-            elif current_version == 2:
-                # Fresh DB created with new schema - ensure cost column exists
+                current_version = 2
+
+            # v2 -> v3: add epoch column
+            if current_version < 3:
+                cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
+                has_epoch = any(col[1] == "epoch" for col in cols)
+
+                if not has_epoch:
+                    conn.execute("ALTER TABLE usage_events ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0;")
+                    # Create index for session_key + epoch queries
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_session_epoch ON usage_events(session_key, epoch);")
+
+                conn.execute("PRAGMA user_version = 3;")
+                current_version = 3
+
+            # Ensure cost column exists for fresh DBs created with v3 schema
+            if current_version >= 2:
                 cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
                 has_cost = any(col[1] == "cost" for col in cols)
                 if not has_cost:
                     conn.execute("ALTER TABLE usage_events ADD COLUMN cost REAL;")
+
+            # Ensure epoch column exists for fresh DBs created with v3 schema
+            if current_version >= 3:
+                cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
+                has_epoch = any(col[1] == "epoch" for col in cols)
+                if not has_epoch:
+                    conn.execute("ALTER TABLE usage_events ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0;")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_session_epoch ON usage_events(session_key, epoch);")
         except Exception as e:
             logger.debug("Usage store migration failed: %s", e)
 
@@ -119,6 +143,7 @@ class UsageStore:
         """Insert one usage event row. Never raises."""
         try:
             ts = event.get("ts") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            epoch = event.get("epoch", 0)
             with self._get_conn() as conn:
                 conn.execute(
                     """
@@ -126,8 +151,8 @@ class UsageStore:
                         ts, session_key, channel, model, provider,
                         prompt_tokens, cached_tokens, cache_write_tokens,
                         completion_tokens, total_tokens, cache_discount, cost,
-                        duration_ms, finish_reason
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        duration_ms, finish_reason, epoch
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ts,
@@ -144,6 +169,7 @@ class UsageStore:
                         event.get("cost"),
                         event.get("duration_ms"),
                         event.get("finish_reason"),
+                        epoch,
                     ),
                 )
         except Exception as e:
@@ -320,22 +346,55 @@ class UsageStore:
         except Exception:
             return False
 
-    def session_cost(self, session_key: str) -> float | None:
-        """Return cumulative cost for a session, or None if no cost data exists.
+    def session_cost(self, session_key: str, epoch: int = 0) -> float | None:
+        """Return cumulative cost for a session at a specific epoch, or None if no cost data exists.
 
         Never raises; returns None on any error or when no rows have cost.
+        Default epoch=0 for backward compatibility.
         """
         try:
             with self._get_conn() as conn:
                 row = conn.execute(
-                    "SELECT SUM(cost) as total FROM usage_events WHERE session_key = ? AND cost IS NOT NULL",
-                    (session_key,),
+                    "SELECT SUM(cost) as total FROM usage_events WHERE session_key = ? AND epoch = ? AND cost IS NOT NULL",
+                    (session_key, epoch),
                 ).fetchone()
                 if row and row["total"] is not None:
                     return float(row["total"])
                 return None
         except Exception:
             return None
+
+    def reset_session_epoch(self, session_key: str) -> int:
+        """Advance the session epoch to the next value and return it.
+
+        Returns COALESCE(MAX(epoch), -1) + 1 for the given session_key.
+        Monotonic per key; does not delete rows.
+        """
+        try:
+            with self._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(epoch), -1) + 1 as next_epoch FROM usage_events WHERE session_key = ?",
+                    (session_key,),
+                ).fetchone()
+                next_epoch = row["next_epoch"] if row else 0
+                return int(next_epoch)
+        except Exception:
+            return 0
+
+    def get_session_epoch(self, session_key: str) -> int:
+        """Return the current (latest) epoch for a session without advancing it.
+
+        Returns 0 if no rows exist for the session_key.
+        """
+        try:
+            with self._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(epoch), 0) as current_epoch FROM usage_events WHERE session_key = ?",
+                    (session_key,),
+                ).fetchone()
+                return int(row["current_epoch"]) if row else 0
+        except Exception:
+            return 0
 
     def _empty_summary(self, days: int, model: str | None = None) -> dict[str, Any]:
         return {

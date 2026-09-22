@@ -1,5 +1,6 @@
 """Memory file management with clean separation of concerns."""
 
+import asyncio
 import re
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,8 @@ class MemoryStore:
         self.user_max_size = user_max_size
         # Backward compat
         self.max_size = memory_max_size
+        # Write guard for cross-session concurrent access to MEMORY.md / USER.md
+        self._write_lock = asyncio.Lock()
 
     # --- MEMORY.md ---
 
@@ -37,12 +40,13 @@ class MemoryStore:
             return self.memory_file.read_text(encoding="utf-8")
         return ""
 
-    def write_memory(self, content: str) -> None:
-        """Write updated MEMORY.md content."""
+    async def write_memory(self, content: str) -> None:
+        """Write updated MEMORY.md content (thread-safe)."""
         from sarathy.utils.helpers import ensure_dir
 
-        ensure_dir(self.memory_file.parent)
-        self.memory_file.write_text(content, encoding="utf-8")
+        async with self._write_lock:
+            ensure_dir(self.memory_file.parent)
+            self.memory_file.write_text(content, encoding="utf-8")
 
     def get_memory_context(self) -> str:
         """Return formatted memory context for system prompt."""
@@ -57,12 +61,33 @@ class MemoryStore:
             return self.user_file.read_text(encoding="utf-8")
         return ""
 
-    def write_user(self, content: str) -> None:
-        """Write updated USER.md content."""
+    async def write_user(self, content: str) -> None:
+        """Write updated USER.md content (thread-safe)."""
         from sarathy.utils.helpers import ensure_dir
 
-        ensure_dir(self.user_file.parent)
-        self.user_file.write_text(content, encoding="utf-8")
+        async with self._write_lock:
+            ensure_dir(self.user_file.parent)
+            self.user_file.write_text(content, encoding="utf-8")
+
+    async def append_memory(self, entry: str) -> None:
+        """Atomically append an entry to MEMORY.md (thread-safe)."""
+        async with self._write_lock:
+            current = self.read_memory()
+            updated = f"{current}\n- {entry.strip()}" if current.strip() else f"- {entry.strip()}"
+            updated = self.enforce_max_size(updated, is_user=False)
+            from sarathy.utils.helpers import ensure_dir
+            ensure_dir(self.memory_file.parent)
+            self.memory_file.write_text(updated, encoding="utf-8")
+
+    async def append_user(self, entry: str) -> None:
+        """Atomically append an entry to USER.md (thread-safe)."""
+        async with self._write_lock:
+            current = self.read_user()
+            updated = f"{current}\n- {entry.strip()}" if current.strip() else f"- {entry.strip()}"
+            updated = self.enforce_max_size(updated, is_user=True)
+            from sarathy.utils.helpers import ensure_dir
+            ensure_dir(self.user_file.parent)
+            self.user_file.write_text(updated, encoding="utf-8")
 
     def get_user_context(self) -> str:
         """Return formatted user profile for system prompt."""

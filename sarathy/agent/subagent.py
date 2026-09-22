@@ -46,6 +46,8 @@ class SubagentManager:
         self.restrict_to_workspace = restrict_to_workspace
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        # Guard for cross-session concurrent mutations of task dicts
+        self._lock = asyncio.Lock()
 
     async def spawn(
         self,
@@ -61,16 +63,20 @@ class SubagentManager:
         origin = {"channel": origin_channel, "chat_id": origin_chat_id}
 
         bg_task = asyncio.create_task(self._run_subagent(task_id, task, display_label, origin))
-        self._running_tasks[task_id] = bg_task
-        if session_key:
-            self._session_tasks.setdefault(session_key, set()).add(task_id)
+        async with self._lock:
+            self._running_tasks[task_id] = bg_task
+            if session_key:
+                self._session_tasks.setdefault(session_key, set()).add(task_id)
 
         def _cleanup(_: asyncio.Task) -> None:
-            self._running_tasks.pop(task_id, None)
-            if session_key and (ids := self._session_tasks.get(session_key)):
-                ids.discard(task_id)
-                if not ids:
-                    del self._session_tasks[session_key]
+            async def _do_cleanup():
+                async with self._lock:
+                    self._running_tasks.pop(task_id, None)
+                    if session_key and (ids := self._session_tasks.get(session_key)):
+                        ids.discard(task_id)
+                        if not ids:
+                            del self._session_tasks[session_key]
+            asyncio.create_task(_do_cleanup())
 
         bg_task.add_done_callback(_cleanup)
 
@@ -264,11 +270,12 @@ When you have completed the task, provide a clear summary of your findings or ac
 
     async def cancel_by_session(self, session_key: str) -> int:
         """Cancel all subagents for the given session. Returns count cancelled."""
-        tasks = [
-            self._running_tasks[tid]
-            for tid in self._session_tasks.get(session_key, [])
-            if tid in self._running_tasks and not self._running_tasks[tid].done()
-        ]
+        async with self._lock:
+            tasks = [
+                self._running_tasks[tid]
+                for tid in self._session_tasks.get(session_key, [])
+                if tid in self._running_tasks and not self._running_tasks[tid].done()
+            ]
         for t in tasks:
             t.cancel()
         if tasks:

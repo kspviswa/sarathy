@@ -133,10 +133,45 @@ class AgentLoop:
         self._mcp_connected = False
         self._mcp_connecting = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
-        self._processing_lock = asyncio.Lock()
+        # Per-session lock registry (replaces single _processing_lock)
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._locks_guard = asyncio.Lock()  # guards the _session_locks dict
+        # Global lock for runtime hot-reload, config slash commands, archival sweep
+        # Lock ordering: ALWAYS acquire _global_lock BEFORE any session lock (never reverse)
+        self._global_lock = asyncio.Lock()
+        # Optional semaphore to cap concurrent sessions
+        # Read from agent config (channels_config has agents.defaults)
+        max_concurrent = 4
+        if channels_config is not None and hasattr(channels_config, 'agents'):
+            max_concurrent = getattr(channels_config.agents.defaults, 'max_concurrent_sessions', 4)
+        elif hasattr(self, 'sessions') and self.sessions is not None and hasattr(self.sessions, 'config'):
+            max_concurrent = getattr(self.sessions.config.agents.defaults, 'max_concurrent_sessions', 4)
+        if not isinstance(max_concurrent, int):
+            max_concurrent = 4
+        max_concurrent = max(1, min(16, max_concurrent))
+        self._session_semaphore = asyncio.Semaphore(max_concurrent)
         self._active_main_turns: set[str] = set()  # session keys with a running main turn
         self._active_btw_turns: set[str] = set()  # session keys with a running /btw side turn
+
         self._register_default_tools()
+
+    async def _acquire_session_lock(self, key: str) -> tuple[asyncio.Lock, str]:
+        """Return (lock, key), creating the lock on first use."""
+        async with self._locks_guard:
+            lock = self._session_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._session_locks[key] = lock
+            return lock, key
+
+    async def _release_session_lock(self, key: str) -> None:
+        """Drop an idle lock so the registry cannot grow unbounded."""
+        async with self._locks_guard:
+            lock = self._session_locks.get(key)
+            # _waiters is an internal asyncio.Lock attribute but stable across Python versions
+            waiters = getattr(lock, '_waiters', None) if lock is not None else None
+            if lock is not None and not lock.locked() and not waiters:
+                self._session_locks.pop(key, None)
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -914,33 +949,42 @@ class AgentLoop:
             self._active_btw_turns.discard(key)
 
     async def _dispatch(self, msg: InboundMessage) -> None:
-        """Process a message under the global lock."""
-        async with self._processing_lock:
-            try:
-                response = await self._process_message(msg)
-                if response is not None:
-                    await self.bus.publish_outbound(response)
-                elif msg.channel == "cli":
+        """Process a message under the per-session lock with optional global cap."""
+        key = msg.session_key
+        # Hot-reload config (global lock, acquired BEFORE session lock per lock ordering)
+        async with self._global_lock:
+            self._refresh_runtime()
+        # Acquire semaphore first (global cap), then session lock
+        async with self._session_semaphore:
+            lock, _ = await self._acquire_session_lock(key)
+            async with lock:
+                try:
+                    response = await self._process_message(msg)
+                    if response is not None:
+                        await self.bus.publish_outbound(response)
+                    elif msg.channel == "cli":
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content="",
+                                metadata=msg.metadata or {},
+                            )
+                        )
+                except asyncio.CancelledError:
+                    logger.info("Task cancelled for session {}", msg.session_key)
+                    raise
+                except Exception:
+                    logger.exception("Error processing message for session {}", msg.session_key)
                     await self.bus.publish_outbound(
                         OutboundMessage(
                             channel=msg.channel,
                             chat_id=msg.chat_id,
-                            content="",
-                            metadata=msg.metadata or {},
+                            content="Sorry, I encountered an error.",
                         )
                     )
-            except asyncio.CancelledError:
-                logger.info("Task cancelled for session {}", msg.session_key)
-                raise
-            except Exception:
-                logger.exception("Error processing message for session {}", msg.session_key)
-                await self.bus.publish_outbound(
-                    OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content="Sorry, I encountered an error.",
-                    )
-                )
+            # Release lock after the async with lock block exits (lock is now unlocked)
+            await self._release_session_lock(key)
 
     async def close_mcp(self) -> None:
         """Close MCP connections."""
@@ -1034,8 +1078,6 @@ class AgentLoop:
         on_progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
-        # Hot-reload model/provider/parameters (no gateway restart needed).
-        self._refresh_runtime()
 
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
@@ -1508,7 +1550,10 @@ Remaining: ~{remaining:,} tokens
             )
         current_memory = self.context.memory.read_memory()
         new_memory = f"{current_memory}\n- {args}".strip()
-        self.context.memory.write_memory(new_memory)
+        # Note: write_memory is now async, but this is a sync method.
+        # Schedule the write; the memory tool uses async writes for concurrent safety.
+        import asyncio
+        asyncio.create_task(self.context.memory.write_memory(new_memory))
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
@@ -1633,7 +1678,8 @@ Remaining: ~{remaining:,} tokens
                 self.runtime.set_active(self.runtime.config.agents.defaults.provider, model=rest)
             except ValueError as e:
                 return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"⚠️ {e}")
-            self._refresh_runtime()
+            async with self._global_lock:
+                self._refresh_runtime()
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
@@ -1707,7 +1753,8 @@ Remaining: ~{remaining:,} tokens
                 self.runtime.set_active(pname, model=model)
             except ValueError as e:
                 return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"⚠️ {e}")
-            self._refresh_runtime()
+            async with self._global_lock:
+                self._refresh_runtime()
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
@@ -1755,7 +1802,8 @@ Remaining: ~{remaining:,} tokens
                 self.runtime.set_role(role, pname, model)
             except ValueError as e:
                 return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"⚠️ {e}")
-            self._refresh_runtime()
+            async with self._global_lock:
+                self._refresh_runtime()
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
@@ -1859,7 +1907,8 @@ Remaining: ~{remaining:,} tokens
         if set_active:
             config.agents.defaults.provider = name
             save_config(config)
-        self._refresh_runtime()
+        async with self._global_lock:
+            self._refresh_runtime()
 
         reply = f"✅ Added provider '{name}' ({kind} → {api_base})."
         if set_active:

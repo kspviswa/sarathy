@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from sarathy.agent.builtin_commands import BUILTIN_COMMANDS, get_help_text
+from sarathy.providers.manager import RuntimeProvider
 from sarathy.agent.context import ContextBuilder
 from sarathy.agent.subagent import SubagentManager
 from sarathy.agent.tools.cron import CronTool
@@ -218,8 +219,110 @@ class AgentLoop:
                 ).strip()
                 return cleaned if cleaned else None
             return None
-        stripped = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+        stripped = re.sub(r"yente[\s\S]*?\]\]", "", text).strip()
         return stripped if stripped else (reasoning_content if reasoning_content else None)
+
+    @staticmethod
+    def _has_image_content(messages: list[dict]) -> bool:
+        """Return True if any message contains image content (image_url parts or [image: markers)."""
+        for msg in messages:
+            content = msg.get("content")
+            if content is None:
+                continue
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "image_url":
+                        return True
+            elif isinstance(content, str):
+                if "[image:" in content:
+                    return True
+        return False
+
+    async def _describe_images_with_image_provider(
+        self,
+        messages: list[dict],
+        image_provider: "LLMProvider",
+        on_progress: Callable[..., Awaitable[None]] | None = None,
+        on_thinking: Callable[..., Awaitable[None]] | None = None,
+        channel: str | None = None,
+        session_key: str | None = None,
+    ) -> list[dict]:
+        """Call the image provider to describe images, then rewrite user messages with description hints.
+
+        Returns the rewritten messages with image parts replaced by [image description: ...] text hints.
+        """
+        # Find the last user message that contains image content
+        user_msg_idx = -1
+        user_msg = None
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            if msg.get("role") == "user" and self._has_image_content([msg]):
+                user_msg_idx = i
+                user_msg = msg
+                break
+
+        if user_msg is None:
+            return messages
+
+        # Extract image parts and text from the user message
+        content = user_msg.get("content")
+        image_parts = []
+        text_parts = []
+
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    image_parts.append(part)
+                else:
+                    text_parts.append(part)
+        elif isinstance(content, str):
+            # Handle [image: path] markers in string content
+            import re
+            parts = re.split(r"(\[image: [^\]]+\])", content)
+            for part in parts:
+                if part.startswith("[image:") and part.endswith("]"):
+                    image_parts.append({"type": "image_url", "image_url": {"url": part[7:-1]}})
+                elif part.strip():
+                    text_parts.append({"type": "text", "text": part})
+
+        if not image_parts:
+            return messages
+
+        # Build the description request for the image provider
+        system_prompt = (
+            "You are an image description service. Describe the image(s) in detail: "
+            "subjects, text/OCR, layout, colors."
+        )
+        user_text = " ".join(p.get("text", "") for p in text_parts if isinstance(p, dict) and p.get("type") == "text")
+
+        description_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": image_parts + ([{"type": "text", "text": user_text}] if user_text else [])},
+        ]
+
+        # Call the image provider
+        try:
+            response = await image_provider.chat(
+                messages=description_messages,
+                tools=[],
+                model=image_provider.get_default_model(),
+                temperature=0.1,
+                max_tokens=1024,
+                stream=False,
+            )
+            description = response.content or "Image description unavailable"
+        except Exception as e:
+            logger.warning("Image provider description failed: {}", e)
+            description = "Image description unavailable"
+
+        # Rewrite the user message: replace image parts with description hint
+        new_content = text_parts + [{"type": "text", "text": f"[image description: {description}]"}]
+
+        # Create new messages list with rewritten user message
+        new_messages = list(messages)
+        new_messages[user_msg_idx] = {**user_msg, "content": new_content}
+
+        return new_messages
 
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:
@@ -329,6 +432,23 @@ class AgentLoop:
             should_stream = streaming_enabled and on_progress is not None
             if self.reviewer:
                 self.reviewer.mark_busy()
+
+            # Describe-then-inject: if messages contain images and an image provider is configured,
+            # call the image provider to describe images and rewrite user message with description hint
+            if self.runtime is not None and self._has_image_content(messages):
+                image_provider = self.runtime.provider_for("image")
+                if image_provider is not None:
+                    messages = await self._describe_images_with_image_provider(
+                        messages,
+                        image_provider,
+                        on_progress=on_progress,
+                        on_thinking=on_thinking,
+                        channel=channel,
+                        session_key=session_key,
+                    )
+                else:
+                    logger.warning("Image content detected but no image provider configured; passing raw images to main model")
+
             try:
                 response = await self.provider.chat(
                     messages=messages,
@@ -1501,7 +1621,7 @@ Remaining: ~{remaining:,} tokens
                 mark = "→" if name == s["provider"] else " "
                 lines.append(f" {mark} {name}")
             lines.append("")
-            lines.append("Usage: /provider list · /provider set <name> [model] · /provider models <name> · /provider role main|local <name> [model] · /provider roles")
+            lines.append("Usage: /provider list · /provider set <name> [model] · /provider models <name> · /provider role main|local|image <name> [model] · /provider roles")
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
 
         if sub == "list":
@@ -1557,6 +1677,8 @@ Remaining: ~{remaining:,} tokens
                 f"  🎙 main  → {r['main']} ({r.get('main_model') or '—'})",
                 f"  🏷 local → {r['local'] or '(none — async jobs fall back to main)'}"
                 + (f" ({r.get('local_model') or '—'})" if r["local"] else ""),
+                f"  🖼 image  → {r['image'] or '(none — image turns fall back to active)'}"
+                + (f" ({r.get('image_model') or '—'})" if r["image"] else ""),
                 f"  🔌 active → {r['active']}",
             ]
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
@@ -1566,17 +1688,17 @@ Remaining: ~{remaining:,} tokens
             role = rparts[0].lower()
             pname = rparts[1] if len(rparts) > 1 else None
             model = rparts[2] if len(rparts) > 2 else None
-            if role not in ("main", "local"):
+            if role not in ("main", "local", "image"):
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content="Usage: /provider role main|local <provider-name> [model]",
+                    content="Usage: /provider role main|local|image <provider-name> [model]",
                 )
             if not pname:
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content="Usage: /provider role main|local <provider-name> [model]",
+                    content="Usage: /provider role main|local|image <provider-name> [model]",
                 )
             try:
                 self.runtime.set_role(role, pname, model)
@@ -1596,7 +1718,7 @@ Remaining: ~{remaining:,} tokens
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
-            content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name> · /provider add <name> [--api-base <url>] [--kind <kind>] [--set-active] · /provider role main|local <name> [model] · /provider roles",
+            content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name> · /provider add <name> [--api-base <url>] [--kind <kind>] [--set-active] · /provider role main|local|image <name> [model] · /provider roles",
         )
 
     async def _handle_provider_add(

@@ -246,6 +246,7 @@ def describe_provider(name: str, cfg: "ProviderConfig") -> dict[str, Any]:
         "apiBase": api_base,
         "hasApiKey": bool(cfg.api_key and cfg.api_key != "dummy"),
         "isLocal": kind in LOCAL_KINDS,
+        "role": cfg.role or "",
     }
 
 
@@ -400,9 +401,10 @@ class RuntimeProvider:
 
     ROLE_MAIN = "main"
     ROLE_LOCAL = "local"
+    ROLE_IMAGE = "image"
 
     def provider_for(self, role: str) -> "LLMProvider | None":
-        """Resolve the provider tagged ``role`` (``main`` | ``local``).
+        """Resolve the provider tagged ``role`` (``main`` | ``local`` | ``image``).
 
         Returns ``None`` when no provider carries that role, so callers can
         fall back to the active provider. ``main`` falls back to the current
@@ -427,20 +429,35 @@ class RuntimeProvider:
                         )
                         return self.provider
             return None
+        if role == self.ROLE_IMAGE:
+            for name, cfg in self.config.providers.items():
+                if cfg.role == self.ROLE_IMAGE:
+                    try:
+                        return build_provider(name, cfg, cfg.model or self.model)
+                    except Exception as e:
+                        logger.warning(
+                            "Image provider '{}' failed to build ({}); falling back to active",
+                            name,
+                            e,
+                        )
+                        return None
+            return None
         return None
 
     def role_status(self) -> dict[str, Any]:
         """Return role designations for /provider roles.
 
         ``main`` resolves to the explicit main tag, else the active provider.
-        ``local`` is the tagged local name or None. Each role reports the
-        model that would actually run: the provider's own override when set,
-        else the active/default model.
+        ``local`` is the tagged local name or None. ``image`` is the tagged
+        image name or None. Each role reports the model that would actually
+        run: the provider's own override when set, else the active/default model.
         """
         main_name = None
         local_name = None
+        image_name = None
         main_model = None
         local_model = None
+        image_model = None
         for name, cfg in self.config.providers.items():
             if cfg.role == self.ROLE_MAIN:
                 main_name = name
@@ -448,6 +465,9 @@ class RuntimeProvider:
             elif cfg.role == self.ROLE_LOCAL:
                 local_name = name
                 local_model = cfg.model or self.model
+            elif cfg.role == self.ROLE_IMAGE:
+                image_name = name
+                image_model = cfg.model or self.model
         if main_name is None:
             main_name = self.config.agents.defaults.provider
             main_model = self.model
@@ -456,20 +476,23 @@ class RuntimeProvider:
             "main_model": main_model,
             "local": local_name,
             "local_model": local_model,
+            "image": image_name,
+            "image_model": image_model,
             "active": self.config.agents.defaults.provider,
         }
 
     def set_role(self, role: str, provider_name: str, model: str | None = None) -> None:
-        """Tag ``provider_name`` with ``role`` (``main`` | ``local``) and persist.
+        """Tag ``provider_name`` with ``role`` (``main`` | ``local`` | ``image``) and persist.
 
-        Both roles are exclusive: assigning a new main or local clears the
-        previously tagged provider of that role. There is exactly one main and
-        at most one local at any time. When ``model`` is given, it is stored as
-        the provider's per-provider model override (receiving the tag alone
-        leaves any previously stored model untouched).
+        All three roles are exclusive: assigning a new main, local, or image
+        clears the previously tagged provider of that role. There is exactly
+        one main, at most one local, and at most one image at any time. When
+        ``model`` is given, it is stored as the provider's per-provider model
+        override (receiving the tag alone leaves any previously stored model
+        untouched).
         """
-        if role not in (self.ROLE_MAIN, self.ROLE_LOCAL):
-            raise ValueError("role must be 'main' or 'local'")
+        if role not in (self.ROLE_MAIN, self.ROLE_LOCAL, self.ROLE_IMAGE):
+            raise ValueError("role must be 'main', 'local', or 'image'")
         cfg = load_config(self.config_path)
         if provider_name not in cfg.providers:
             raise ValueError(

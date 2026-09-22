@@ -93,7 +93,7 @@ BUILTIN_COMMANDS = {
     "provider": BuiltinCommand(
         name="provider",
         description="List or switch LLM providers",
-        subcommands=["status", "list", "set", "models"],
+        subcommands=["status", "list", "set", "models", "role", "roles"],
         has_status=True,
     ),
     "steer": BuiltinCommand(

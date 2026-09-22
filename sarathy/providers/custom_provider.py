@@ -91,29 +91,25 @@ class CustomProvider(LLMProvider):
         if not u:
             return {}
         try:
+            is_dict = isinstance(u, dict)
             usage: dict[str, Any] = {
-                "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
-                "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
-                "total_tokens": getattr(u, "total_tokens", 0) or 0,
+                "prompt_tokens": u.get("prompt_tokens", 0) if is_dict else (getattr(u, "prompt_tokens", 0) or 0),
+                "completion_tokens": u.get("completion_tokens", 0) if is_dict else (getattr(u, "completion_tokens", 0) or 0),
+                "total_tokens": u.get("total_tokens", 0) if is_dict else (getattr(u, "total_tokens", 0) or 0),
             }
-            details = getattr(u, "prompt_tokens_details", None)
-            if details is None and isinstance(u, dict):
-                details = u.get("prompt_tokens_details")
+            details = u.get("prompt_tokens_details") if is_dict else getattr(u, "prompt_tokens_details", None)
 
             cached = None
             cache_write = None
             if details is not None:
-                cached = getattr(details, "cached_tokens", None)
-                cache_write = getattr(details, "cache_write_tokens", None)
                 if isinstance(details, dict):
-                    if cached is None:
-                        cached = details.get("cached_tokens")
-                    if cache_write is None:
-                        cache_write = details.get("cache_write_tokens")
+                    cached = details.get("cached_tokens")
+                    cache_write = details.get("cache_write_tokens")
+                else:
+                    cached = getattr(details, "cached_tokens", None)
+                    cache_write = getattr(details, "cache_write_tokens", None)
 
-            cache_discount = getattr(u, "cache_discount", None)
-            if cache_discount is None and isinstance(u, dict):
-                cache_discount = u.get("cache_discount")
+            cache_discount = u.get("cache_discount") if is_dict else getattr(u, "cache_discount", None)
 
             if cached is not None:
                 usage["cached_tokens"] = cached
@@ -122,9 +118,7 @@ class CustomProvider(LLMProvider):
             if cache_discount is not None:
                 usage["cache_discount"] = cache_discount
 
-            cost = getattr(u, "cost", None)
-            if cost is None and isinstance(u, dict):
-                cost = u.get("cost")
+            cost = u.get("cost") if is_dict else getattr(u, "cost", None)
             if cost is not None:
                 usage["cost"] = cost
 

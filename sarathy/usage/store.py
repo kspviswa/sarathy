@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS usage_events (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_ts    ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_events(model, ts);
-PRAGMA user_version = 2;
 """
 
 _usage_store_instance: "UsageStore | None" = None
@@ -107,6 +106,12 @@ class UsageStore:
                     conn.execute("ALTER TABLE usage_events ADD COLUMN cost REAL;")
 
                 conn.execute("PRAGMA user_version = 2;")
+            elif current_version == 2:
+                # Fresh DB created with new schema - ensure cost column exists
+                cols = conn.execute("PRAGMA table_info(usage_events);").fetchall()
+                has_cost = any(col[1] == "cost" for col in cols)
+                if not has_cost:
+                    conn.execute("ALTER TABLE usage_events ADD COLUMN cost REAL;")
         except Exception as e:
             logger.debug("Usage store migration failed: %s", e)
 

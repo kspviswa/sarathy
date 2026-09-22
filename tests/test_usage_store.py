@@ -600,39 +600,79 @@ def test_record_with_epoch_1_isolated(temp_db):
 
 
 def test_reset_session_epoch_monotonic(temp_db):
-    """Test reset_session_epoch returns 0 on empty key, then 1, 2... monotonically."""
+    """Test reset_session_epoch persists and returns 1, 2, 3... monotonically."""
     store = UsageStore(temp_db)
     session_key = "test:epoch_monotonic"
 
-    # Empty key -> should return 0
-    epoch0 = store.reset_session_epoch(session_key)
-    assert epoch0 == 0
-
-    # Record at epoch 0
-    store.record({
-        "ts": "2026-01-01T00:00:00Z",
-        "session_key": session_key,
-        "model": "model-a",
-        "epoch": 0,
-        "cost": 0.01,
-    })
-
-    # Reset -> should return 1
+    # Fresh key -> first reset advances to 1 (fresh cost bucket)
     epoch1 = store.reset_session_epoch(session_key)
     assert epoch1 == 1
 
     # Record at epoch 1
     store.record({
-        "ts": "2026-01-01T00:01:00Z",
+        "ts": "2026-01-01T00:00:00Z",
         "session_key": session_key,
         "model": "model-a",
         "epoch": 1,
-        "cost": 0.02,
+        "cost": 0.01,
     })
 
     # Reset -> should return 2
     epoch2 = store.reset_session_epoch(session_key)
     assert epoch2 == 2
+
+    # Record at epoch 2
+    store.record({
+        "ts": "2026-01-01T00:01:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "epoch": 2,
+        "cost": 0.02,
+    })
+
+    # Reset -> should return 3
+    epoch3 = store.reset_session_epoch(session_key)
+    assert epoch3 == 3
+
+
+def test_reset_session_epoch_persists_across_instances(temp_db):
+    """Regression: /new reset must persist so a later turn (or restarted
+    gateway) resolves the advanced epoch instead of falling back to 0."""
+    store = UsageStore(temp_db)
+    session_key = "test:epoch_persist"
+
+    # Simulate: conversation at epoch 0, then /new
+    store.record({
+        "ts": "2026-01-01T00:00:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "epoch": 0,
+        "cost": 0.05,
+    })
+    new_epoch = store.reset_session_epoch(session_key)
+    assert new_epoch == 1
+
+    # Fresh store instance == new gateway process: must still see epoch 1
+    store2 = UsageStore(temp_db)
+    assert store2.get_session_epoch(session_key) == 1
+
+    # Record in the new conversation (epoch 1), then /new again
+    store2.record({
+        "ts": "2026-01-01T00:01:00Z",
+        "session_key": session_key,
+        "model": "model-a",
+        "epoch": 1,
+        "cost": 0.03,
+    })
+    assert store2.reset_session_epoch(session_key) == 2
+
+    # Third instance agrees
+    store3 = UsageStore(temp_db)
+    assert store3.get_session_epoch(session_key) == 2
+    # Cost buckets stay isolated per epoch
+    assert store3.session_cost(session_key, 0) == 0.05
+    assert store3.session_cost(session_key, 1) == 0.03
+    assert store3.session_cost(session_key, 2) is None
 
 
 def test_get_session_epoch_non_advancing(temp_db):

@@ -93,6 +93,8 @@ export interface RuntimeSetResponse {
 export interface UsageSummary {
   available: boolean;
   window_days: number;
+  /** Active per-model filter (null/absent => all models). */
+  model?: string | null;
   totals: {
     requests: number;
     prompt_tokens: number;

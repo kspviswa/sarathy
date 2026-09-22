@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import React from "react";
 
 vi.mock("@/lib/api", () => ({
@@ -233,5 +233,44 @@ describe("UsageCard — window selector", () => {
 
     // Check select value is displayed
     expect(screen.getByText("Last 7 days")).toBeInTheDocument();
+  });
+});
+
+describe("UsageCard — per-model filter", () => {
+  it("offers an 'All models' option plus each model", async () => {
+    render(<UsageCard />);
+
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(screen.getByText("All models")).toBeInTheDocument();
+    // Both model ids appear (once in the filter, once in the per-model row).
+    expect(screen.getAllByText("openrouter/deepseek/deepseek-v4.1-flash").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("local/llama-3.1-8b").length).toBeGreaterThan(0);
+  });
+
+  it("refetches filtered data when a per-model row is clicked", async () => {
+    render(<UsageCard />);
+
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(api.usageSummary).toHaveBeenLastCalledWith(7, null);
+
+    // The model id appears in the filter dropdown and in the per-model row;
+    // pick the one wrapped in the clickable row button.
+    const row = screen
+      .getAllByText("local/llama-3.1-8b")
+      .map((el) => el.closest("button"))
+      .find(Boolean) as HTMLElement;
+    expect(row).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(row);
+      await vi.runAllTimersAsync();
+    });
+
+    expect(api.usageSummary).toHaveBeenLastCalledWith(7, "local/llama-3.1-8b");
   });
 });

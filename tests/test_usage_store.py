@@ -2,7 +2,7 @@
 
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -148,14 +148,64 @@ def test_by_model_groups_correctly(temp_db):
     assert summary["by_model"][1]["cache_hit_pct"] == 0.0
 
 
+def test_summary_model_filter(temp_db):
+    """Test summary(model=...) restricts totals/timeseries but keeps by_model full."""
+    store = UsageStore(temp_db)
+
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    store.record(
+        {"ts": now, "model": "model-a", "provider": "openrouter",
+         "prompt_tokens": 1000, "cached_tokens": 300, "completion_tokens": 200, "total_tokens": 1200}
+    )
+    store.record(
+        {"ts": now, "model": "model-b", "provider": "local",
+         "prompt_tokens": 500, "cached_tokens": 100, "completion_tokens": 100, "total_tokens": 600}
+    )
+
+    # Unfiltered
+    all_summary = store.summary(days=7)
+    assert all_summary["model"] is None
+    assert all_summary["totals"]["prompt_tokens"] == 1500
+    assert len(all_summary["by_model"]) == 2
+
+    # Filtered to model-a
+    filtered = store.summary(days=7, model="model-a")
+    assert filtered["model"] == "model-a"
+    assert filtered["totals"]["requests"] == 1
+    assert filtered["totals"]["prompt_tokens"] == 1000
+    assert filtered["totals"]["cached_tokens"] == 300
+    assert filtered["totals"]["total_tokens"] == 1200
+    # by_model stays complete so the UI can offer every filter option
+    assert len(filtered["by_model"]) == 2
+    # timeseries is filtered too
+    assert len(filtered["timeseries"]) == 1
+    assert filtered["timeseries"][0]["prompt_tokens"] == 1000
+
+    # Unknown model -> zeroed totals, still available (window has data)
+    unknown = store.summary(days=7, model="nope")
+    assert unknown["available"] is True
+    assert unknown["totals"]["requests"] == 0
+    assert unknown["timeseries"] == []
+
+
 def test_timeseries_buckets(temp_db):
     """Test timeseries buckets correctly."""
     store = UsageStore(temp_db)
 
-    # Use timestamps within the same hour for hourly bucketing (days <= 2)
-    ts1 = "2026-09-21T03:15:00Z"
-    ts2 = "2026-09-21T03:45:00Z"  # Same hour
-    ts3 = "2026-09-21T04:30:00Z"  # Next hour
+    # Anchor to "now" so the 1-day window always contains the rows (the old
+    # hardcoded 2026-09-21 stamps aged out of the window and broke the test).
+    base = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    first_hour = base - timedelta(hours=2)
+    second_hour = base - timedelta(hours=1)
+
+    def _iso(dt: datetime) -> str:
+        return dt.isoformat().replace("+00:00", "Z")
+
+    ts1 = _iso(first_hour + timedelta(minutes=15))
+    ts2 = _iso(first_hour + timedelta(minutes=45))  # Same hour as ts1
+    ts3 = _iso(second_hour + timedelta(minutes=30))  # Next hour
+    first_bucket = first_hour.strftime("%Y-%m-%dT%H:00:00Z")
+    second_bucket = second_hour.strftime("%Y-%m-%dT%H:00:00Z")
 
     store.record(
         {"ts": ts1, "model": "model-a", "prompt_tokens": 100, "cached_tokens": 20, "completion_tokens": 50}
@@ -171,16 +221,16 @@ def test_timeseries_buckets(temp_db):
     summary = store.summary(days=1)
     assert len(summary["timeseries"]) == 2
 
-    # First bucket (03:00) should have combined values
+    # First bucket should have combined values from ts1 + ts2
     bucket1 = summary["timeseries"][0]
-    assert bucket1["ts"] == "2026-09-21T03:00:00Z"
+    assert bucket1["ts"] == first_bucket
     assert bucket1["prompt_tokens"] == 300
     assert bucket1["cached_tokens"] == 50
     assert bucket1["cache_hit_pct"] == round(100 * 50 / 300, 1)
 
-    # Second bucket (04:00)
+    # Second bucket
     bucket2 = summary["timeseries"][1]
-    assert bucket2["ts"] == "2026-09-21T04:00:00Z"
+    assert bucket2["ts"] == second_bucket
     assert bucket2["prompt_tokens"] == 150
 
 

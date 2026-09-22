@@ -169,6 +169,32 @@ class TestUsageSummaryAPI(AioHTTPTestCase):
         assert data["timeseries"] == []
 
     @unittest_run_loop
+    async def test_usage_summary_model_filter(self):
+        """Test ?model= restricts totals/timeseries while by_model stays complete."""
+        from sarathy.usage.store import get_usage_store
+
+        store = get_usage_store()
+        store.record(
+            {"ts": "2026-09-21T03:41:00Z", "model": "model-a", "provider": "openrouter",
+             "prompt_tokens": 1000, "cached_tokens": 300, "completion_tokens": 200, "total_tokens": 1200}
+        )
+        store.record(
+            {"ts": "2026-09-21T03:42:00Z", "model": "model-b", "provider": "local",
+             "prompt_tokens": 500, "cached_tokens": 100, "completion_tokens": 100, "total_tokens": 600}
+        )
+
+        resp = await self.client.request(
+            "GET", "/api/usage/summary?model=model-a", headers=self._auth_headers()
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["model"] == "model-a"
+        assert data["totals"]["prompt_tokens"] == 1000
+        assert data["totals"]["requests"] == 1
+        # by_model lists both models so the filter dropdown stays populated
+        assert len(data["by_model"]) == 2
+
+    @unittest_run_loop
     async def test_usage_summary_auth_enforced(self):
         """Test auth is enforced like /api/status."""
         # Request without auth

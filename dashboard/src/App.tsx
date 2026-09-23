@@ -7,7 +7,7 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import { ThemeProvider } from "@/lib/theme";
-import { useLastSession } from "@/lib/useLastSession";
+import { useLastSession, resetLastSession, DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 import { useNotifications } from "@/lib/useNotifications";
 import { DashboardSocket } from "@/lib/ws";
 import { ChatView, type ChatMessage } from "@/views/ChatView";
@@ -43,6 +43,7 @@ function AppInner() {
   const socketRef = useRef<DashboardSocket | null>(null);
   const lastUserMessageRef = useRef<string>("");
   const tabRef = useRef<Tab>("chat");
+  const busyRef = useRef(false);
   tabRef.current = tab;
 
   // Handle token in URL (for deep links from Telegram, etc.)
@@ -245,11 +246,20 @@ function AppInner() {
     [],
   );
 
-  const handleNewChat = useCallback(() => {
-    // Clear the current chat view for a fresh conversation.
-    setMessages([]);
-    setStreaming(false);
-    setOpenFile(null);
+  const handleNewChat = useCallback(async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      await api.sessionNew(DASHBOARD_SESSION_KEY);
+      resetLastSession();
+      setMessages([]);
+      setStreaming(false);
+      setOpenFile(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to archive session");
+    } finally {
+      busyRef.current = false;
+    }
   }, []);
 
   const handleStop = useCallback(async () => {

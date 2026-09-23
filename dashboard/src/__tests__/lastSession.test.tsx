@@ -12,6 +12,7 @@ vi.mock("@/lib/api", () => ({
     stopChat: vi.fn().mockResolvedValue({ ok: true }),
     logout: vi.fn().mockResolvedValue({ ok: true }),
     uploadMedia: vi.fn(),
+    sessionNew: vi.fn().mockResolvedValue({ ok: true }),
     workspaceTree: vi.fn().mockResolvedValue({ root: "/ws", tree: [] }),
     getConfig: vi.fn().mockResolvedValue({}),
     putConfig: vi.fn().mockResolvedValue({ ok: true, restartRequired: false }),
@@ -54,12 +55,15 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: () => null,
 }));
 
-import { api } from "@/lib/api";
+import { api, getToken } from "@/lib/api";
+import { resetLastSession, DASHBOARD_SESSION_KEY, clearResetFlag } from "@/lib/useLastSession";
+import { DashboardSocket } from "@/lib/ws";
 import DesktopApp from "@/App";
 import MobileApp from "@/mobile/App";
 
 function setupWithMessages() {
-  vi.mocked(api.sessions).mockResolvedValue({
+  api.sessions.mockReset();
+  api.sessions.mockResolvedValue({
     sessions: [
       {
         key: "dashboard:console",
@@ -69,7 +73,8 @@ function setupWithMessages() {
       },
     ],
   });
-  vi.mocked(api.session).mockResolvedValue({
+  api.session.mockReset();
+  api.session.mockResolvedValue({
     key: "dashboard:console",
     createdAt: "2026-01-01T00:00:00",
     messages: [
@@ -80,7 +85,8 @@ function setupWithMessages() {
 }
 
 function setupEmptySession() {
-  vi.mocked(api.sessions).mockResolvedValue({
+  api.sessions.mockReset();
+  api.sessions.mockResolvedValue({
     sessions: [
       {
         key: "dashboard:console",
@@ -90,7 +96,8 @@ function setupEmptySession() {
       },
     ],
   });
-  vi.mocked(api.session).mockResolvedValue({
+  api.session.mockReset();
+  api.session.mockResolvedValue({
     key: "dashboard:console",
     createdAt: "2026-01-01T00:00:00",
     messages: [],
@@ -98,15 +105,19 @@ function setupEmptySession() {
 }
 
 function setupNoSessions() {
-  vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
-  vi.mocked(api.session).mockResolvedValue({ key: "", createdAt: "", messages: [] });
+  api.sessions.mockReset();
+  api.sessions.mockResolvedValue({ sessions: [] });
+  api.session.mockReset();
+  api.session.mockResolvedValue({ key: "", createdAt: "", messages: [] });
 }
 
 function setupNullContentToolRows() {
-  vi.mocked(api.sessions).mockResolvedValue({
+  api.sessions.mockReset();
+  api.sessions.mockResolvedValue({
     sessions: [{ key: "dashboard:console", created_at: "t", updated_at: "t" }],
   });
-  vi.mocked(api.session).mockResolvedValue({
+  api.session.mockReset();
+  api.session.mockResolvedValue({
     key: "dashboard:console",
     createdAt: "t",
     messages: [
@@ -120,8 +131,23 @@ function setupNullContentToolRows() {
 
 describe("Last session load — desktop App", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    setupNoSessions();
+    api.me.mockReset();
+    api.me.mockResolvedValue({ ok: true });
+    api.sessions.mockReset();
+    api.sessions.mockResolvedValue({ sessions: [] });
+    api.session.mockReset();
+    api.session.mockResolvedValue({ key: "", createdAt: "", messages: [] });
+    clearResetFlag();
+    DashboardSocket.mockReset();
+    DashboardSocket.mockImplementation(function () {
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        onMessage: vi.fn(() => vi.fn()),
+        onNotification: vi.fn(() => vi.fn()),
+      };
+    });
+    getToken.mockReturnValue("test-token");
   });
 
   it("loads dashboard:console history into the chat on mount", async () => {
@@ -154,8 +180,23 @@ describe("Last session load — desktop App", () => {
 
 describe("Last session load — mobile App", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    setupNoSessions();
+    api.me.mockReset();
+    api.me.mockResolvedValue({ ok: true });
+    api.sessions.mockReset();
+    api.sessions.mockResolvedValue({ sessions: [] });
+    api.session.mockReset();
+    api.session.mockResolvedValue({ key: "", createdAt: "", messages: [] });
+    clearResetFlag();
+    DashboardSocket.mockReset();
+    DashboardSocket.mockImplementation(function () {
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        onMessage: vi.fn(() => vi.fn()),
+        onNotification: vi.fn(() => vi.fn()),
+      };
+    });
+    getToken.mockReturnValue("test-token");
   });
 
   afterEach(() => {
@@ -169,13 +210,46 @@ describe("Last session load — mobile App", () => {
     expect(await screen.findByText("hello prior")).toBeInTheDocument();
     expect(screen.getByText("hi back prior")).toBeInTheDocument();
   });
+});
+
+describe("Last session load — mobile App (empty session)", () => {
+  beforeEach(() => {
+    api.me.mockReset();
+    api.me.mockResolvedValue({ ok: true });
+    api.sessions.mockReset();
+    api.sessions.mockResolvedValue({
+      sessions: [{ key: "dashboard:console", created_at: "t", updated_at: "t", path: "/ws/sess.json" }],
+    });
+    api.session.mockReset();
+    api.session.mockResolvedValue({ key: "dashboard:console", createdAt: "t", messages: [] });
+    clearResetFlag();
+    DashboardSocket.mockReset();
+    DashboardSocket.mockImplementation(function () {
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        onMessage: vi.fn(() => vi.fn()),
+        onNotification: vi.fn(() => vi.fn()),
+      };
+    });
+    getToken.mockReturnValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
 
   it("keeps chat empty when the session has no messages", async () => {
-    setupEmptySession();
-
     render(<MobileApp />);
-
-    expect(await screen.findByText(/Say hello to Sarathy/, { timeout: 5000 })).toBeInTheDocument();
-    expect(screen.queryByText("hello prior")).not.toBeInTheDocument();
+    // Robust: re-query on every poll. The empty-state node can be detached by
+    // re-renders (socket connect, loading flip) and the mock may transiently
+    // resolve to {} under parallel load — waitFor + queryByText tolerates both.
+    await waitFor(
+      () => {
+        expect(screen.queryByText(/Say hello to Sarathy/)).toBeInTheDocument();
+        expect(screen.queryByText("hello prior")).not.toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
   });
 });

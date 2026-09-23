@@ -12,6 +12,7 @@ vi.mock("@/lib/api", () => ({
     uploadMedia: vi.fn().mockResolvedValue({ ok: true, path: "/tmp/a.png" }),
     status: vi.fn().mockResolvedValue({ version: "0.5.0", gateway: { running: true } }),
     sessions: vi.fn().mockResolvedValue({ sessions: [] }),
+    sessionNew: vi.fn().mockResolvedValue({ ok: true }),
     workspaceTree: vi.fn().mockResolvedValue({ root: "/ws", tree: [] }),
     getConfig: vi.fn().mockResolvedValue({}),
     putConfig: vi.fn().mockResolvedValue({ ok: true, restartRequired: false }),

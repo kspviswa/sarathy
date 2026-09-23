@@ -544,16 +544,14 @@ export function ChatView({
           <div className="flex items-end gap-2">
             <Tooltip>
               <TooltipTrigger asChild>
-                <label htmlFor="attach-file-input">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-9 shrink-0 text-muted-foreground hover:text-foreground"
-                    title="Attach file"
-                    aria-label="Attach file"
-                  >
-                    <Paperclip className="size-4" />
-                  </Button>
+                <label
+                  htmlFor="attach-file-input"
+                  className="inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                  title="Attach file"
+                  aria-label="Attach file"
+                  role="button"
+                >
+                  <Paperclip className="size-4" />
                 </label>
               </TooltipTrigger>
               <TooltipContent side="top">Attach file</TooltipContent>

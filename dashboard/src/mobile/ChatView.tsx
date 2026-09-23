@@ -321,15 +321,13 @@ export function ChatView({
           </div>
         )}
         <div className="flex items-end gap-2">
-          <label htmlFor="attach-file-input">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-11 shrink-0"
-              aria-label="Attach file"
-            >
-              <Paperclip className="size-5" />
-            </Button>
+          <label
+            htmlFor="attach-file-input"
+            className="inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-accent"
+            aria-label="Attach file"
+            role="button"
+          >
+            <Paperclip className="size-5" />
           </label>
           <Button
             variant={isRecording ? "destructive" : "ghost"}

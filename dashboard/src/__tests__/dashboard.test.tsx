@@ -356,18 +356,25 @@ describe("Composer — native label-for attach trigger", () => {
       expect(label).toBeInTheDocument();
     });
 
-    it("desktop: paperclip button is inside a label that points to the file input", () => {
+    it("desktop: label itself is the tappable attach trigger for the file input", () => {
       render(<ChatView {...defaultProps} />);
       const label = document.querySelector('label[for="attach-file-input"]');
       expect(label).toBeInTheDocument();
-      expect(label?.querySelector('[aria-label="Attach file"]')).toBeInTheDocument();
+      // The label must BE the tap target (no interactive child that swallows
+      // the tap) — a Button inside a label breaks native label->input
+      // activation. aria-label + role=button on the label itself.
+      expect(label).toHaveAttribute("aria-label", "Attach file");
+      expect(label).toHaveAttribute("role", "button");
+      expect(label?.querySelector("button")).toBeNull();
     });
 
-    it("mobile: paperclip button is inside a label that points to the file input", () => {
+    it("mobile: label itself is the tappable attach trigger for the file input", () => {
       render(<MobileChatView {...defaultProps} />);
       const label = document.querySelector('label[for="attach-file-input"]');
       expect(label).toBeInTheDocument();
-      expect(label?.querySelector('[aria-label="Attach file"]')).toBeInTheDocument();
+      expect(label).toHaveAttribute("aria-label", "Attach file");
+      expect(label).toHaveAttribute("role", "button");
+      expect(label?.querySelector("button")).toBeNull();
     });
   });
 

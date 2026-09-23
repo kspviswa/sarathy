@@ -295,25 +295,25 @@ export function JobsView() {
                 variant="outline"
                 className={cn(
                   "w-full justify-start text-left gap-3 p-3 transition-colors hover:bg-accent",
-                  "hover:shadow-sm"
+                  "hover:shadow-sm whitespace-normal h-auto",
                 )}
                 onClick={() => openJob(job.id)}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
                     <span className="font-mono text-sm font-medium">#{job.id}</span>
                     {statusBadge(job.status)}
-                    <span className="text-xs text-muted-foreground">{job.kind}</span>
+                    <span className="text-xs text-muted-foreground min-w-0 truncate">{job.kind}</span>
                   </div>
                   <h3 className="font-medium truncate">{job.title}</h3>
-                  <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                    {job.repo && <span className="font-mono truncate">{job.repo}</span>}
-                    {job.model && <span className="font-mono truncate">{job.model}</span>}
-                    <span>{formatRelativeTime(job.updated_at)}</span>
+                  <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-muted-foreground">
+                    {job.repo && <span className="font-mono min-w-0 truncate">{job.repo}</span>}
+                    {job.model && <span className="font-mono min-w-0 truncate">{job.model}</span>}
+                    <span className="whitespace-nowrap">{formatRelativeTime(job.updated_at)}</span>
                   </div>
                 </div>
                 {job.last_event && (
-                  <div className="text-right text-xs text-muted-foreground max-w-[200px]">
+                  <div className="text-right text-xs text-muted-foreground max-w-[200px] min-w-0">
                     <p className="truncate">{job.last_event.message}</p>
                     <span className="text-[10px]">{formatRelativeTime(job.last_event.ts)}</span>
                   </div>

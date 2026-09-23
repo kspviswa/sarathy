@@ -93,6 +93,11 @@ class Session:
 
         if hasattr(self, "_manager") and self._manager is not None:
             self._manager._cache[self.key] = new_session
+            # Persist the fresh (empty) session to disk so reads that go to
+            # disk (dashboard /api/session, gateway restart) see the new
+            # session — otherwise the archived conversation is resurrected
+            # on page reload / restart.
+            self._manager.save(new_session)
 
     def archive_session(self, learned: bool = False) -> None:
         """Archive session to timestamped JSONL file in archived_sessions directory.

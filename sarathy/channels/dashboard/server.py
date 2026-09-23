@@ -337,8 +337,14 @@ class DashboardChannel(BaseChannel):
         return None
 
     def _html_response(self, name: str, request: web.Request) -> web.Response:
-        """FileResponse for an HTML shell, persisting a ?view= override cookie."""
+        """FileResponse for an HTML shell, persisting a ?view= override cookie.
+
+        HTML shells are served no-cache so PWA clients (service worker) and
+        browsers revalidate on every open — otherwise stale index/mobile.html
+        keeps serving the old JS bundle and fixes appear "not deployed".
+        """
         resp = web.FileResponse(self._static_dir / name)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         q = request.query.get("view")
         if q in ("mobile", "desktop"):
             resp.set_cookie(
@@ -367,7 +373,14 @@ class DashboardChannel(BaseChannel):
         name = request.path.lstrip("/")
         path = self._static_dir / name
         if path.is_file():
-            return web.FileResponse(path)
+            resp = web.FileResponse(path)
+            # The service worker + manifest must revalidate on every visit so
+            # new precache revisions (new bundle hashes) propagate to installed
+            # PWAs immediately instead of after the browser's SW freshness
+            # window (which left users stuck on old bundles for days).
+            if name in {"sw.js", "registerSW.js", "manifest.webmanifest"} or name.startswith("workbox-"):
+                resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return resp
         return web.json_response({"error": "not found"}, status=404)
 
     # ------------------------------------------------------------------ auth api

@@ -2,7 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { ChatMessage } from "@/views/ChatView";
 
-const DASHBOARD_SESSION_KEY = "dashboard:console";
+export const DASHBOARD_SESSION_KEY = "dashboard:console";
+
+let _resetFlag = false;
+
+export function resetLastSession(): void {
+  _resetFlag = true;
+}
+
+export function clearResetFlag(): void {
+  _resetFlag = false;
+}
 
 /**
  * Load the previous dashboard conversation on open so the Chat tab does not
@@ -19,6 +29,11 @@ export function useLastSession(
 
   useEffect(() => {
     if (!authed) return;
+    if (_resetFlag) {
+      clearResetFlag();
+      setLoadingHistory(false);
+      return;
+    }
     let cancelled = false;
     setLoadingHistory(true);
     (async () => {

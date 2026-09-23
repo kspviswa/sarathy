@@ -9,6 +9,7 @@ vi.mock("@/lib/api", () => ({
     stopChat: vi.fn().mockResolvedValue({ ok: true }),
     logout: vi.fn().mockResolvedValue({ ok: true }),
     uploadMedia: vi.fn(),
+    sessionNew: vi.fn().mockResolvedValue({ ok: true }),
   },
   getToken: vi.fn(() => "test-token"),
   setToken: vi.fn(),
@@ -26,11 +27,14 @@ vi.mock("@/lib/theme", () => ({
 }));
 
 vi.mock("@/lib/ws", () => ({
-  DashboardSocket: vi.fn().mockImplementation(() => ({
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-    onMessage: vi.fn(() => vi.fn()),
-  })),
+  DashboardSocket: vi.fn().mockImplementation(function () {
+    return {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      onMessage: vi.fn(() => vi.fn()),
+      onNotification: vi.fn(() => vi.fn()),
+    };
+  }),
 }));
 
 vi.mock("@/components/logo", () => ({
@@ -45,10 +49,20 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: () => null,
 }));
 
+vi.mock("@/lib/useLastSession", () => ({
+  useLastSession: vi.fn().mockReturnValue(false),
+  resetLastSession: vi.fn(),
+  DASHBOARD_SESSION_KEY: "dashboard:console",
+}));
+
 import { ChatView, type ChatMessage } from "@/views/ChatView";
 import { ChatView as MobileChatView } from "@/mobile/ChatView";
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { CodeBlock } from "@/components/CodeBlock";
+import DesktopApp from "@/App";
+import { api } from "@/lib/api";
+import { toast } from "sonner";
+import { resetLastSession } from "@/lib/useLastSession";
 
 const defaultProps = {
   messages: [] as ChatMessage[],
@@ -62,6 +76,7 @@ const defaultProps = {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.clearAllMocks();
 });
 
 afterEach(() => {
@@ -288,36 +303,71 @@ describe("Composer — always-show Send while streaming", () => {
    });
  });
 
+describe("Archive on New Chat — desktop App", () => {
+  it("calls api.sessionNew and clears messages on success", async () => {
+    render(<DesktopApp />);
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const btn = screen.getByRole("button", { name: /new chat/i });
+    await act(async () => { fireEvent.click(btn); await vi.advanceTimersByTime(100); });
+    expect(api.sessionNew).toHaveBeenCalledWith("dashboard:console");
+  });
+
+  it("does not clear messages and shows error toast on archive failure", async () => {
+    vi.mocked(api.sessionNew).mockRejectedValue(new Error("Server error"));
+    render(<DesktopApp />);
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const btn = screen.getByRole("button", { name: /new chat/i });
+    await act(async () => { fireEvent.click(btn); await vi.advanceTimersByTime(100); });
+    expect(api.sessionNew).toHaveBeenCalledWith("dashboard:console");
+    expect(resetLastSession).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalled();
+  });
+
+  it("guards against double-tap by not calling sessionNew twice", async () => {
+    vi.mocked(api.sessionNew).mockReturnValue(new Promise(() => {}));
+    render(<DesktopApp />);
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const btn = screen.getByRole("button", { name: /new chat/i });
+    fireEvent.click(btn);
+    await act(async () => { vi.advanceTimersByTime(0); });
+    fireEvent.click(btn);
+    await act(async () => { vi.advanceTimersByTime(0); });
+    expect(api.sessionNew).toHaveBeenCalledTimes(1);
+    vi.mocked(api.sessionNew).mockResolvedValue({ ok: true });
+  });
+});
+
 describe("Composer — native label-for attach trigger", () => {
-   it("desktop: file input has id and is associated with a label via htmlFor", () => {
-     render(<ChatView {...defaultProps} />);
-     const fileInput = document.getElementById("attach-file-input") as HTMLInputElement;
-     expect(fileInput).toBeInTheDocument();
-     expect(fileInput).toHaveAttribute("id", "attach-file-input");
-     const label = document.querySelector('label[for="attach-file-input"]');
-     expect(label).toBeInTheDocument();
-   });
+    it("desktop: file input has id and is associated with a label via htmlFor", () => {
+      render(<ChatView {...defaultProps} />);
+      const fileInput = document.getElementById("attach-file-input") as HTMLInputElement;
+      expect(fileInput).toBeInTheDocument();
+      expect(fileInput).toHaveAttribute("id", "attach-file-input");
+      const label = document.querySelector('label[for="attach-file-input"]');
+      expect(label).toBeInTheDocument();
+    });
 
-   it("mobile: file input has id and is associated with a label via htmlFor", () => {
-     render(<MobileChatView {...defaultProps} />);
-     const fileInput = document.getElementById("attach-file-input") as HTMLInputElement;
-     expect(fileInput).toBeInTheDocument();
-     expect(fileInput).toHaveAttribute("id", "attach-file-input");
-     const label = document.querySelector('label[for="attach-file-input"]');
-     expect(label).toBeInTheDocument();
-   });
+    it("mobile: file input has id and is associated with a label via htmlFor", () => {
+      render(<MobileChatView {...defaultProps} />);
+      const fileInput = document.getElementById("attach-file-input") as HTMLInputElement;
+      expect(fileInput).toBeInTheDocument();
+      expect(fileInput).toHaveAttribute("id", "attach-file-input");
+      const label = document.querySelector('label[for="attach-file-input"]');
+      expect(label).toBeInTheDocument();
+    });
 
-   it("desktop: paperclip button is inside a label that points to the file input", () => {
-     render(<ChatView {...defaultProps} />);
-     const label = document.querySelector('label[for="attach-file-input"]');
-     expect(label).toBeInTheDocument();
-     expect(label?.querySelector('[aria-label="Attach file"]')).toBeInTheDocument();
-   });
+    it("desktop: paperclip button is inside a label that points to the file input", () => {
+      render(<ChatView {...defaultProps} />);
+      const label = document.querySelector('label[for="attach-file-input"]');
+      expect(label).toBeInTheDocument();
+      expect(label?.querySelector('[aria-label="Attach file"]')).toBeInTheDocument();
+    });
 
-   it("mobile: paperclip button is inside a label that points to the file input", () => {
-     render(<MobileChatView {...defaultProps} />);
-     const label = document.querySelector('label[for="attach-file-input"]');
-     expect(label).toBeInTheDocument();
-     expect(label?.querySelector('[aria-label="Attach file"]')).toBeInTheDocument();
-   });
- });
+    it("mobile: paperclip button is inside a label that points to the file input", () => {
+      render(<MobileChatView {...defaultProps} />);
+      const label = document.querySelector('label[for="attach-file-input"]');
+      expect(label).toBeInTheDocument();
+      expect(label?.querySelector('[aria-label="Attach file"]')).toBeInTheDocument();
+    });
+  });
+

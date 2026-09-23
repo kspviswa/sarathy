@@ -143,6 +143,12 @@ export const api = {
 
   sessions: () => request<{ sessions: SessionInfo[] }>("/api/sessions"),
 
+  sessionNew: (key: string) =>
+    request<{ ok: boolean }>("/api/session/new", {
+      method: "POST",
+      body: JSON.stringify({ key }),
+    }),
+
   session: (key: string) =>
     request<SessionDetail>(`/api/session?key=${encodeURIComponent(key)}`),
 

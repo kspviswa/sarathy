@@ -419,6 +419,7 @@ export function ChatView({
           programmatic .click() on a display:none file input, so the attach
           button silently does nothing there. sr-only keeps it clickable. */}
       <input
+        id="attach-file-input"
         ref={fileInputRef}
         type="file"
         multiple
@@ -543,16 +544,17 @@ export function ChatView({
           <div className="flex items-end gap-2">
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-9 shrink-0 text-muted-foreground hover:text-foreground"
-                  onClick={() => fileInputRef.current?.click()}
-                  title="Attach file"
-                  aria-label="Attach file"
-                >
-                  <Paperclip className="size-4" />
-                </Button>
+                <label htmlFor="attach-file-input">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-9 shrink-0 text-muted-foreground hover:text-foreground"
+                    title="Attach file"
+                    aria-label="Attach file"
+                  >
+                    <Paperclip className="size-4" />
+                  </Button>
+                </label>
               </TooltipTrigger>
               <TooltipContent side="top">Attach file</TooltipContent>
             </Tooltip>
@@ -589,24 +591,19 @@ export function ChatView({
               rows={1}
             />
 
-            {streaming ? (
-              <Button variant="secondary" size="icon" onClick={() => void onStop()} title="Stop">
-                <Square />
-              </Button>
-            ) : (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="icon"
-                    onClick={() => void send()}
-                    disabled={!input.trim() && !mediaPaths.length}
-                  >
-                    <Send className="size-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="top">Send</TooltipContent>
-              </Tooltip>
-            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  onClick={() => void send()}
+                  disabled={!input.trim() && !mediaPaths.length}
+                  aria-label="Send"
+                >
+                  <Send className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Send</TooltipContent>
+            </Tooltip>
           </div>
         </div>
       </div>

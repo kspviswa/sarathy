@@ -391,15 +391,24 @@ class SessionManager:
                     logger.warning("Failed to delete fallback session file {}: {}", fb_path, e)
 
     def _create_new_session(self, key: str) -> Session:
-        """Create a new session file with same key."""
+        """Create a new session file with same key.
+
+        The LIVE conversation lives in the in-memory cache (messages are only
+        flushed to disk opportunistically), so archive the cached session when
+        present — archiving the disk copy alone would capture a stale snapshot
+        and drop everything since the last save. Then persist the fresh empty
+        session so disk reads (dashboard /api/session, gateway restart) do not
+        resurrect the archived conversation.
+        """
         new_session = Session(key=key, max_size=self._max_size_for(key))
         new_session._manager = self
 
-        old_session = self._load(key)
+        old_session = self._cache.get(key) or self._load(key)
         if old_session and old_session.messages:
             old_session.archive_session()
 
         self._cache[key] = new_session
+        self.save(new_session)
 
         logger.info("Created new session for key: {}", key)
         return new_session

@@ -7,8 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --pool=forks",
+    "test:watch": "vitest --pool=forks",
     "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {

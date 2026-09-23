@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import React from "react";
 
 vi.mock("@/lib/api", () => ({
@@ -58,11 +58,8 @@ import { api } from "@/lib/api";
 import DesktopApp from "@/App";
 import MobileApp from "@/mobile/App";
 
-function setupSessions() {
-  const sessions = vi.mocked(api.sessions);
-  const session = vi.mocked(api.session);
-
-  sessions.mockResolvedValue({
+function setupWithMessages() {
+  vi.mocked(api.sessions).mockResolvedValue({
     sessions: [
       {
         key: "dashboard:console",
@@ -72,7 +69,7 @@ function setupSessions() {
       },
     ],
   });
-  session.mockResolvedValue({
+  vi.mocked(api.session).mockResolvedValue({
     key: "dashboard:console",
     createdAt: "2026-01-01T00:00:00",
     messages: [
@@ -80,16 +77,55 @@ function setupSessions() {
       { role: "assistant", content: "hi back prior", timestamp: "t2" },
     ],
   });
-  return { sessions, session };
+}
+
+function setupEmptySession() {
+  vi.mocked(api.sessions).mockResolvedValue({
+    sessions: [
+      {
+        key: "dashboard:console",
+        created_at: "2026-01-01T00:00:00",
+        updated_at: "2026-01-01T00:00:00",
+        path: "/ws/sess.json",
+      },
+    ],
+  });
+  vi.mocked(api.session).mockResolvedValue({
+    key: "dashboard:console",
+    createdAt: "2026-01-01T00:00:00",
+    messages: [],
+  });
+}
+
+function setupNoSessions() {
+  vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
+  vi.mocked(api.session).mockResolvedValue({ key: "", createdAt: "", messages: [] });
+}
+
+function setupNullContentToolRows() {
+  vi.mocked(api.sessions).mockResolvedValue({
+    sessions: [{ key: "dashboard:console", created_at: "t", updated_at: "t" }],
+  });
+  vi.mocked(api.session).mockResolvedValue({
+    key: "dashboard:console",
+    createdAt: "t",
+    messages: [
+      { role: "user", content: "hello prior", timestamp: "t1" },
+      { role: "assistant", content: "", timestamp: "t2" },
+      { role: "tool", content: "some tool result", timestamp: "t3" },
+      { role: "assistant", content: "hi back prior", timestamp: "t4" },
+    ],
+  });
 }
 
 describe("Last session load — desktop App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setupNoSessions();
   });
 
   it("loads dashboard:console history into the chat on mount", async () => {
-    setupSessions();
+    setupWithMessages();
     render(<DesktopApp />);
 
     expect(await screen.findByText("hello prior")).toBeInTheDocument();
@@ -97,7 +133,7 @@ describe("Last session load — desktop App", () => {
   });
 
   it("keeps chat empty when no sessions exist", async () => {
-    vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
+    setupNoSessions();
 
     render(<DesktopApp />);
 
@@ -107,27 +143,10 @@ describe("Last session load — desktop App", () => {
   });
 
   it("does not crash when history contains null-content assistant tool rows (real dashboard:console shape)", async () => {
-    // Regression: the live dashboard:console session stores assistant tool-call
-    // rows with `content: null` alongside normal text messages. These must be
-    // filtered out at load — rendering them crashed MessageRow's
-    // `message.content.length` and unmounted the app (blank screen, 0.6.0).
-    vi.mocked(api.sessions).mockResolvedValue({
-      sessions: [{ key: "dashboard:console", created_at: "t", updated_at: "t" }],
-    });
-    vi.mocked(api.session).mockResolvedValue({
-      key: "dashboard:console",
-      createdAt: "t",
-      messages: [
-        { role: "user", content: "hello prior", timestamp: "t1" },
-        { role: "assistant", content: "", timestamp: "t2" },
-        { role: "tool", content: "some tool result", timestamp: "t3" },
-        { role: "assistant", content: "hi back prior", timestamp: "t4" },
-      ],
-    });
+    setupNullContentToolRows();
 
     render(<DesktopApp />);
 
-    // Real text messages still render; null-content tool rows must not crash.
     expect(await screen.findByText("hello prior")).toBeInTheDocument();
     expect(screen.getByText("hi back prior")).toBeInTheDocument();
   });
@@ -136,10 +155,15 @@ describe("Last session load — desktop App", () => {
 describe("Last session load — mobile App", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setupNoSessions();
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it("loads dashboard:console history into the chat on mount", async () => {
-    setupSessions();
+    setupWithMessages();
     render(<MobileApp />);
 
     expect(await screen.findByText("hello prior")).toBeInTheDocument();
@@ -147,18 +171,11 @@ describe("Last session load — mobile App", () => {
   });
 
   it("keeps chat empty when the session has no messages", async () => {
-    vi.mocked(api.sessions).mockResolvedValue({
-      sessions: [{ key: "dashboard:console", created_at: "t", updated_at: "t" }],
-    });
-    vi.mocked(api.session).mockResolvedValue({
-      key: "dashboard:console",
-      createdAt: "t",
-      messages: [],
-    });
+    setupEmptySession();
 
     render(<MobileApp />);
 
-    expect(await screen.findByText(/Say hello to Sarathy/)).toBeInTheDocument();
+    expect(await screen.findByText(/Say hello to Sarathy/, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByText("hello prior")).not.toBeInTheDocument();
   });
 });

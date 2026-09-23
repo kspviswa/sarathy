@@ -308,6 +308,8 @@ class DashboardChannel(BaseChannel):
         app.router.add_put("/api/workspace/file", self._api_workspace_put)
         app.router.add_get("/api/status", self._api_status)
         app.router.add_get("/api/usage/summary", self._api_usage_summary)
+        app.router.add_get("/api/jobs", self._api_jobs_list)
+        app.router.add_get("/api/jobs/{id}", self._api_jobs_detail)
         app.router.add_get("/ws", self._ws_handler)
 
     def _device_kind(self, request: web.Request) -> str:
@@ -952,6 +954,179 @@ class DashboardChannel(BaseChannel):
                 },
                 status=200,
             )
+
+    # ------------------------------------------------------------------ jobs api
+
+    def _jobs_db_path(self) -> Path:
+        """Return the path to the jobs database."""
+        return self._workspace_root() / "jobs" / "jobs.db"
+
+    def _open_jobs_db(self, path: Path):
+        """Open the jobs database in read-only mode.
+        
+        Returns None if the database doesn't exist.
+        """
+        if not path.exists():
+            return None
+        import sqlite3
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    async def _api_jobs_list(self, request: web.Request) -> web.Response:
+        """GET /api/jobs - list all jobs with last event and event count."""
+        db_path = self._jobs_db_path()
+        conn = self._open_jobs_db(db_path)
+        if conn is None:
+            return web.json_response({"jobs": []})
+
+        try:
+            cursor = conn.execute("""
+                SELECT 
+                    j.id, j.kind, j.title, j.status, j.repo, j.model,
+                    j.spec_path, j.result_path, j.meta,
+                    j.created_at, j.updated_at, j.closed_at,
+                    je.ts as last_event_ts, je.event_type as last_event_type,
+                    je.level as last_event_level, je.message as last_event_message,
+                    (SELECT COUNT(*) FROM job_events WHERE job_id = j.id) as event_count
+                FROM jobs j
+                LEFT JOIN job_events je ON je.id = (
+                    SELECT id FROM job_events WHERE job_id = j.id ORDER BY ts DESC LIMIT 1
+                )
+                ORDER BY j.id DESC
+            """)
+            rows = cursor.fetchall()
+            jobs = []
+            for row in rows:
+                job = {
+                    "id": row["id"],
+                    "kind": row["kind"],
+                    "title": row["title"],
+                    "status": row["status"],
+                    "repo": row["repo"],
+                    "model": row["model"],
+                    "spec_path": row["spec_path"],
+                    "result_path": row["result_path"],
+                    "meta": row["meta"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                    "closed_at": row["closed_at"],
+                    "event_count": row["event_count"],
+                    "last_event": None,
+                }
+                if row["last_event_ts"] is not None:
+                    job["last_event"] = {
+                        "ts": row["last_event_ts"],
+                        "event_type": row["last_event_type"],
+                        "level": row["last_event_level"],
+                        "message": row["last_event_message"],
+                    }
+                jobs.append(job)
+            return web.json_response({"jobs": jobs})
+        except Exception as e:
+            logger.error("Failed to list jobs: {}", e)
+            return web.json_response({"error": "failed to list jobs"}, status=500)
+        finally:
+            conn.close()
+
+    async def _api_jobs_detail(self, request: web.Request) -> web.Response:
+        """GET /api/jobs/{id} - get job detail with events, spec_text, result_text."""
+        job_id = request.match_info["id"]
+        try:
+            job_id_int = int(job_id)
+        except ValueError:
+            return web.json_response({"error": "job not found"}, status=404)
+
+        db_path = self._jobs_db_path()
+        conn = self._open_jobs_db(db_path)
+        if conn is None:
+            return web.json_response({"error": "job not found"}, status=404)
+
+        try:
+            # Get job
+            cursor = conn.execute(
+                """
+                SELECT id, kind, title, status, repo, model, spec_path, result_path,
+                       meta, created_at, updated_at, closed_at
+                FROM jobs WHERE id = ?
+                """,
+                (job_id_int,),
+            )
+            job_row = cursor.fetchone()
+            if job_row is None:
+                return web.json_response({"error": "job not found"}, status=404)
+
+            job = {
+                "id": job_row["id"],
+                "kind": job_row["kind"],
+                "title": job_row["title"],
+                "status": job_row["status"],
+                "repo": job_row["repo"],
+                "model": job_row["model"],
+                "spec_path": job_row["spec_path"],
+                "result_path": job_row["result_path"],
+                "meta": job_row["meta"],
+                "created_at": job_row["created_at"],
+                "updated_at": job_row["updated_at"],
+                "closed_at": job_row["closed_at"],
+            }
+
+            # Get events (newest first)
+            cursor = conn.execute(
+                """
+                SELECT id, ts, event_type, level, message, payload
+                FROM job_events WHERE job_id = ?
+                ORDER BY ts DESC
+                """,
+                (job_id_int,),
+            )
+            events = []
+            for row in cursor.fetchall():
+                payload = row["payload"]
+                try:
+                    payload_json = json.loads(payload) if payload else None
+                except json.JSONDecodeError:
+                    payload_json = None
+                events.append({
+                    "id": row["id"],
+                    "ts": row["ts"],
+                    "event_type": row["event_type"],
+                    "level": row["level"],
+                    "message": row["message"],
+                    "payload": payload_json,
+                })
+
+            # Read spec_text from spec_path
+            spec_text = None
+            if job_row["spec_path"]:
+                try:
+                    spec_path = self._safe_workspace_path(job_row["spec_path"])
+                    if spec_path.exists() and spec_path.stat().st_size > 0:
+                        spec_text = spec_path.read_text(encoding="utf-8", errors="replace")
+                except (ValueError, OSError):
+                    pass
+
+            # Read result_text from result_path
+            result_text = None
+            if job_row["result_path"]:
+                try:
+                    result_path = self._safe_workspace_path(job_row["result_path"])
+                    if result_path.exists() and result_path.stat().st_size > 0:
+                        result_text = result_path.read_text(encoding="utf-8", errors="replace")
+                except (ValueError, OSError):
+                    pass
+
+            return web.json_response({
+                "job": job,
+                "events": events,
+                "spec_text": spec_text,
+                "result_text": result_text,
+            })
+        except Exception as e:
+            logger.error("Failed to get job detail: {}", e)
+            return web.json_response({"error": "failed to get job detail"}, status=500)
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------ websocket
 

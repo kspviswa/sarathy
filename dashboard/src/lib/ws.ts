@@ -76,6 +76,8 @@ export class DashboardSocket {
         const data = JSON.parse(event.data as string);
         if (data?.type === "notification") {
           this.notifHandlers.forEach((h) => h(data as NotificationFrame));
+          // Emit custom event for views that don't have direct socket access
+          window.dispatchEvent(new CustomEvent("sarathy:notification", { detail: data }));
         } else if (data?.type === "message") {
           this.handlers.forEach((h) => h(data as OutboundMessage));
         }

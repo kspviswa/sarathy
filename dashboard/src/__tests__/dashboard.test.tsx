@@ -46,6 +46,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { ChatView, type ChatMessage } from "@/views/ChatView";
+import { ChatView as MobileChatView } from "@/mobile/ChatView";
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { CodeBlock } from "@/components/CodeBlock";
 
@@ -243,10 +244,80 @@ describe("Composer newline behaviour (Enter = newline)", () => {
     expect(onSend).toHaveBeenCalledWith("hello", undefined, null, undefined);
   });
 
-  it("Cmd+Enter sends the message", () => {
-    const { textarea, onSend } = renderComposer();
-    fireEvent.change(textarea, { target: { value: "hi" } });
-    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
-    expect(onSend).toHaveBeenCalledTimes(1);
-  });
-});
+it("Cmd+Enter sends the message", () => {
+     const { textarea, onSend } = renderComposer();
+     fireEvent.change(textarea, { target: { value: "hi" } });
+     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+     expect(onSend).toHaveBeenCalledTimes(1);
+   });
+ });
+
+describe("Composer — always-show Send while streaming", () => {
+   it("desktop: Send button is present and enabled while streaming is true", () => {
+     const onSend = vi.fn();
+     const utils = render(<ChatView {...defaultProps} streaming={true} onSend={onSend} />);
+     const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+     fireEvent.change(textarea, { target: { value: "hello" } });
+     const sendBtn = document.querySelector('[aria-label="Send"]') as HTMLElement;
+     expect(sendBtn).toBeInTheDocument();
+     expect(sendBtn).toBeEnabled();
+   });
+
+   it("desktop: Stop button is not in the composer send row while streaming", () => {
+     const onStop = vi.fn();
+     render(<ChatView {...defaultProps} streaming={true} onStop={onStop} />);
+     const sendBtn = document.querySelector('[aria-label="Send"]') as HTMLElement;
+     expect(sendBtn).toBeInTheDocument();
+   });
+
+   it("mobile: Send button is present and enabled while streaming is true", () => {
+     const onSend = vi.fn();
+     const utils = render(<MobileChatView {...defaultProps} streaming={true} onSend={onSend} />);
+     const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+     fireEvent.change(textarea, { target: { value: "hello" } });
+     const sendBtn = document.querySelector('[aria-label="Send"]') as HTMLElement;
+     expect(sendBtn).toBeInTheDocument();
+     expect(sendBtn).toBeEnabled();
+   });
+
+   it("mobile: Stop button is not in the composer send row while streaming", () => {
+     const onStop = vi.fn();
+     render(<MobileChatView {...defaultProps} streaming={true} onStop={onStop} />);
+     const sendBtn = document.querySelector('[aria-label="Send"]') as HTMLElement;
+     expect(sendBtn).toBeInTheDocument();
+   });
+ });
+
+describe("Composer — native label-for attach trigger", () => {
+   it("desktop: file input has id and is associated with a label via htmlFor", () => {
+     render(<ChatView {...defaultProps} />);
+     const fileInput = document.getElementById("attach-file-input") as HTMLInputElement;
+     expect(fileInput).toBeInTheDocument();
+     expect(fileInput).toHaveAttribute("id", "attach-file-input");
+     const label = document.querySelector('label[for="attach-file-input"]');
+     expect(label).toBeInTheDocument();
+   });
+
+   it("mobile: file input has id and is associated with a label via htmlFor", () => {
+     render(<MobileChatView {...defaultProps} />);
+     const fileInput = document.getElementById("attach-file-input") as HTMLInputElement;
+     expect(fileInput).toBeInTheDocument();
+     expect(fileInput).toHaveAttribute("id", "attach-file-input");
+     const label = document.querySelector('label[for="attach-file-input"]');
+     expect(label).toBeInTheDocument();
+   });
+
+   it("desktop: paperclip button is inside a label that points to the file input", () => {
+     render(<ChatView {...defaultProps} />);
+     const label = document.querySelector('label[for="attach-file-input"]');
+     expect(label).toBeInTheDocument();
+     expect(label?.querySelector('[aria-label="Attach file"]')).toBeInTheDocument();
+   });
+
+   it("mobile: paperclip button is inside a label that points to the file input", () => {
+     render(<MobileChatView {...defaultProps} />);
+     const label = document.querySelector('label[for="attach-file-input"]');
+     expect(label).toBeInTheDocument();
+     expect(label?.querySelector('[aria-label="Attach file"]')).toBeInTheDocument();
+   });
+ });

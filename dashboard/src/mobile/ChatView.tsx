@@ -286,6 +286,7 @@ export function ChatView({
           programmatic .click() on a display:none file input, so the attach
           button silently does nothing there. sr-only keeps it clickable. */}
         <input
+          id="attach-file-input"
           ref={fileInputRef}
           type="file"
           multiple
@@ -320,15 +321,16 @@ export function ChatView({
           </div>
         )}
         <div className="flex items-end gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 shrink-0"
-            onClick={() => fileInputRef.current?.click()}
-            aria-label="Attach file"
-          >
-            <Paperclip className="size-5" />
-          </Button>
+          <label htmlFor="attach-file-input">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-11 shrink-0"
+              aria-label="Attach file"
+            >
+              <Paperclip className="size-5" />
+            </Button>
+          </label>
           <Button
             variant={isRecording ? "destructive" : "ghost"}
             size="icon"
@@ -353,12 +355,7 @@ export function ChatView({
             rows={1}
             aria-label="Message input"
           />
-          {streaming ? (
-            <Button variant="secondary" size="icon" className="size-11 shrink-0" onClick={() => void onStop()} aria-label="Stop">
-              <Square />
-            </Button>
-          ) : (
-            <Button
+<Button
               size="icon"
               className="size-11 shrink-0"
               onClick={() => void send()}
@@ -367,7 +364,6 @@ export function ChatView({
             >
               <Send className="size-5" />
             </Button>
-          )}
         </div>
         <p className="mt-1 px-1 text-center text-[11px] text-muted-foreground">
           Enter = newline · Ctrl+Enter = send

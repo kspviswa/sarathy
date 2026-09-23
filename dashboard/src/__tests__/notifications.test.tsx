@@ -3,6 +3,31 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import type { NotificationFrame } from "@/lib/ws";
 import { useNotifications } from "@/lib/useNotifications";
 
+vi.mock("@/lib/api", () => ({
+  api: {
+    me: vi.fn().mockResolvedValue({ ok: true }),
+    sessions: vi.fn().mockResolvedValue({ sessions: [] }),
+    session: vi.fn().mockResolvedValue({ key: "", createdAt: "", messages: [] }),
+    sendChat: vi.fn().mockResolvedValue({ ok: true }),
+    sendChatWithMedia: vi.fn().mockResolvedValue({ ok: true }),
+    stopChat: vi.fn().mockResolvedValue({ ok: true }),
+    logout: vi.fn().mockResolvedValue({ ok: true }),
+    uploadMedia: vi.fn(),
+    workspaceTree: vi.fn().mockResolvedValue({ root: "/ws", tree: [] }),
+    getConfig: vi.fn().mockResolvedValue({}),
+    putConfig: vi.fn().mockResolvedValue({ ok: true, restartRequired: false }),
+    providers: vi.fn().mockResolvedValue({ providers: [], active: "" }),
+    status: vi.fn().mockResolvedValue({ version: "0.6.0", gateway: { running: true } }),
+    usageSummary: vi.fn().mockResolvedValue({ available: false, window_days: 7, totals: { requests: 0, prompt_tokens: 0, cached_tokens: 0, completion_tokens: 0, total_tokens: 0, cache_hit_pct: 0 }, by_model: [], timeseries: [] }),
+    jobs: vi.fn().mockResolvedValue({ jobs: [] }),
+    job: vi.fn().mockResolvedValue({ job: null, events: [], spec_text: null, result_text: null }),
+  },
+  getToken: vi.fn(() => "test-token"),
+  setToken: vi.fn(),
+  clearToken: vi.fn(),
+  AuthError: class AuthError extends Error {},
+}));
+
 vi.mock("sonner", () => ({
   toast: vi.fn(),
   Toaster: () => null,

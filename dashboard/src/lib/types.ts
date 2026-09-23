@@ -131,3 +131,49 @@ export interface UsageSummary {
     cache_hit_pct: number;
   }>;
 }
+
+export interface JobMeta {
+  [key: string]: unknown;
+}
+
+export interface JobEvent {
+  id: number;
+  ts: string;
+  event_type: string;
+  level: string;
+  message: string;
+  payload: Record<string, unknown> | null;
+}
+
+export interface Job {
+  id: number;
+  kind: string;
+  title: string;
+  status: string;
+  repo: string | null;
+  model: string | null;
+  spec_path: string | null;
+  result_path: string | null;
+  meta: string | null;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  event_count: number;
+  last_event: {
+    ts: string;
+    event_type: string;
+    level: string;
+    message: string;
+  } | null;
+}
+
+export interface JobsListResponse {
+  jobs: Job[];
+}
+
+export interface JobDetailResponse {
+  job: Job;
+  events: JobEvent[];
+  spec_text: string | null;
+  result_text: string | null;
+}

@@ -1,5 +1,7 @@
 import type {
   ConfigResponse,
+  JobDetailResponse,
+  JobsListResponse,
   MeResponse,
   PairResponse,
   ProviderModelsResponse,
@@ -164,4 +166,8 @@ export const api = {
     if (model) params.set("model", model);
     return request<UsageSummary>(`/api/usage/summary?${params.toString()}`);
   },
+
+  jobs: () => request<JobsListResponse>("/api/jobs"),
+
+  job: (id: number) => request<JobDetailResponse>(`/api/jobs/${id}`),
 };

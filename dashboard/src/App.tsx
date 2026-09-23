@@ -1,4 +1,4 @@
-import { Bell, FileCode2, Gauge, MessageSquareText, Settings } from "lucide-react";
+import { Bell, Briefcase, FileCode2, Gauge, MessageSquareText, Settings } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -13,6 +13,7 @@ import { DashboardSocket } from "@/lib/ws";
 import { ChatView, type ChatMessage } from "@/views/ChatView";
 import { ConfigView } from "@/views/ConfigView";
 import { FilesView } from "@/views/FilesView";
+import { JobsView } from "@/views/JobsView";
 import { PairView } from "@/views/PairView";
 import { SessionsView } from "@/views/SessionsView";
 import { StatusView } from "@/views/StatusView";
@@ -20,12 +21,13 @@ import { cn } from "@/lib/utils";
 
 export type { ChatMessage } from "@/views/ChatView";
 
-type Tab = "chat" | "files" | "sessions" | "config" | "status";
+type Tab = "chat" | "files" | "sessions" | "jobs" | "config" | "status";
 
 const TABS: { id: Tab; label: string; icon: typeof MessageSquareText }[] = [
   { id: "chat", label: "Chat", icon: MessageSquareText },
   { id: "files", label: "Files", icon: FileCode2 },
   { id: "sessions", label: "Sessions", icon: Gauge },
+  { id: "jobs", label: "Jobs", icon: Briefcase },
   { id: "config", label: "Config", icon: Settings },
   { id: "status", label: "Status", icon: Gauge },
 ];
@@ -42,6 +44,38 @@ function AppInner() {
   const lastUserMessageRef = useRef<string>("");
   const tabRef = useRef<Tab>("chat");
   tabRef.current = tab;
+
+  // Handle token in URL (for deep links from Telegram, etc.)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get("token");
+    if (token) {
+      localStorage.setItem("sarathy_token", token);
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  // Handle deep links via hash: #/jobs/<id>
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash.startsWith("#/jobs/")) {
+        const idStr = hash.slice(7); // Remove "#/jobs/"
+        const id = parseInt(idStr, 10);
+        if (!isNaN(id)) {
+          setTab("jobs");
+          // The JobsView will handle opening the job detail
+          // We'll store the pending job ID in a ref or state
+          window.dispatchEvent(new CustomEvent("sarathy:open-job", { detail: { id } }));
+        }
+      }
+    };
+
+    handleHashChange(); // Check on mount
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   const loadingHistory = useLastSession(authed === true, setMessages);
 
@@ -315,6 +349,7 @@ function AppInner() {
         )}
         {tab === "files" && <FilesView initialFile={openFile} />}
         {tab === "sessions" && <SessionsView />}
+        {tab === "jobs" && <JobsView />}
         {tab === "config" && <ConfigView />}
         {tab === "status" && <StatusView onLoggedOut={logout} />}
       </main>

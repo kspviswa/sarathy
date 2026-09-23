@@ -1,6 +1,7 @@
 import {
   Activity,
   Bell,
+  Briefcase,
   FileCode2,
   Gauge,
   MessageSquareText,
@@ -21,16 +22,18 @@ import { PairView } from "@/views/PairView";
 import { cn } from "@/lib/utils";
 import { ChatView } from "./ChatView";
 import { FilesView } from "./FilesView";
+import { JobsView } from "./JobsView";
 import { SessionsView } from "./SessionsView";
 import { ConfigView } from "./ConfigView";
 import { StatusView } from "./StatusView";
 
-type Tab = "chat" | "files" | "sessions" | "config" | "status";
+type Tab = "chat" | "files" | "sessions" | "jobs" | "config" | "status";
 
 const TABS: { id: Tab; label: string; icon: typeof MessageSquareText }[] = [
   { id: "chat", label: "Chat", icon: MessageSquareText },
   { id: "files", label: "Files", icon: FileCode2 },
   { id: "sessions", label: "Sessions", icon: Gauge },
+  { id: "jobs", label: "Jobs", icon: Briefcase },
   { id: "config", label: "Config", icon: Settings },
   { id: "status", label: "Status", icon: Activity },
 ];
@@ -47,6 +50,35 @@ function MobileAppInner() {
   const lastUserMessageRef = useRef<string>("");
   const tabRef = useRef<Tab>("chat");
   tabRef.current = tab;
+
+  // Handle token in URL (for deep links from Telegram, etc.)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get("token");
+    if (token) {
+      localStorage.setItem("sarathy_token", token);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  // Handle deep links via hash: #/jobs/<id>
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash.startsWith("#/jobs/")) {
+        const idStr = hash.slice(7);
+        const id = parseInt(idStr, 10);
+        if (!isNaN(id)) {
+          setTab("jobs");
+          window.dispatchEvent(new CustomEvent("sarathy:open-job", { detail: { id } }));
+        }
+      }
+    };
+
+    handleHashChange();
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   const loadingHistory = useLastSession(authed === true, setMessages);
 
@@ -266,6 +298,7 @@ function MobileAppInner() {
         )}
         {tab === "files" && <FilesView initialFile={openFile} />}
         {tab === "sessions" && <SessionsView />}
+        {tab === "jobs" && <JobsView />}
         {tab === "config" && <ConfigView />}
         {tab === "status" && <StatusView onLoggedOut={logout} />}
       </main>

@@ -282,11 +282,16 @@ export function ChatView({
       </div>
 
       <div className="safe-bottom border-t bg-background/95 px-3 pb-2 pt-2 backdrop-blur">
+        {/* Visually hidden but RENDERED (not display:none): iOS Safari ignores
+          programmatic .click() on a display:none file input, so the attach
+          button silently does nothing there. sr-only keeps it clickable. */}
         <input
           ref={fileInputRef}
           type="file"
           multiple
-          className="hidden"
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
           onChange={(e) => {
             if (e.target.files?.length) addFiles(e.target.files);
             e.target.value = "";

@@ -415,11 +415,16 @@ export function ChatView({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
+      {/* Visually hidden but RENDERED (not display:none): iOS Safari ignores
+          programmatic .click() on a display:none file input, so the attach
+          button silently does nothing there. sr-only keeps it clickable. */}
       <input
         ref={fileInputRef}
         type="file"
         multiple
-        className="hidden"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
         onChange={(e) => {
           if (e.target.files?.length) addFiles(e.target.files);
           e.target.value = "";
@@ -543,6 +548,8 @@ export function ChatView({
                   size="icon"
                   className="size-9 shrink-0 text-muted-foreground hover:text-foreground"
                   onClick={() => fileInputRef.current?.click()}
+                  title="Attach file"
+                  aria-label="Attach file"
                 >
                   <Paperclip className="size-4" />
                 </Button>

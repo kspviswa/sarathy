@@ -224,6 +224,7 @@ function MobileAppInner() {
       setMessages([]);
       setStreaming(false);
       setOpenFile(null);
+      toast.success("Session archived · new chat started");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to archive session");
     } finally {

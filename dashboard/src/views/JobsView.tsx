@@ -1,5 +1,5 @@
-import { Briefcase, Clock, FileText, Loader2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Briefcase, FileText, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
@@ -21,6 +21,18 @@ const STATUS_COLORS: Record<string, string> = {
   superseded: "bg-gray-100 text-gray-800 border-gray-200",
   paused: "bg-gray-100 text-gray-800 border-gray-200",
 };
+
+const STATUS_ORDER = [
+  "running",
+  "needs_input",
+  "paused",
+  "planned",
+  "completed",
+  "verified",
+  "failed",
+  "cancelled",
+  "superseded",
+];
 
 const LEVEL_COLORS: Record<string, string> = {
   info: "text-muted-foreground",
@@ -55,16 +67,16 @@ function formatRelativeTime(ts: string): string {
 export function JobsView() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<string>("all");
   const [selectedJob, setSelectedJob] = useState<JobDetailResponse | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingJobIdRef = useRef<number | null>(null);
 
   const fetchJobs = async () => {
     try {
       const res = await api.jobs();
       setJobs(res.jobs);
-      
+
       // Check if there's a pending job ID to open
       if (pendingJobIdRef.current) {
         const jobId = pendingJobIdRef.current;
@@ -97,10 +109,10 @@ export function JobsView() {
     setSelectedJob(null);
   };
 
+  // Fetch once on mount; refresh only via push notifications, no polling.
   useEffect(() => {
     fetchJobs();
-    intervalRef.current = setInterval(fetchJobs, 10000);
-    
+
     // Listen for deep link events
     const handleOpenJob = (event: CustomEvent<{ id: number }>) => {
       const jobId = event.detail.id;
@@ -114,27 +126,35 @@ export function JobsView() {
         pendingJobIdRef.current = jobId;
       }
     };
-    
+
+    // Refresh on WS push notification, not on a timer
+    const handleNotification = () => fetchJobs();
+
     window.addEventListener("sarathy:open-job", handleOpenJob as EventListener);
+    window.addEventListener("sarathy:notification", handleNotification);
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
       window.removeEventListener("sarathy:open-job", handleOpenJob as EventListener);
+      window.removeEventListener("sarathy:notification", handleNotification);
     };
+  }, []);
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    jobs.forEach(j => {
+      counts[j.status] = (counts[j.status] || 0) + 1;
+    });
+    return counts;
   }, [jobs]);
 
-  useEffect(() => {
-    if (selectedJob) {
-      // Refresh on notification
-      const handleNotification = () => fetchJobs();
-      window.addEventListener("sarathy:notification", handleNotification);
-      return () => window.removeEventListener("sarathy:notification", handleNotification);
-    }
-  }, [selectedJob]);
+  const filteredJobs = useMemo(() => {
+    if (filter === "all") return jobs;
+    return jobs.filter(j => j.status === filter);
+  }, [jobs, filter]);
 
   const statusBadge = (status: string) => (
     <Badge
       variant="outline"
-      className={cn("text-xs font-medium", STATUS_COLORS[status] || "bg-gray-100 text-gray-800 border-gray-200")}
+      className={cn("text-xs font-medium whitespace-nowrap", STATUS_COLORS[status] || "bg-gray-100 text-gray-800 border-gray-200")}
     >
       {status.replace("_", " ")}
     </Badge>
@@ -275,54 +295,65 @@ export function JobsView() {
       <div className="border-b px-4 py-3">
         <div className="flex items-center justify-between">
           <h1 className="text-base font-semibold">Jobs</h1>
-          <Button variant="ghost" size="sm" onClick={fetchJobs} disabled={loading} className="gap-1">
-            <Loader2 className={cn("size-4", loading && "animate-spin")} />
-            Refresh
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            variant={filter === "all" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setFilter("all")}
+          >
+            All
+            <span className="ml-1.5 text-xs opacity-80">{jobs.length}</span>
           </Button>
+          {STATUS_ORDER.filter(s => statusCounts[s]).map(status => (
+            <Button
+              key={status}
+              variant={filter === status ? "default" : "outline"}
+              size="sm"
+              onClick={() => setFilter(filter === status ? "all" : status)}
+              className={cn(filter !== status && STATUS_COLORS[status])}
+            >
+              {status.replace("_", " ")}
+              <span className="ml-1.5 text-xs opacity-80">{statusCounts[status]}</span>
+            </Button>
+          ))}
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-4">
         {loading ? (
           <div className="flex items-center justify-center h-full">
-            <Loader2 className="size-6 animate-spin text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Loading jobs…</span>
           </div>
-        ) : jobs.length === 0 ? (
+        ) : filteredJobs.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <Briefcase className="size-12 text-muted-foreground/50 mb-3" />
-            <p className="text-muted-foreground">No jobs yet</p>
+            <p className="text-muted-foreground">
+              {jobs.length === 0 ? "No jobs yet" : "No jobs in this state"}
+            </p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {jobs.map((job) => (
-              <Button
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {filteredJobs.map(job => (
+              <Card
                 key={job.id}
-                variant="outline"
-                className={cn(
-                  "w-full justify-start text-left gap-3 p-3 transition-colors hover:bg-accent",
-                  "hover:shadow-sm"
-                )}
                 onClick={() => openJob(job.id)}
+                className="cursor-pointer p-4 transition-shadow hover:shadow-md"
               >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-mono text-sm font-medium">#{job.id}</span>
-                    {statusBadge(job.status)}
-                    <span className="text-xs text-muted-foreground">{job.kind}</span>
-                  </div>
-                  <h3 className="font-medium truncate">{job.title}</h3>
-                  <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                    {job.repo && <span className="font-mono truncate">{job.repo}</span>}
-                    {job.model && <span className="font-mono truncate">{job.model}</span>}
-                    <span>{formatRelativeTime(job.updated_at)}</span>
-                  </div>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-mono text-sm font-semibold">#{job.id}</span>
+                  {statusBadge(job.status)}
                 </div>
-                {job.last_event && (
-                  <div className="text-right text-xs text-muted-foreground max-w-[200px]">
-                    <p className="truncate">{job.last_event.message}</p>
-                    <span className="text-[10px]">{formatRelativeTime(job.last_event.ts)}</span>
-                  </div>
-                )}
-              </Button>
+                <h3 className="mt-2 text-sm font-medium leading-snug line-clamp-2 min-h-[2.5rem]">
+                  {job.title}
+                </h3>
+                <p className="mt-1 text-xs text-muted-foreground line-clamp-1">
+                  {job.last_event?.message || "No events yet"}
+                </p>
+                <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span className="font-mono truncate">{job.kind}</span>
+                  <span className="whitespace-nowrap">{formatRelativeTime(job.updated_at)}</span>
+                </div>
+              </Card>
             ))}
           </div>
         )}

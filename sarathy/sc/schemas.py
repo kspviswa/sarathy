@@ -127,20 +127,26 @@ def find_protos_dir() -> Path:
     Order: ``SC_PROTOS_DIR``, then an upward walk from this module, then from the
     current working directory. A hardcoded deployment path would be wrong in at
     least one of the three layouts this runs in.
+
+    Two layouts are accepted, because a submodule pin of the ``sarathyos`` repo
+    lands the schemas one level deeper than a plain checkout (the submodule root
+    *is* the sarathyos repo root, and the schemas live in its ``protos/``):
+    ``<dir>/protos/registry.json`` and ``<dir>/protos/protos/registry.json``.
     """
     env = os.environ.get("SC_PROTOS_DIR")
     if env:
         candidate = Path(env).expanduser()
-        if (candidate / "registry.json").is_file():
-            return candidate.resolve()
+        for layout in (candidate, candidate / "protos"):
+            if (layout / "registry.json").is_file():
+                return layout.resolve()
         raise SchemaError(f"SC_PROTOS_DIR={env!r} does not contain registry.json")
 
     starts = [Path(__file__).resolve().parent, Path.cwd().resolve()]
     for start in starts:
         for directory in [start, *start.parents]:
-            candidate = directory / "protos"
-            if (candidate / "registry.json").is_file():
-                return candidate.resolve()
+            for candidate in (directory / "protos", directory / "protos" / "protos"):
+                if (candidate / "registry.json").is_file():
+                    return candidate.resolve()
     raise SchemaError(
         "protos/ not found: set SC_PROTOS_DIR or run from inside the "
         "sarathy_clients_workspace tree"

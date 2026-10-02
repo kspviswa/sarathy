@@ -83,6 +83,11 @@ class DashboardChannel(BaseChannel):
         self._site: web.TCPSite | None = None
         self._ws_clients: set[web.WebSocketResponse] = set()
         self._login_failures: dict[str, list[float]] = {}
+        # Sarathy Clients fleet view (sarathy/sc/dashboard_api.py). Lazily built so
+        # a gateway with no SC usage never opens the node database, and never
+        # imports the sc module unless something asks for it.
+        self._sc_registry = None
+        self._sc_listener = None
 
     # ------------------------------------------------------------------ start/stop
 
@@ -311,6 +316,46 @@ class DashboardChannel(BaseChannel):
         app.router.add_get("/api/jobs", self._api_jobs_list)
         app.router.add_get("/api/jobs/{id}", self._api_jobs_detail)
         app.router.add_get("/ws", self._ws_handler)
+        # SC fleet view (job spec section H). Mounted last and behind a lazy
+        # import so the SC module — and its schema registry load — is only pulled
+        # in when a dashboard actually asks for /api/sc/*.
+        self._mount_sc_routes(app)
+
+    def _mount_sc_routes(self, app: web.Application) -> None:
+        """Attach ``/api/sc/*`` and the node listener to this dashboard app.
+
+        Everything lands on the same port and event loop the dashboard already
+        uses: the fleet view reads the same registry the WS listener writes, so
+        there is no second database and no cache to invalidate.
+        """
+
+        def _sc_registry():
+            from sarathy.sc.dashboard_api import attach_ledger
+            from sarathy.sc.ledger import JobLedger
+            from sarathy.sc.registry import open_default_registry
+
+            if self._sc_registry is None:
+                self._sc_registry = open_default_registry()
+                attach_ledger(self._sc_registry, JobLedger(self._sc_registry))
+            return self._sc_registry
+
+        from sarathy.sc.approvals import ApprovalRouter
+        from sarathy.sc.dashboard_api import attach_approvals, attach_listener
+        from sarathy.sc.dashboard_api import routes as sc_routes
+        from sarathy.sc.ws import create_listener
+
+        registry = _sc_registry()
+        if self._sc_listener is None:
+            # The approval router defaults to the in-memory transport; production
+            # swaps in the Telegram transport when the listener is started with
+            # `sarathy sc listen --telegram`. The default keeps the queue depth
+            # honest in the dashboard without reaching the network.
+            attach_approvals(registry, ApprovalRouter())
+            self._sc_listener = create_listener(registry)
+        attach_listener(self._sc_listener)
+        sc_routes(app, registry)
+        # Nodes dial out to this app; the listener owns the handshake.
+        self._sc_listener.routes(app)
 
     def _device_kind(self, request: web.Request) -> str:
         """Return ``"mobile"`` for phone UAs, else ``"desktop"``.

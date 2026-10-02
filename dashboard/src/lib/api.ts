@@ -8,6 +8,10 @@ import type {
   ProvidersResponse,
   RoleStatusResponse,
   RuntimeSetResponse,
+  ScAddNodeRequest,
+  ScAddNodeResponse,
+  ScNodesResponse,
+  ScRevokeResponse,
   SessionDetail,
   SessionInfo,
   StatusResponse,
@@ -176,4 +180,28 @@ export const api = {
   jobs: () => request<JobsListResponse>("/api/jobs"),
 
   job: (id: number) => request<JobDetailResponse>(`/api/jobs/${id}`),
+
+  /* ------------------------------------------------------------- SC fleet
+   * Sarathy Clients nodes (design/SARATHY_CLIENTS_SPEC.md section 9).
+   *
+   * The gateway owns fleet membership; these calls only ever *ask* it to add or
+   * revoke a node. Nothing here can widen a node's own allowlist — that lives on
+   * the node, and this view is a mirror of what the node reported.
+   */
+  sc: {
+    nodes: () => request<ScNodesResponse>("/api/sc/nodes"),
+    node: (id: string) =>
+      request<{ node: ScNodesResponse["nodes"][number] }>(
+        `/api/sc/nodes/${encodeURIComponent(id)}`,
+      ),
+    add: (body: ScAddNodeRequest) =>
+      request<ScAddNodeResponse>("/api/sc/nodes", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    revoke: (id: string) =>
+      request<ScRevokeResponse>(`/api/sc/nodes/${encodeURIComponent(id)}/revoke`, {
+        method: "POST",
+      }),
+  },
 };

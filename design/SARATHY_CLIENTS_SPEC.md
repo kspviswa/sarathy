@@ -252,6 +252,51 @@ sarathy-os/
   - **Grants** — view/revoke active grants.
   - **Logs** — local audit log viewer.
 
+### 8.4 SC CLI (`scctl`)
+
+First-class terminal management surface for headless nodes (Linux, RPi, servers)
+where the Tauri shell is not available. `scctl` is a thin client over the same
+local control channel the Tauri shell uses — it talks to the SC daemon via a
+local UNIX socket / loopback HTTP API, never directly to the gateway.
+
+Commands (v1):
+
+```
+scctl pair <gateway-url>          # start pairing with the gateway (shows code, writes pairing key to keyring)
+scctl status                      # daemon health, connection state, last heartbeat
+scctl ls                          # list capabilities + state (enabled/disabled) + risk class
+scctl allowlist                   # show current allowlist + scopes
+scctl grant ls | grant add | grant revoke
+scctl jobs                        # local job view (running/recent, state, workspace)
+scctl svc ls | svc register | svc start | svc stop
+scctl logs                        # tail local audit log
+scctl version
+```
+
+Design constraints:
+
+- **Local-only.** `scctl` binds to `127.0.0.1` / UNIX socket; the SC daemon
+  authenticates the caller (same OS user, socket permissions). No remote
+  management via `scctl`.
+- **Same enforcement.** `scctl` cannot bypass the allowlist/grant engine — it
+  goes through the same policy path as the gateway would. It is a management
+  UI, not a backdoor.
+- **Headless parity.** Every action available in the Tauri shell is available
+  via `scctl` (start/stop, grants, workspaces, services, logs). The Tauri shell
+  can be layered on top of `scctl`-style calls later if useful.
+- **Scriptable output.** JSON output flag (`scctl --json`) for automation and
+  smoke tests.
+
+### 8.5 SC daemon control surface
+
+Shared by Tauri shell and `scctl`:
+
+- Local HTTP API on `127.0.0.1:<port>` (or UNIX socket) with a small, typed
+  schema (same protos style as the wire protocol).
+- Auth: OS-user check + optional local token minted at pairing.
+- The daemon is the only process that talks to the gateway; shells/UI are
+  strictly local clients.
+
 ## 9. Gateway additions (Python)
 
 - `sc/registry.py` — node DB (id, name, pairing hash, last_seen, capabilities mirror, state).
@@ -261,7 +306,33 @@ sarathy-os/
 - `sc/mcp_bridge.py` — MCP client side: node-registered services appear as tools to Sarathy (e.g. `searxng.search` → proxied to node port).
 - `dashboard/` — fleet mgmt (list/add/revoke SC), job mgmt (submit/status/artifacts), sub-agents (future), approvals queue, audit view.
 
-## 10. Security model
+## 10. Skill side (Sarathy gateway)
+
+The gateway's skill layer needs a first-class `sc-*` family so Sarathy can
+operate the fleet through the same skill-first protocol as everything else.
+New skills (each with SKILL.md + USAGE.md logging, registered under the
+existing skills tree):
+
+- `sc-node-lifecycle` — pair, list, revoke nodes; heartbeat/health checks;
+  node registry operations (wraps `sc/registry.py` + dashboard API).
+- `sc-job-submit` — submit `sdd` / `run` / `svc` jobs to a node, monitor
+  ledger state, collect artifacts (wraps `sc/ledger.py` + `jobctl`-style
+  workflow, adapted for remote nodes).
+- `sc-approval` — handle `approval.request` events: route to Viswa via
+  Telegram inline buttons, parse grant decision, apply grant, resume blocked
+  job (wraps `sc/approvals.py`).
+- `sc-fleet-status` — fleet health summary (nodes, capabilities, active
+  grants, recent jobs) for quick status pings.
+- `sc-svc-proxy` — register/query node-local services exposed to the gateway
+  via `sc/mcp_bridge.py` (e.g. `searxng.search` proxied to a node port).
+
+Hub entry: add an `sc` entry to the portal registry (`~/portals/registry.jsonl`)
+pointing at the SC control surface once the dashboard fleet view ships.
+
+Skill-first rule applies: any SC operation Sarathy performs goes through these
+skills, mirroring the discipline for deploy/job/dashboard work.
+
+## 11. Security model
 
 | Layer | Now (v1) | Later |
 |---|---|---|
@@ -274,7 +345,7 @@ sarathy-os/
 
 **Elevation pipeline (ask-Viswa):** any capability not in `auto` or already granted → SC returns `needs_approval` and raises `approval.request` directly to Viswa via Telegram. The gateway (and therefore the LLM) cannot grant. No circumvention path exists by construction.
 
-## 11. Phased roadmap
+## 12. Phased roadmap
 
 ### Phase 0 — Spec freeze & scaffolding
 - Freeze this spec; create `sarathy-os` monorepo; define protos; git init; CI skeleton.
@@ -310,7 +381,7 @@ sarathy-os/
 - iPhone SC via Shortcuts bridge first (Phase 0 mobile), then native companion app.
 - **Exit:** mTLS fleet; iPhone as mobile surface (calendar, reminders, photos, location, HomeKit).
 
-## 12. Open questions
+## 13. Open questions
 
 1. Go plugin model vs compiled-in adapters for capabilities? (Probably compiled-in for v1 — simpler, safer; plugins later.)
 2. Should `run` job templates be shipped with SC or registered from gateway? (Ship with SC — enforcement on node.)
@@ -318,7 +389,7 @@ sarathy-os/
 4. opencode on node: interactive TUI or headless mode? (Headless with event streaming for v1.)
 5. iOS native app: separate build pipeline (Xcode) — timeline after Shortcuts bridge proves value.
 
-## 13. Risks
+## 14. Risks
 
 - **iOS background limits** — mobile SC is on-demand (APNs wake), not always-on. Accepted; macOS/Linux are the workhorses.
 - **opencode on node needs API keys** — keys stay in SC keyring; gateway never sees them. Requires trusting the node host (Viswa's own machines — fine).

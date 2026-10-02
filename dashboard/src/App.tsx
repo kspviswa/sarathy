@@ -1,4 +1,4 @@
-import { Bell, Briefcase, FileCode2, Gauge, MessageSquareText, Settings } from "lucide-react";
+import { Bell, Briefcase, FileCode2, Gauge, MessageSquareText, Monitor, Settings } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -11,6 +11,7 @@ import { useLastSession, resetLastSession, DASHBOARD_SESSION_KEY } from "@/lib/u
 import { useNotifications } from "@/lib/useNotifications";
 import { DashboardSocket } from "@/lib/ws";
 import { ChatView, type ChatMessage } from "@/views/ChatView";
+import { ClientsView } from "@/views/ClientsView";
 import { ConfigView } from "@/views/ConfigView";
 import { FilesView } from "@/views/FilesView";
 import { JobsView } from "@/views/JobsView";
@@ -21,12 +22,13 @@ import { cn } from "@/lib/utils";
 
 export type { ChatMessage } from "@/views/ChatView";
 
-type Tab = "chat" | "files" | "sessions" | "jobs" | "config" | "status";
+type Tab = "chat" | "files" | "sessions" | "clients" | "jobs" | "config" | "status";
 
 const TABS: { id: Tab; label: string; icon: typeof MessageSquareText }[] = [
   { id: "chat", label: "Chat", icon: MessageSquareText },
   { id: "files", label: "Files", icon: FileCode2 },
   { id: "sessions", label: "Sessions", icon: Gauge },
+  { id: "clients", label: "Clients", icon: Monitor },
   { id: "jobs", label: "Jobs", icon: Briefcase },
   { id: "config", label: "Config", icon: Settings },
   { id: "status", label: "Status", icon: Gauge },
@@ -360,6 +362,7 @@ function AppInner() {
         )}
         {tab === "files" && <FilesView initialFile={openFile} />}
         {tab === "sessions" && <SessionsView />}
+        {tab === "clients" && <ClientsView />}
         {tab === "jobs" && <JobsView />}
         {tab === "config" && <ConfigView />}
         {tab === "status" && <StatusView onLoggedOut={logout} />}

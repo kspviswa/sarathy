@@ -632,6 +632,13 @@ from sarathy.channels.dashboard.cli import dashboard_app  # noqa: E402
 
 app.add_typer(dashboard_app, name="dashboard")
 
+# Sarathy Clients (SC): node fleet lifecycle + the WS listener nodes dial out to.
+# Imported late, like the dashboard CLI above, to keep CLI startup fast — the sc
+# module pulls in aiohttp and the schema registry.
+from sarathy.sc.cli import sc_app  # noqa: E402
+
+app.add_typer(sc_app, name="sc")
+
 
 @channels_app.command("status")
 def channels_status():

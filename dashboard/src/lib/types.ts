@@ -177,3 +177,114 @@ export interface JobDetailResponse {
   spec_text: string | null;
   result_text: string | null;
 }
+/* ------------------------------------------------------------------ SC fleet
+ * Types for the Sarathy Clients fleet view (design/SARATHY_CLIENTS_SPEC.md
+ * section 9; job spec section H). The gateway's /api/sc/* responses.
+ */
+
+/** Health is derived from `last_seen` against the watchdog grace, not stored. */
+export type ScHealth = "online" | "stale" | "offline";
+
+export type ScNodeState =
+  | "pending"
+  | "pairing"
+  | "online"
+  | "offline"
+  | "revoked";
+
+/** Risk classes from spec section 6.1. `deny` is hard-coded and never allowlisted. */
+export type ScRisk = "auto" | "ask" | "deny";
+
+export interface ScCapability {
+  name: string;
+  version: string;
+  kind: string;
+  risk: ScRisk | string;
+  state: string;
+  scopes?: string[];
+  title?: string;
+  description?: string;
+}
+
+export interface ScGrant {
+  id?: string;
+  capability: string;
+  mode: string;
+  scope?: string | null;
+  source?: string;
+  expires?: string | null;
+  revoked?: boolean;
+}
+
+export interface ScService {
+  name: string;
+  port: number;
+  host?: string;
+  type: string;
+  registered?: boolean;
+  running?: boolean;
+  schema_uri?: string | null;
+}
+
+export interface ScNode {
+  id: string;
+  name: string;
+  state: ScNodeState | string;
+  health: ScHealth | string;
+  last_seen: string | null;
+  last_seen_age_s: number | null;
+  paired: boolean;
+  paired_at: string | null;
+  revoked_at: string | null;
+  platform: string;
+  arch: string;
+  version: string;
+  capabilities_hash: string;
+  capabilities: ScCapability[];
+  capability_names: (string | null)[];
+  risk_classes: string[];
+  grants: ScGrant[];
+  grant_count: number;
+  services: ScService[];
+  note: string;
+  created_at: string;
+}
+
+export interface ScFleetSummary {
+  total: number;
+  online: number;
+  stale: number;
+  offline: number;
+  revoked: number;
+  watchdog_grace_s: number;
+  capabilities: string[];
+}
+
+export interface ScNodesResponse {
+  nodes: ScNode[];
+  summary: ScFleetSummary;
+  watchdog_grace_s: number;
+}
+
+export interface ScAddNodeRequest {
+  node_id: string;
+  name?: string;
+  pairing_key?: string;
+  generate_key?: boolean;
+  note?: string;
+}
+
+export interface ScAddNodeResponse {
+  node: ScNode;
+  /** Present exactly once, when the gateway generated the key. Never recoverable. */
+  pairing_key: string | null;
+  pairing_key_generated: boolean;
+  hint: string;
+}
+
+export interface ScRevokeResponse {
+  ok: boolean;
+  node: ScNode;
+  session_closed: boolean;
+  note: string;
+}

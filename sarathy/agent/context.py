@@ -121,7 +121,37 @@ To use a skill, read its SKILL.md via read_file: {self.workspace}/skills/{{skill
 {skills_summary}"""
             )
 
+        parts.append(self._get_topic_signal_block())
+
         return "\n\n---\n\n".join(parts)
+
+    @staticmethod
+    def _get_topic_signal_block() -> str:
+        """Static Session Topic Signal instruction (part of the cached prefix)."""
+        return """## Session Topic Signal
+
+With EVERY final user-facing response, end with exactly one machine line:
+
+<topic>{"set": null|"<title>"}</topic>
+
+Rules:
+- Emit {"set": null} when the message is general chat, small talk, or has no
+  substantive topic (e.g. "hi", "good morning", "thanks").
+- Emit {"set": "<title>"} when a substantive topic exists. The title must be
+  at most 6 words, lowercase-ish, descriptive (e.g. "pi durable research",
+  "session topic feature design").
+- If the conversation's subject changes mid-session, emit a MERGED title that
+  captures the whole thread (still at most 6 words) — do not just emit the
+  newest subject.
+- If nothing changed, repeat the current topic unchanged (the gateway treats
+  an unchanged value as a no-op).
+- Never emit a topic for a session where the user explicitly set one via the
+  /topic command (a user-set topic is locked; keep emitting the locked value
+  unchanged).
+
+This marker line is machine-only: it is stripped before the user sees the
+reply and must never appear in visible text. Do not explain it, quote it, or
+include it anywhere except as the single trailing line."""
 
     def _get_identity(self) -> str:
         """Get the core identity section."""

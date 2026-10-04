@@ -3,6 +3,7 @@
 import asyncio
 import json
 import shutil
+import sqlite3
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,6 +14,27 @@ from loguru import logger
 
 from sarathy.config.schema import Config
 from sarathy.utils.helpers import ensure_dir, safe_filename
+
+
+def channel_for_key(key: str) -> str:
+    """Derive the channel from a session key (prefix before the first ':')."""
+    if ":" in key:
+        prefix = key.split(":", 1)[0]
+        return prefix or "cli"
+    return "cli"
+
+
+_INDEX_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions (
+  key TEXT PRIMARY KEY,
+  channel TEXT NOT NULL,
+  topic TEXT,
+  topic_user_set INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  archived INTEGER NOT NULL DEFAULT 0
+);
+"""
 
 
 @dataclass
@@ -136,6 +158,14 @@ class Session:
             for msg in self.messages:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
+        # Keep the lightweight sessions index in sync (best effort).
+        try:
+            manager = getattr(self, "_manager", None)
+            if manager is not None and hasattr(manager, "_upsert_index"):
+                manager._upsert_index(self, archived=1 if learned else 0)
+        except Exception as e:
+            logger.debug("Failed to update sessions index for {}: {}", self.key, e)
+
     def _get_archive_dir(self) -> str:
         """Get the archived sessions directory path."""
         if hasattr(self, "_manager") and self._manager is not None:
@@ -170,6 +200,15 @@ class SessionManager:
         self.max_session_size = config.agents.memory_archival.max_session_size
         self.auto_create_new_session = config.agents.memory_archival.auto_create_new_session
         self._cache: OrderedDict[str, Session] = OrderedDict()
+        # Build the lightweight sessions index on first use (gateway start with
+        # a missing/stale index). Cheap when there are no session files.
+        try:
+            if not self._index_db_path().exists():
+                self.rebuild_index()
+            else:
+                self._ensure_index()
+        except Exception as e:
+            logger.debug("Sessions index init skipped: {}", e)
 
     def _get_active_session_path(self, key: str) -> Path:
         """Get the file path for an active session."""
@@ -366,6 +405,12 @@ class SessionManager:
         session.messages = messages_to_save
         self._cache[session.key] = session
 
+        # Keep the lightweight sessions index in sync (best effort, cheap).
+        try:
+            self._upsert_index(session, archived=1 if session.archived else 0)
+        except Exception as e:
+            logger.debug("Failed to update sessions index for {}: {}", session.key, e)
+
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
@@ -373,6 +418,15 @@ class SessionManager:
     def delete_session(self, key: str) -> None:
         """Delete a session from disk and cache (idempotent)."""
         self.invalidate(key)
+        try:
+            conn = self._index_connect()
+            try:
+                conn.execute("DELETE FROM sessions WHERE key = ?", (key,))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.debug("Failed to delete sessions index row for {}: {}", key, e)
         path = self._get_active_session_path(key)
         if path.exists():
             try:
@@ -499,13 +553,145 @@ class SessionManager:
 
         return unarchived
 
+    # ------------------------------------------------------------------ sessions index
+
+    def _index_db_path(self) -> Path:
+        """Path of the lightweight sessions index DB."""
+        return self.active_sessions_dir / "index.db"
+
+    def _index_connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self._index_db_path()))
+        conn.execute(_INDEX_SCHEMA)
+        return conn
+
+    def _ensure_index(self) -> None:
+        conn = self._index_connect()
+        try:
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _upsert_index(self, session: Session, archived: int = 0) -> None:
+        """Upsert one row of the sessions index (one cheap write per save)."""
+        meta = session.metadata or {}
+        conn = self._index_connect()
+        try:
+            conn.execute(
+                "INSERT INTO sessions (key, channel, topic, topic_user_set,"
+                " created_at, updated_at, archived)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET"
+                " channel=excluded.channel, topic=excluded.topic,"
+                " topic_user_set=excluded.topic_user_set,"
+                " created_at=excluded.created_at, updated_at=excluded.updated_at,"
+                " archived=excluded.archived",
+                (
+                    session.key,
+                    channel_for_key(session.key),
+                    meta.get("topic"),
+                    1 if meta.get("topic_user_set") else 0,
+                    session.created_at.isoformat() if session.created_at else None,
+                    session.updated_at.isoformat() if session.updated_at else None,
+                    archived,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def rebuild_index(self) -> int:
+        """Walk active session files and repopulate the index. Returns row count."""
+        conn = self._index_connect()
+        try:
+            conn.execute("DELETE FROM sessions")
+            count = 0
+            for path in self.active_sessions_dir.glob("*.jsonl"):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        first_line = f.readline().strip()
+                    if not first_line:
+                        continue
+                    data = json.loads(first_line)
+                    if data.get("_type") != "metadata":
+                        continue
+                    key = data.get("key") or path.stem.replace("_", ":", 1)
+                    meta = data.get("metadata", {}) or {}
+                    conn.execute(
+                        "INSERT OR REPLACE INTO sessions"
+                        " (key, channel, topic, topic_user_set,"
+                        " created_at, updated_at, archived)"
+                        " VALUES (?, ?, ?, ?, ?, ?, 0)",
+                        (
+                            key,
+                            channel_for_key(key),
+                            meta.get("topic"),
+                            1 if meta.get("topic_user_set") else 0,
+                            data.get("created_at"),
+                            data.get("updated_at"),
+                        ),
+                    )
+                    count += 1
+                except Exception:
+                    continue
+            conn.commit()
+            return count
+        finally:
+            conn.close()
+
+    def _list_sessions_from_index(self) -> list[dict[str, Any]] | None:
+        """Fast path: read the session list from the SQLite index.
+
+        Returns None when the index is missing/empty/unreadable so the caller
+        can fall back to the metadata-line scan.
+        """
+        try:
+            path = self._index_db_path()
+            if not path.exists():
+                return None
+            conn = sqlite3.connect(str(path))
+            try:
+                rows = conn.execute(
+                    "SELECT key, channel, topic, topic_user_set,"
+                    " created_at, updated_at, archived FROM sessions"
+                    " ORDER BY updated_at DESC"
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception:
+            return None
+        if not rows:
+            return None
+        sessions = []
+        for key, channel, topic, topic_user_set, created_at, updated_at, archived in rows:
+            if archived:
+                continue
+            sessions.append(
+                {
+                    "key": key,
+                    "channel": channel,
+                    "topic": topic,
+                    "topic_user_set": bool(topic_user_set),
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "path": str(self._get_active_session_path(key)),
+                }
+            )
+        return sessions
+
     def list_sessions(self) -> list[dict[str, Any]]:
         """
         List all sessions.
 
+        Fast path reads the SQLite index (never scans transcripts); falls back
+        to the metadata-line scan when the index is missing or empty.
+
         Returns:
             List of session info dicts.
         """
+        indexed = self._list_sessions_from_index()
+        if indexed is not None:
+            return indexed
+
         sessions = []
 
         for path in self.active_sessions_dir.glob("*.jsonl"):
@@ -517,9 +703,13 @@ class SessionManager:
                         data = json.loads(first_line)
                         if data.get("_type") == "metadata":
                             key = data.get("key") or path.stem.replace("_", ":", 1)
+                            meta = data.get("metadata", {}) or {}
                             sessions.append(
                                 {
                                     "key": key,
+                                    "channel": channel_for_key(key),
+                                    "topic": meta.get("topic"),
+                                    "topic_user_set": bool(meta.get("topic_user_set", False)),
                                     "created_at": data.get("created_at"),
                                     "updated_at": data.get("updated_at"),
                                     "path": str(path),

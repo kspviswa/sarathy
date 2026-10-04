@@ -24,6 +24,9 @@ export interface SessionInfo {
   created_at?: string;
   updated_at?: string;
   path?: string;
+  topic?: string | null;
+  channel?: string;
+  topic_user_set?: boolean;
 }
 
 export interface SessionDetail {

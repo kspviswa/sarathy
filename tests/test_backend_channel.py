@@ -1,0 +1,317 @@
+"""Tests for the BackendChannel third trigger path (job 114)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+from pathlib import Path
+
+import aiohttp
+import pytest
+
+from sarathy.bus.events import OutboundMessage
+from sarathy.bus.queue import MessageBus
+from sarathy.channels.backend import BackendChannel
+from sarathy.config.schema import BackendConfig, Config
+
+
+def _make_channel(tmp_path, jobs_db=None, **overrides) -> BackendChannel:
+    kwargs = {
+        "enabled": True,
+        "token": "test-token",
+        "port": 0,
+    }
+    if jobs_db is not None:
+        kwargs["jobs_db_path"] = str(jobs_db)
+    kwargs.update(overrides)
+    config = BackendConfig(**kwargs)
+    return BackendChannel(
+        config,
+        MessageBus(),
+        watermark_path=tmp_path / "backend_watermark.json",
+        poll_interval=0.05,
+    )
+
+
+async def _started(channel: BackendChannel) -> asyncio.Task:
+    task = asyncio.create_task(channel.start())
+    for _ in range(100):
+        if channel._running:
+            break
+        await asyncio.sleep(0.05)
+    assert channel._running, "backend channel did not start"
+    return task
+
+
+async def _stopped(channel: BackendChannel, task: asyncio.Task) -> None:
+    await channel.stop()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+def _auth_headers(token: str = "test-token") -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _make_jobs_db(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, status TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS job_events (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " job_id INTEGER, ts TEXT, event_type TEXT, level TEXT, message TEXT, payload TEXT)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _insert_event(path: Path, job_id: int, event_type: str, message: str = "hello") -> int:
+    conn = sqlite3.connect(str(path))
+    try:
+        cur = conn.execute(
+            "INSERT INTO job_events (job_id, ts, event_type, level, message, payload)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (job_id, "2026-10-04T20:00:00Z", event_type, "info", message, json.dumps({})),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# HTTP endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_event_happy_path(tmp_path):
+    ch = _make_channel(tmp_path)
+    task = await _started(ch)
+    try:
+        port = ch.bound_port
+        assert port
+        envelope = {
+            "event_type": "job.completed",
+            "source": "jobctl",
+            "job_id": "42",
+            "source_session_id": "telegram:5878545507",
+            "payload": {"message": "all done", "extra": {}},
+            "ts": "2026-10-04T20:00:00Z",
+            "escalate_to": "telegram:5878545507",
+        }
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                f"http://127.0.0.1:{port}/event",
+                json=envelope,
+                headers=_auth_headers(),
+            ) as resp:
+                assert resp.status == 200
+                body = await resp.json()
+        assert body["ok"] is True
+        assert body["session"] == "backend:42"
+
+        msg = await asyncio.wait_for(ch.bus.consume_inbound(), timeout=2)
+        assert msg.channel == "backend"
+        assert msg.session_key_override == "backend:42"
+        assert msg.chat_id == "42"
+        assert "[job 42 job.completed]" in msg.content
+        assert "all done" in msg.content
+        assert msg.metadata["source_session_id"] == "telegram:5878545507"
+        assert msg.metadata["escalate_to"] == "telegram:5878545507"
+        assert msg.metadata["payload"] == {"message": "all done", "extra": {}}
+    finally:
+        await _stopped(ch, task)
+
+
+@pytest.mark.asyncio
+async def test_post_event_auth_variants(tmp_path):
+    ch = _make_channel(tmp_path)
+    task = await _started(ch)
+    try:
+        port = ch.bound_port
+        envelope = {"event_type": "x.y", "source": "jobctl"}
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(f"http://127.0.0.1:{port}/event", json=envelope) as resp:
+                assert resp.status == 401
+            async with sess.post(
+                f"http://127.0.0.1:{port}/event", json=envelope,
+                headers=_auth_headers("wrong"),
+            ) as resp:
+                assert resp.status == 401
+            # Alternate header works.
+            async with sess.post(
+                f"http://127.0.0.1:{port}/event", json=envelope,
+                headers={"X-Sarathy-Token": "test-token"},
+            ) as resp:
+                assert resp.status == 200
+        # Health needs no auth.
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(f"http://127.0.0.1:{port}/health") as resp:
+                assert resp.status == 200
+                assert (await resp.json()) == {"ok": True}
+    finally:
+        await _stopped(ch, task)
+
+
+@pytest.mark.asyncio
+async def test_post_event_allow_from_403(tmp_path):
+    ch = _make_channel(tmp_path, allow_from=["jobctl"])
+    task = await _started(ch)
+    try:
+        port = ch.bound_port
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                f"http://127.0.0.1:{port}/event",
+                json={"event_type": "x.y", "source": "intruder"},
+                headers=_auth_headers(),
+            ) as resp:
+                assert resp.status == 403
+    finally:
+        await _stopped(ch, task)
+
+
+@pytest.mark.asyncio
+async def test_post_event_malformed_400(tmp_path):
+    ch = _make_channel(tmp_path)
+    task = await _started(ch)
+    try:
+        port = ch.bound_port
+        async with aiohttp.ClientSession() as sess:
+            # Missing event_type.
+            async with sess.post(
+                f"http://127.0.0.1:{port}/event",
+                json={"source": "jobctl"},
+                headers=_auth_headers(),
+            ) as resp:
+                assert resp.status == 400
+            # Missing source.
+            async with sess.post(
+                f"http://127.0.0.1:{port}/event",
+                json={"event_type": "x.y"},
+                headers=_auth_headers(),
+            ) as resp:
+                assert resp.status == 400
+            # Not JSON.
+            async with sess.post(
+                f"http://127.0.0.1:{port}/event",
+                data="not json",
+                headers={**_auth_headers(), "Content-Type": "application/json"},
+            ) as resp:
+                assert resp.status == 400
+    finally:
+        await _stopped(ch, task)
+
+
+@pytest.mark.asyncio
+async def test_refuse_start_without_token(tmp_path):
+    ch = _make_channel(tmp_path, token="")
+    await ch.start()  # returns without binding
+    assert not ch._running
+    await ch.stop()
+
+
+# ---------------------------------------------------------------------------
+# jobs.db tailer
+# ---------------------------------------------------------------------------
+
+
+def test_tailer_publishes_and_advances_watermark(tmp_path):
+    jobs_db = tmp_path / "jobs.db"
+    _make_jobs_db(jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+
+    # Pre-existing rows are NOT replayed on first init.
+    _insert_event(jobs_db, 1, "completed", "old news")
+    ch._init_watermark()
+    assert ch._poll_new_events() == []
+
+    row_id = _insert_event(jobs_db, 7, "completed", "fresh result")
+    events = ch._poll_new_events()
+    assert len(events) == 1
+    assert events[0]["job_id"] == "7"
+
+    msg = ch._tail_event_to_inbound(events[0])
+    assert msg is not None
+    assert msg.session_key_override == "backend:job-7"
+    assert msg.chat_id == "7"
+    assert "[job 7 completed]" in msg.content
+
+    watermark = json.loads((tmp_path / "backend_watermark.json").read_text())
+    assert watermark["last_id"] >= row_id
+
+    # Non-tailed event types are filtered but still advance the watermark.
+    _insert_event(jobs_db, 7, "heartbeat-tick", "noise")
+    assert ch._poll_new_events() != []  # consumed (filtered downstream)
+    assert ch._tail_event_to_inbound(
+        {"job_id": "7", "event_type": "heartbeat-tick", "message": "n",
+         "payload": {}, "ts": "t"}
+    ) is None
+
+
+def test_tailer_no_refire_after_restart(tmp_path):
+    jobs_db = tmp_path / "jobs.db"
+    _make_jobs_db(jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch._init_watermark()
+    _insert_event(jobs_db, 3, "crash", "boom")
+    assert len(ch._poll_new_events()) == 1
+
+    # Simulate a restart: new instance, same watermark file.
+    ch2 = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch2._init_watermark()
+    assert ch2._poll_new_events() == []
+
+
+# ---------------------------------------------------------------------------
+# escalate_to
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_escalate_to_routed_via_bus(tmp_path):
+    ch = _make_channel(tmp_path)
+    await ch.send(
+        OutboundMessage(
+            channel="backend", chat_id="42", content="job finished",
+            metadata={"escalate_to": "telegram:5878545507"},
+        )
+    )
+    out = await asyncio.wait_for(ch.bus.consume_outbound(), timeout=2)
+    assert out.channel == "telegram"
+    assert out.chat_id == "5878545507"
+    assert out.content == "job finished"
+
+
+@pytest.mark.asyncio
+async def test_send_without_escalate_only_logs(tmp_path):
+    ch = _make_channel(tmp_path)
+    await ch.send(OutboundMessage(channel="backend", chat_id="42", content="quiet"))
+    assert ch.bus.outbound_size == 0
+
+
+# ---------------------------------------------------------------------------
+# config schema
+# ---------------------------------------------------------------------------
+
+
+def test_backend_config_defaults_and_migration():
+    cfg = Config()
+    assert cfg.channels.backend.enabled is False
+    assert cfg.channels.backend.host == "127.0.0.1"
+    assert cfg.channels.backend.port == 18791
+    assert cfg.channels.backend.token == ""
+    assert cfg.channels.backend.tail_event_types == [
+        "needs_input", "crash", "completed", "verified", "stalled",
+    ]
+    # Old configs without the backend key validate with defaults.
+    legacy = Config.model_validate({"agents": {}, "channels": {"telegram": {}}, "tools": {}})
+    assert legacy.channels.backend.enabled is False

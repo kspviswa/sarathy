@@ -89,6 +89,19 @@ class ChannelManager:
             except ImportError as e:
                 logger.warning("Dashboard channel not available: {}", e)
 
+        # Backend channel (third trigger path: HTTP endpoint + jobs.db tailer)
+        if self.config.channels.backend.enabled:
+            try:
+                from sarathy.channels.backend import BackendChannel
+
+                self.channels["backend"] = BackendChannel(
+                    self.config.channels.backend,
+                    self.bus,
+                )
+                logger.info("Backend channel enabled")
+            except ImportError as e:
+                logger.warning("Backend channel not available: {}", e)
+
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
         """Start a channel and log any exceptions."""
         try:

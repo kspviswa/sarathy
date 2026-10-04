@@ -84,6 +84,23 @@ class DashboardConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Optional IP allowlist (empty = allow all)
 
 
+class BackendConfig(Base):
+    """Backend channel configuration (third trigger path for agents/jobs).
+
+    Disabled by default; Sarathy enables it post-deploy with a generated token.
+    """
+
+    enabled: bool = False
+    host: str = "127.0.0.1"  # Localhost only — never expose to the network
+    port: int = 18791
+    token: str = ""  # Bearer token; empty = refuse start
+    allow_from: list[str] = Field(default_factory=list)  # optional event-source allowlist
+    jobs_db_path: str | None = None  # default ~/.sarathy/workspace/jobs/jobs.db
+    tail_event_types: list[str] = Field(
+        default_factory=lambda: ["needs_input", "crash", "completed", "verified", "stalled"]
+    )
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -93,6 +110,7 @@ class ChannelsConfig(Base):
     discord: DiscordConfig = Field(default_factory=DiscordConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    backend: BackendConfig = Field(default_factory=BackendConfig)
 
 
 class AgentDefaults(Base):

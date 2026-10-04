@@ -49,6 +49,67 @@ STEER_PROMPT_TEMPLATE = (
 # system prompt + tool definitions). Used by the history trimmer on every turn.
 HISTORY_BUDGET_RATIO = 0.6
 
+# Session-topic piggyback signal: the main LLM ends every final user-facing
+# response with exactly one trailing `<topic>{...}</topic>` machine line.
+# End-anchored; tolerates trailing whitespace/newlines after the marker.
+TOPIC_MARKER_RE = re.compile(r"[ \t]*<topic>(.*?)</topic>[ \t]*\s*$", re.DOTALL)
+# Prompt asks for <= 6 words; hard-cap defensively at 8.
+TOPIC_MAX_WORDS = 8
+
+
+def strip_topic_marker(content: str) -> tuple[str, str | None]:
+    """Split the trailing `<topic>` marker off user-facing content.
+
+    Returns (cleaned_content, raw_json_or_None). When no marker is present
+    the content is returned unchanged with None (graceful: model missed it).
+    """
+    match = TOPIC_MARKER_RE.search(content)
+    if not match:
+        return content, None
+    cleaned = content[: match.start()].rstrip()
+    return cleaned, match.group(1).strip()
+
+
+def apply_topic_signal(metadata: dict, raw: str | None) -> str:
+    """Apply one parsed topic signal against session metadata.
+
+    Returns the action: "none" | "set" | "changed". Mutates ``metadata`` in
+    place on set/change (persisted later via the existing sessions.save()
+    path). Invalid JSON is ignored with a warning.
+    """
+    if raw is None:
+        return "none"
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("Ignoring malformed topic marker: {}", raw[:100])
+        return "none"
+    if not isinstance(data, dict) or "set" not in data:
+        logger.warning("Ignoring malformed topic marker (expected {{\"set\": ...}}): {}", raw[:100])
+        return "none"
+    if metadata.get("topic_user_set"):
+        return "none"
+    value = data.get("set")
+    if value is None:
+        return "none"
+    if not isinstance(value, str) or not value.strip():
+        return "none"
+    title = " ".join(value.split())
+    words = title.split()
+    if len(words) > TOPIC_MAX_WORDS:
+        title = " ".join(words[:TOPIC_MAX_WORDS])
+    current = metadata.get("topic")
+    if value_unchanged(current, title):
+        return "none"
+    action = "changed" if current else "set"
+    metadata["topic"] = title
+    return action
+
+
+def value_unchanged(current: Any, title: str) -> bool:
+    """Case-insensitive topic equality (gateway no-ops on repeats)."""
+    return isinstance(current, str) and current.strip().lower() == title.strip().lower()
+
 
 class AgentLoop:
     """
@@ -1043,6 +1104,38 @@ class AgentLoop:
             name = "local"
         return f"{content}\n\n— run via {role} provider ({name})"
 
+    @staticmethod
+    def _is_automated_session(key: str) -> bool:
+        """Cron/backend sessions skip the topic machinery entirely."""
+        return key.startswith("cron:") or key.startswith("backend:")
+
+    def _apply_topic_marker(
+        self, session: Session, key: str, content: str | None
+    ) -> tuple[str | None, str]:
+        """Strip the `<topic>` marker and apply topic rules.
+
+        Returns (content_for_user, action) where action is one of
+        "none" | "set" | "changed". On set/change a `📌 <topic>` footer line
+        is appended BEFORE any usage footer (callers must invoke this before
+        appending the usage footer). The marker is always stripped so it never
+        leaks to the user. Automated (cron:/backend:) sessions are stripped
+        but otherwise untouched. Persistence happens via the caller's existing
+        sessions.save() path.
+        """
+        if not content:
+            return content, "none"
+        cleaned, raw = strip_topic_marker(content)
+        if raw is None:
+            return content, "none"
+        if self._is_automated_session(key):
+            return cleaned, "none"
+        action = apply_topic_signal(session.metadata, raw)
+        if action in ("set", "changed"):
+            topic = (session.metadata or {}).get("topic")
+            if topic:
+                cleaned = f"{cleaned}\n\n📌 {topic}"
+        return cleaned, action
+
     def _history_budget_tokens(self) -> int:
         """Token budget for history trimming: 60% of context minus system + tools.
 
@@ -1154,6 +1247,8 @@ class AgentLoop:
                     return self._handle_context_command(session, msg)
                 elif cmd_name == "remember":
                     return self._handle_remember_command(session, msg, args)
+                elif cmd_name == "topic":
+                    return self._handle_topic_command(session, msg, args)
                 elif cmd_name == "help":
                     return self._handle_help_command(session, msg)
                 elif cmd_name == "stop":
@@ -1262,6 +1357,8 @@ class AgentLoop:
                 finally:
                     self.provider, self.model = _saved
                 final_content = self._maybe_stamp_provider(final_content, provider_role, override_provider)
+                if final_content:
+                    final_content, _ = self._apply_topic_marker(session, key, final_content)
                 self._save_turn(session, all_msgs, 1 + len(history))
                 self.sessions.save(session)
                 return OutboundMessage(
@@ -1286,6 +1383,11 @@ class AgentLoop:
                 "I encountered an issue generating a response. This may be due to context length "
                 "or model issues. Try /clear or starting a new conversation."
             )
+
+        # Session-topic piggyback: strip the machine marker and apply topic
+        # rules BEFORE the usage footer is appended.
+        if final_content:
+            final_content, _ = self._apply_topic_marker(session, key, final_content)
 
         # Append usage footer if verbose is enabled
         if verbose_flag:
@@ -1559,6 +1661,50 @@ Remaining: ~{remaining:,} tokens
             chat_id=msg.chat_id,
             content=f'✅ Saved to memory: "{args}"',
         )
+
+    def _handle_topic_command(
+        self, session: Session, msg: InboundMessage, args: str
+    ) -> OutboundMessage:
+        """Handle /topic command - show/set/clear the session topic (manual lock).
+
+        - `/topic` → show current topic (or "none").
+        - `/topic <name>` → set topic manually and lock it (LLM signal ignored).
+        - `/topic clear` → clear topic and unlock.
+        """
+        # Re-derive from the raw message to preserve the user's casing
+        # (the dispatch `args` is lowercased).
+        text = msg.content.strip()
+        parts = text.split(None, 1)
+        name = parts[1].strip() if len(parts) > 1 else ""
+
+        def _reply(content: str) -> OutboundMessage:
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
+
+        if not name:
+            current = (session.metadata or {}).get("topic")
+            locked = bool((session.metadata or {}).get("topic_user_set", False))
+            if current:
+                lock_note = " (locked 🔒 — LLM signal ignored)" if locked else ""
+                return _reply(f"📌 Current topic: {current}{lock_note}")
+            return _reply(
+                "No topic set for this session yet.\n\n"
+                "Usage: /topic <name> · /topic clear"
+            )
+
+        if name.lower() == "clear":
+            session.metadata.pop("topic", None)
+            session.metadata["topic_user_set"] = False
+            self.sessions.save(session)
+            return _reply("🗑️ Topic cleared and unlocked.")
+
+        title = " ".join(name.split())
+        words = title.split()
+        if len(words) > TOPIC_MAX_WORDS:
+            title = " ".join(words[:TOPIC_MAX_WORDS])
+        session.metadata["topic"] = title
+        session.metadata["topic_user_set"] = True
+        self.sessions.save(session)
+        return _reply(f"📌 Topic set to: {title} (locked 🔒 — LLM signal ignored)")
 
     def _handle_help_command(self, session: Session, msg: InboundMessage) -> OutboundMessage:
         """Handle /help command - show all commands."""

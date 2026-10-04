@@ -57,6 +57,11 @@ BUILTIN_COMMANDS = {
         description="Save important information to memory",
         subcommands=[],
     ),
+    "topic": BuiltinCommand(
+        name="topic",
+        description="Show, set, or clear this session's topic",
+        subcommands=[],
+    ),
     "help": BuiltinCommand(
         name="help",
         description="Show available commands",

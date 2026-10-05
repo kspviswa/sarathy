@@ -365,3 +365,124 @@ def test_backend_config_defaults_and_migration():
     # Old configs without the backend key validate with defaults.
     legacy = Config.model_validate({"agents": {}, "channels": {"telegram": {}}, "tools": {}})
     assert legacy.channels.backend.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# trigger ack (canned 'engaged, investigating' — fired in code, no LLM)
+# ---------------------------------------------------------------------------
+
+
+def test_tailer_fires_trigger_ack_to_live_chat(tmp_path):
+    """A tailed event must publish BOTH the inbound wake AND a canned ack to
+    the escalation target (live chat by default) — before any agent turn."""
+    jobs_db = tmp_path / "jobs.db"
+    _make_jobs_db(jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch._init_watermark()
+    _insert_event(jobs_db, 116, "crash", "Process 535195 is dead — job likely crashed.",
+                  payload={"pid": 535195})
+    events = ch._poll_new_events()
+    msg = ch._tail_event_to_inbound(events[0])
+    assert msg is not None
+
+    async def _run():
+        await ch.bus.publish_inbound(msg)
+        await ch._publish_trigger_ack(msg)
+        out = await asyncio.wait_for(ch.bus.consume_outbound(), timeout=2)
+        return out
+
+    out = asyncio.run(_run())
+    assert out.channel == "telegram"
+    assert out.chat_id == "5878545507"
+    assert "🛠️" in out.content
+    assert "[job 116 crash]" in out.content
+    assert "engaged" in out.content
+    assert "Full report shortly" in out.content
+    assert out.metadata == {"_progress": False, "_tool_hint": False}
+
+
+def test_tail_loop_publishes_ack_for_each_triggered_event(tmp_path):
+    """End-to-end: the real _tail_loop fires the ack per triggered event."""
+    jobs_db = tmp_path / "jobs.db"
+    _make_jobs_db(jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db, tail_event_types=["crash"])
+    ch._init_watermark()
+    _insert_event(jobs_db, 116, "crash", "boom", payload={})
+    _insert_event(jobs_db, 117, "crash", "bang", payload={})
+
+    async def _run():
+        # Drive the loop body manually (single iteration, no sleep).
+        acks = []
+        for event in ch._poll_new_events():
+            msg = ch._tail_event_to_inbound(event)
+            if msg is not None:
+                await ch.bus.publish_inbound(msg)
+                await ch._publish_trigger_ack(msg)
+                acks.append(msg)
+        outs = []
+        for _ in range(len(acks)):
+            outs.append(await asyncio.wait_for(ch.bus.consume_outbound(), timeout=2))
+        return outs
+
+    outs = asyncio.run(_run())
+    assert len(outs) == 2
+    assert all(o.channel == "telegram" and o.chat_id == "5878545507" for o in outs)
+    assert "[job 116 crash]" in outs[0].content
+    assert "[job 117 crash]" in outs[1].content
+
+
+@pytest.mark.asyncio
+async def test_http_event_fires_trigger_ack(tmp_path):
+    """POST /event publishes the inbound wake AND the canned ack."""
+    ch = _make_channel(tmp_path)
+    task = await _started(ch)
+    try:
+        port = ch.bound_port
+        envelope = {
+            "event_type": "completed",
+            "source": "jobctl",
+            "job_id": "42",
+            "source_session_id": "telegram:5878545507",
+            "payload": {"message": "all done"},
+            "ts": "2026-10-05T20:00:00Z",
+            "escalate_to": "telegram:5878545507",
+        }
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                f"http://127.0.0.1:{port}/event",
+                json=envelope,
+                headers=_auth_headers(),
+            ) as resp:
+                assert resp.status == 200
+        inbound = await asyncio.wait_for(ch.bus.consume_inbound(), timeout=2)
+        outbound = await asyncio.wait_for(ch.bus.consume_outbound(), timeout=2)
+        assert inbound.session_key_override == "backend:42"
+        assert outbound.channel == "telegram"
+        assert outbound.chat_id == "5878545507"
+        assert "🛠️" in outbound.content
+        assert "[job 42 completed]" in outbound.content
+    finally:
+        await _stopped(ch, task)
+
+
+def test_trigger_ack_respects_stamped_escalate_to(tmp_path):
+    """The ack targets the event's stamped escalation target, not the fallback."""
+    jobs_db = tmp_path / "jobs.db"
+    _make_jobs_db(jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch._init_watermark()
+    _insert_event(jobs_db, 10, "completed", "done",
+                  payload={"pid": 123, "escalate_to": "telegram:9876543210"})
+    events = ch._poll_new_events()
+    msg = ch._tail_event_to_inbound(events[0])
+    assert msg.metadata["escalate_to"] == "telegram:9876543210"
+
+    async def _run():
+        await ch.bus.publish_inbound(msg)
+        await ch._publish_trigger_ack(msg)
+        out = await asyncio.wait_for(ch.bus.consume_outbound(), timeout=2)
+        return out
+
+    out = asyncio.run(_run())
+    assert out.channel == "telegram"
+    assert out.chat_id == "9876543210"

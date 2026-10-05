@@ -1,0 +1,512 @@
+---
+title: "Architecture"
+---
+
+
+Sarathy is one asyncio process. Everything that can talk to the outside world —
+five channel adapters, the agent loop, the session store, the scheduler, the
+background reviewer, the heartbeat, and an embedded web server — runs inside a
+single event loop started by `run_gateway()` in `sarathy/gateway/run.py`.
+
+That single decision is the source of most of the system's simplicity: no IPC, no
+serialisation at the seams, no distributed tracing, and a data flow you can read
+end to end in one function.
+
+## The system map {#sec-arch-map}
+
+```{mermaid}
+%%| label: fig-system-map
+%%| fig-cap: "The whole system in one picture. The middle box is one asyncio process; the top box is everything that reaches it from outside, and the bottom box is the state it writes to disk. The only trust boundary that matters is the top one — loopback for automation, LAN for the dashboard."
+flowchart TB
+  subgraph ext["Outside the process"]
+    TG[Telegram]
+    DC[Discord]
+    EM[Email]
+    HTTP[HTTP / event]
+    UI[Browser]
+    CRONEXT[cron CLI]
+  end
+
+  subgraph proc["sarathy gateway — one asyncio process"]
+    direction TB
+    subgraph adapters["Channel adapters — sarathy/channels/"]
+      C1[telegram]
+      C2[discord]
+      C3[email]
+      C4[dashboard]
+      C5[backend]
+    end
+    BUS[("MessageBus<br/>inbound + outbound queues")]
+    LOOP["AgentLoop<br/>sarathy/agent/loop.py"]
+    SM[("SessionManager<br/>JSONL + SQLite index")]
+    CTX["ContextBuilder"]
+    PROV["RuntimeProvider<br/>local LLM providers"]
+    TOOLS["ToolRegistry"]
+    SK["SkillManager<br/>hot reload"]
+    REV["BackgroundReviewer"]
+    CRON["CronService"]
+    HB["HeartbeatService"]
+    USG[("usage.db<br/>telemetry")]
+  end
+
+  subgraph ws["Workspace (files)"]
+    W1[memory]
+    W2[sessions + archived_sessions]
+    W3[skills]
+    W4[cron/jobs.json]
+  end
+
+  TG --> C1
+  DC --> C2
+  EM --> C3
+  UI --> C4
+  HTTP --> C5
+  CRONEXT --> CRON
+
+  C1 --> BUS
+  C2 --> BUS
+  C3 --> BUS
+  C4 --> BUS
+  C5 --> BUS
+  BUS --> LOOP
+  LOOP --> SM
+  LOOP --> CTX
+  LOOP --> TOOLS
+  LOOP --> PROV
+  LOOP --> USG
+  LOOP --> REV
+  SM --> W2
+  CTX --> W1
+  SK --> W3
+  CRON --> W4
+  CRON --> LOOP
+  HB --> LOOP
+  LOOP --> BUS
+  BUS --> C1
+  BUS --> C2
+  BUS --> C3
+  BUS --> C4
+  BUS --> C5
+
+  style proc fill:#eef3f8,stroke:#3f6c99
+  style ext fill:#faf3e8,stroke:#b08a3e
+  style ws fill:#eaf3ec,stroke:#5f8a6d
+  style adapters fill:#ffffff,stroke:#7f9db9
+```
+
+Read the picture in three moves:
+
+1. **Adapters translate, they do not think.** Every channel adapter turns its
+   platform's events into `InboundMessage` and its replies into `OutboundMessage`,
+   and publishes them on one shared `MessageBus`. The agent never learns whether a
+   turn came from a chat app, a browser tab, or a scheduled job.
+2. **The loop owns the turn.** `AgentLoop` is the only component that calls the
+   model, runs tools, or writes to a session.
+3. **State lives in files.** Sessions, memory, skills and cron definitions are
+   files in the workspace. SQLite appears in exactly three places, each of which
+   needs a real query surface (see [Chapter 3](03-patterns.qmd#sec-pat-jsonl)).
+
+## The gateway process {#sec-arch-gateway}
+
+`run_gateway()` is a straight-line assembly function, which is deliberate: you can
+read it top to bottom and know the whole object graph. In order it constructs:
+
+| Step | Object | File | Why it is created here |
+|------|--------|------|------------------------|
+| 1 | `MessageBus` | `bus/queue.py` | Two `asyncio.Queue`s, nothing else |
+| 2 | `RuntimeProvider` | `providers/manager.py` | Owns the live provider + model + sampling params |
+| 3 | `SessionManager` | `session/manager.py` | JSONL store, LRU cache, SQLite index |
+| 4 | `CronService` | `cron/service.py` | Scheduler over a single JSON job file |
+| 5 | `AgentLoop` | `agent/loop.py` | The turn engine; receives the bus, provider, sessions, tools config |
+| 6 | `BackgroundReviewer` | `session/review.py` | Idle-time learning, attached to the loop |
+| 7 | `SkillManager` + `CommandManager` | `agent/skills.py`, `core/commands.py` | Skills become slash commands |
+| 8 | `ChannelManager` | `channels/manager.py` | Instantiates and starts the enabled adapters |
+| 9 | `HeartbeatService` | `heartbeat/service.py` | Periodic wake-up, bound to the agent |
+| 10 | cron/heartbeat callbacks | wired in `run.py` | Bridge from timers into the agent loop |
+
+Then it does the only interesting thing structurally:
+
+```python
+await asyncio.gather(
+    agent.run(),        # consumes the inbound queue forever
+    channels_task,      # starts adapters + outbound dispatcher forever
+)
+```
+
+`agent.run()` and the channel set are the two long-lived coroutines. Everything
+else — cron ticks, heartbeat ticks, background review, MCP connection setup — is a
+task spawned from one of them. Shutdown is symmetric: MCP exit stack closed,
+heartbeat stopped, cron stopped, agent stopped, channels stopped.
+
+### Process lifecycle
+
+The daemon itself is managed by a thin wrapper, `sarathy/gateway/manager.py`:
+`start` spawns `python -m sarathy.gateway.run --port N` with
+`start_new_session=True`, writes the child's PID to a file, and lets the child
+redirect its output to a timestamped log. `stop` sends `SIGTERM`. `status` probes
+the PID with signal 0 and clears the file if the process is gone. `logs` tails the
+newest log file, with `--follow` for `tail -f` behaviour.
+
+```{mermaid}
+%%| label: fig-lifecycle
+%%| fig-cap: "Gateway lifecycle as exposed by the CLI. `restart` is a stop followed by a start; there is no in-place reload, because several subsystems hold process-wide state (see Chapter 4)."
+stateDiagram-v2
+  [*] --> Absent
+  Absent --> Running: start
+  Running --> Absent: stop / SIGTERM
+  Running --> Starting: restart
+  Starting --> Running: child healthy after 1s
+  Starting --> Absent: child exited early
+  Absent --> Running: restart (was absent)
+```
+
+Note what is *not* here: no supervisor, no service manager, no container
+orchestration, no PID-file locking beyond the single file. The daemon is
+deliberately the simplest thing that survives a terminal closing.
+
+## The message bus {#sec-arch-bus}
+
+Two dataclasses and two queues (`sarathy/bus/events.py`, `sarathy/bus/queue.py`):
+
+```python
+@dataclass
+class InboundMessage:
+    channel: str
+    sender_id: str
+    chat_id: str
+    content: str
+    timestamp: datetime = field(default_factory=datetime.now)
+    media: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    session_key_override: str | None = None
+
+    @property
+    def session_key(self) -> str:
+        return self.session_key_override or f"{self.channel}:{self.chat_id}"
+```
+
+That `session_key` property is the load-bearing line of the whole design. Session
+isolation is not a policy enforced at the storage layer; it is a *string* computed
+once, at the edge, and carried by the message. Everything downstream — caching,
+archival, cost accounting, `/stop` targeting — keys off that string. If the
+channel layer computes the right key, the rest of the system cannot get it wrong.
+
+`metadata` is the second load-bearing decision: it is the per-channel escape
+hatch. Message identifiers for threaded replies, image-provider role overrides,
+tool-hint flags, `_progress` markers, `/btw` markers, and usage-role overrides all
+travel as metadata rather than as new message types or new bus methods. The bus
+never learns a new concept.
+
+`OutboundMessage` is smaller — `channel`, `chat_id`, `content`, `reply_to`,
+`media`, `metadata` — because the send path is genuinely uniform: look the channel
+up by name, call `send()`.
+
+## A message's journey {#sec-arch-journey}
+
+```{mermaid}
+%%| label: fig-journey
+%%| fig-cap: "One user message, end to end. Solid arrows are calls; the loop at the bottom is the only place the model is ever called."
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant C as Channel
+    participant B as MessageBus
+    participant L as AgentLoop
+    participant S as SessionManager
+    participant P as LLM provider
+    participant T as ToolRegistry
+
+    U->>C: send message
+    C->>C: is_allowed(sender_id)
+    C->>B: publish_inbound(InboundMessage)
+    B->>L: consume_inbound()
+    L->>L: global lock + semaphore + per-session lock
+    L->>S: get_or_create(session_key)
+    L->>L: ContextBuilder.build_messages()
+    loop until final answer or iteration cap
+        L->>P: chat(messages, tool definitions)
+        P-->>L: content and/or tool calls
+        L->>T: execute(tool, params)
+        T-->>L: result string
+    end
+    L->>S: save(session) — append JSONL + index upsert
+    L->>B: publish_outbound(OutboundMessage)
+    B->>C: routed by msg.channel
+    C->>U: deliver
+```
+
+Four things in that diagram are worth reading twice.
+
+**Permission is checked at the edge, once.** `BaseChannel._handle_message` calls
+`is_allowed(sender_id)` and drops the message if the sender is not on the
+allow-list. The agent loop never re-checks, because it cannot be reached by
+anything that did not pass through an adapter.
+
+**Concurrency is layered, and the order is fixed.** `_dispatch()` acquires, in
+order: the *global* lock (which guards runtime hot-reload, config mutations and
+the archival sweep), then a *semaphore* capping concurrent sessions
+(`maxConcurrentSessions`, default 4, clamped to 1..16), then the *per-session*
+lock. The rule "never hold a session lock while acquiring the global lock" is
+written into the code as a comment at the point where it would be violated.
+
+**The model is called from exactly one place.** `_run_agent_loop()` is a
+`while iteration < max_iterations` loop around a single `provider.chat()` call.
+Everything that looks like an agent loop elsewhere in the system — cron runs,
+heartbeat ticks, `/btw` side turns, subagents — re-enters this same function.
+That is what makes the cost ledger, the usage footer, the steer injection point
+and the reviewer idle-gate work without special cases.
+
+**Progress is a message, not a channel.** Long turns emit intermediate
+`OutboundMessage`s carrying `_progress` (and optionally `_tool_hint`) metadata.
+The outbound dispatcher drops them unless the channel config asks for them
+(`sendProgress`, `sendToolHints`). Channels that support drafts rewrite the same
+message over and over; channels that do not simply ignore them.
+
+## The agent loop, in detail {#sec-arch-loop}
+
+`AgentLoop.run()` is a poll loop with a one-second timeout so it can notice
+shutdown, plus three commands it intercepts *before* dispatching:
+
+- `/stop` — cancels every tracked task for that session key and every subagent
+  spawned from it.
+- `/steer` — enqueues an instruction into the running session's steer queue. The
+  loop drains that queue at the *top* of every iteration, so a steer takes effect
+  immediately after the current tool call returns, not after the whole turn. If
+  the session is idle, the prefix is stripped and the text is dispatched as an
+  ordinary message.
+- `/btw` — starts a genuinely concurrent second turn against a snapshot of the
+  session, in its own `##btw##` session, whose result is delivered when it is
+  ready. It even saves and restores the message tool's per-turn state so the side
+  turn cannot pollute duplicate suppression for the main turn.
+
+Everything else is dispatched as a task, tracked per session key, so that a slow
+turn in one chat never blocks another.
+
+Inside `_run_agent_loop()`, per iteration, in this exact order:
+
+1. Drain the steer queue and append any steers as synthetic user messages.
+2. If a per-turn provider role was requested and images are present, hand the
+   images to the provider tagged with the `image` role and rewrite the user
+   message with a textual description (the "describe-then-inject" step).
+3. Call the provider, streaming if the session or channel asks for it.
+4. Record usage telemetry — always, and never fatally: a telemetry failure must
+   not break a turn.
+5. If there are tool calls: emit a tool hint, execute each one through the
+   registry, append the results, and loop.
+6. Otherwise stop, and let the caller apply topic markers, the usage footer and
+   session persistence.
+
+## Tools {#sec-arch-tools}
+
+A tool is a dataclass-shaped ABC with four members: `name`, `description`,
+`parameters` (a JSON schema) and `async execute(**kwargs) -> str`
+(`sarathy/agent/tools/base.py`). The registry turns that into OpenAI-style
+function definitions and enforces three things before the tool body runs
+(`sarathy/agent/tools/registry.py`):
+
+- schema validation of the incoming parameters, with a readable error listing
+  *which* parameter was wrong;
+- a uniform error string, appended with an explicit instruction to the model to
+  analyse the failure and try a different approach rather than repeating the
+  same call;
+- registration order stability, so the cached prompt prefix does not churn.
+
+The default set registered at construction time is: filesystem (read, write,
+edit, list), shell execution, web fetch, optional web search, message send,
+subagent spawn, cron (only when a scheduler is wired in), memory, and skill
+management. MCP servers, if configured, are connected lazily on the first turn
+and their tools are merged into the same registry, so the agent cannot tell where
+a tool came from.
+
+Workspace restriction is enforced at tool construction, not at call time:
+`restrict_to_workspace` becomes the `allowed_dir` passed into the filesystem
+tools and the working directory for the shell tool.
+
+## Sessions {#sec-arch-sessions}
+
+`SessionManager` (`sarathy/session/manager.py`) is three cooperating things:
+
+- an **LRU cache** (`OrderedDict`, default 50 entries) of live `Session`
+  objects, because a session is mutated in memory and flushed to disk
+  opportunistically;
+- a **JSONL file per session key**, whose first line is a metadata record and
+  whose remaining lines are messages — append-friendly, greppable, and readable
+  by anything that speaks JSON;
+- a **SQLite index** (`sessions/index.db`) holding one row per session
+  (key, channel, topic, timestamps, archived flag) so listing sessions is a
+  single indexed query instead of reading every transcript.
+
+A `Session` is deliberately a plain list of message dicts plus a metadata dict.
+`get_history()` slices the unconsolidated tail, aligns it to a user turn so the
+model never sees an orphaned tool result, and projects only the fields the API
+cares about. History is *append-only* for prompt-cache efficiency: nothing in the
+turn path edits or rewrites past messages.
+
+Rotation happens in two places for two reasons. `Session.add_message()` rotates
+mid-turn when an interactive session reaches its size cap. `get_or_create()`
+rotates *between* turns for cron sessions, which must never rotate mid-run — see
+[the 500-message hard lesson](04-decisions.qmd#sec-dec-cron-cap).
+
+Archival writes a timestamped JSONL file into `archived_sessions/`, stamped
+`archived: true` only when the reviewer confirms it had no pending work for that
+session. Unstamped archives are re-verified once at gateway startup as crash
+recovery, and `prune_archives()` reaps old files while *keeping* anything still
+unverified, so a crash can never silently discard pending learning.
+
+## Providers and hot reload {#sec-arch-providers}
+
+`providers/registry.py` holds a frozen table of provider metadata: name,
+keywords, environment variable, display name, LiteLLM prefix, whether it is
+local, and a default API base. Four kinds are supported — three local, one
+"anything OpenAI-compatible". `providers/manager.py` turns a config entry into a
+client: direct HTTP client for OpenAI-compatible endpoints (which preserves
+reasoning content that LiteLLM would flatten), LiteLLM otherwise.
+
+The interesting part is `RuntimeProvider`. It holds the live provider and model,
+and it re-reads the config file when — and only when — the file's modification
+time changes:
+
+```python
+def refresh(self) -> bool:
+    mtime = self._file_mtime()
+    if mtime == self._mtime:
+        return False
+    ...
+```
+
+Rebuilding the client only happens if the *active* provider, model, temperature,
+max tokens or reasoning effort actually changed. A failed rebuild keeps the old
+provider rather than dropping to no provider at all. Every turn calls
+`runtime.apply_to(agent)` under the global lock, which is why switching models
+from the dashboard or the CLI takes effect on the next message without a restart —
+while changing *gateway source* still requires a restart. The distinction is
+drawn on purpose; see [Chapter 4](04-decisions.qmd#sec-dec-restart).
+
+Providers also carry roles (`main`, `local`, `image`), resolved per turn. A cron
+job payload can declare that it wants the `local` role, and the loop swaps the
+provider for that turn only, restores it in a `finally` block, and stamps the
+reply so the operator can see which provider ran it.
+
+## The dashboard as a channel {#sec-arch-dashboard}
+
+The dashboard is not a separate service. `DashboardChannel` starts an `aiohttp`
+application *inside the gateway's own event loop*
+(`sarathy/channels/dashboard/server.py`), serves the built single-page app, and
+exposes a REST API that operates directly on config, sessions and workspace
+files.
+
+```{mermaid}
+%%| label: fig-dashboard-api
+%%| fig-cap: "The dashboard's API surface, grouped by what it touches. Reads over the jobs database are strictly read-only; anything that mutates state goes through the same code paths the agent uses."
+flowchart LR
+  UI["Browser / PWA"] -->|REST| API["aiohttp router"]
+  UI <-->|WebSocket| WS["/ws frames"]
+  subgraph API
+    direction TB
+    AUTH["auth middleware<br/>pairing key → device token"]
+    CHAT["/api/chat, /api/chat/stop"]
+    SESS["/api/sessions, /api/session*"]
+    CONF["/api/config, /api/providers*"]
+    USAGE["/api/usage/summary"]
+    JOBS["/api/jobs, /api/jobs/{id}"]
+    WS[("workspace files")]
+    CFG[("config file")]
+  end
+  AUTH --> CHAT & SESS & CONF & USAGE & JOBS
+  CHAT --> BUS[("MessageBus")]
+  BUS --> LOOP["AgentLoop"]
+  JOBS -. "read-only" .-> JOBSDB[("jobs.db")]
+  CONF --> CFG
+  SESS --> WS
+```
+
+Two details are deliberate. First, the auth middleware validates pairing keys
+against the *on-disk* config on every request, so revoking a key from the CLI
+takes effect immediately instead of at the next restart; devices that pair
+successfully receive an opaque token whose hash is persisted, so a reconnect after
+a restart stays authenticated. Second, any config value whose key looks sensitive
+is replaced with a placeholder before the config document is handed back over the
+API, so the UI can render "set / not set" without ever receiving the value.
+
+## The backend trigger path {#sec-arch-backend}
+
+Added in 0.15.0, `sarathy/channels/backend.py` is the one adapter that is not a
+chat platform. It exists so that *programs* — not people — can start a turn. It
+has two independent ways in:
+
+- a loopback-only HTTP endpoint that accepts a signed event envelope;
+- a tailer that polls a jobs database read-only for new rows in an events table
+  and wakes a session per job.
+
+```{mermaid}
+%%| label: fig-backend
+%%| fig-cap: "The backend channel: two ways in, one isolated session out. Replies have nowhere to go, so they are logged, or escalated to a named channel when the envelope asks for it."
+flowchart LR
+  subgraph producers["Event producers"]
+    P1[Job runner]
+    P2[Worker]
+    P3[Operator tooling]
+  end
+  subgraph backend["BackendChannel"]
+    E{{"POST /event<br/>token-gated"}}
+    T["jobs.db tailer<br/>read-only, high-watermark"]
+  end
+  P1 --> E
+  P2 --> E
+  P3 --> E
+  P1 -.->|"event rows"| T
+  P2 -.->|"event rows"| T
+  T --> F["filter by event type"]
+  E --> N["InboundMessage<br/>session_key_override = backend:&lt;job&gt;"]
+  F --> N
+  N --> BUS[("MessageBus")]
+  BUS --> LOG["log, or escalate_to channel"]
+  style backend fill:#eef3f8,stroke:#3f6c99
+```
+
+The security posture is conservative by construction, not by policy:
+
+- it refuses to start at all if no credential is configured;
+- a non-loopback bind address is *forced back* to loopback with a warning, so
+  misconfiguration cannot expose it;
+- the token comparison is constant-time;
+- the jobs database is opened with SQLite's read-only URI flag, so the tailer
+  physically cannot write;
+- the tailer stores a high-watermark and, on first run, initialises it to the
+  current maximum event id — history is never replayed into a session.
+
+## Where the state lives {#sec-arch-state}
+
+```{mermaid}
+%%| label: fig-state
+%%| fig-cap: "Storage by kind. Files are the default because they are inspectable; SQLite appears only where a query surface earns it."
+flowchart TB
+  subgraph files["Plain files — default"]
+    F1["workspace/memory/*.md<br/>capped, protected sections"]
+    F2["workspace/sessions/*.jsonl<br/>metadata line + messages"]
+    F3["workspace/archived_sessions/*.jsonl"]
+    F4["workspace/skills/&lt;name&gt;/SKILL.md"]
+    F5["cron/jobs.json<br/>single job file"]
+  end
+  subgraph sqlite["SQLite — only where queries earn it"]
+    D1["sessions/index.db<br/>one row per session"]
+    D2["usage.db<br/>append-only event ledger + epochs"]
+    D3["jobs.db<br/>written by the job tooling, read by the dashboard"]
+  end
+  LOOP["AgentLoop"] --> F1 & F2
+  LOOP --> D2
+  SM["SessionManager"] --> F2 & F3 & D1
+  J["Jobs tooling (outside the package)"] --> D3
+  style files fill:#eaf3ec,stroke:#5f8a6d
+  style sqlite fill:#f7f0e6,stroke:#b08a3e
+```
+
+The rule of thumb the codebase follows: **if you would open it in a text editor to
+understand it, it is a file; if you would only ever query it, it is SQLite.**
+Sessions and memory are files because reading a transcript is a real debugging
+need. The sessions index, the usage ledger and the jobs ledger are SQLite because
+nothing reads them by eye — they exist to answer questions, and a directory of
+JSONL files cannot answer "all sessions updated in the last week" without a scan.
+
+Next: [Chapter 3](03-patterns.qmd) takes the components above and names the
+patterns they implement.

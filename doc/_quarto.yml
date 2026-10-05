@@ -1,0 +1,58 @@
+# Sarathy Engineering — Quarto book project
+#
+# Rendered from the repo root with:
+#     quarto render doc
+#
+# Sources live in doc/; the rendered site lands in docs/ at the repository root,
+# which is the directory GitHub Pages publishes by default. Keeping the output
+# outside the source directory also keeps Quarto's pre-render clean step from
+# touching the sources.
+#
+# Every asset the book needs (Bootstrap, Quarto's own JS, the bundled MermaidJS,
+# fonts) is written next to the HTML under docs/site_libs/ and referenced by
+# relative path, so a rendered page makes no external requests and works offline
+# from any static file server. `embed-resources` is deliberately NOT used here:
+# for a multi-page book it inlines each page's *neighbouring pages* as data URIs,
+# which makes page weight grow exponentially with chapter count.
+#
+# Diagrams are authored as native Quarto `{mermaid}` executable cells. For HTML
+# output Quarto bundles MermaidJS into the page and draws the diagram in the
+# browser, which is why no browser binary is needed at render time (Chrome is only
+# required for print output formats) and why the diagram source stays reviewable
+# as text.
+project:
+  type: book
+  output-dir: "../docs"
+
+book:
+  title: "Sarathy Engineering"
+  subtitle: "Architecture, patterns and the decisions behind a local-first personal AI assistant"
+  date: 2026-10-04
+  date-format: "YYYY-MM-DD"
+  search: true
+  sidebar:
+    style: docked
+    collapse-level: 1
+  page-navigation: true
+  chapters:
+    - index.qmd
+    - chapters/01-why-sarathy-exists.qmd
+    - chapters/02-architecture.qmd
+    - chapters/03-patterns.qmd
+    - chapters/04-decisions.qmd
+    - engineering-log.qmd
+  appendices:
+    - chapters/05-testing-and-ops.qmd
+
+format:
+  html:
+    theme:
+      - cosmo
+      - brand.yml
+    css: styles.css
+    toc: true
+    toc-depth: 3
+    anchor-sections: true
+    smooth-scroll: true
+    code-copy: true
+    df-print: paged

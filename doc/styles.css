@@ -1,0 +1,52 @@
+/* Sarathy Engineering — book stylesheet.
+ *
+ * Everything here is inlined into the rendered HTML at build time
+ * (`embed-resources: true`), so this file ships as a data URI and the book needs
+ * no network access to render correctly. Keep it small.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Diagrams
+ *
+ * Quarto draws `{mermaid}` cells with MermaidJS in the browser and exposes the
+ * diagram palette as CSS custom properties. Overriding a couple of them is the
+ * supported way to make diagrams match the book without hand-writing CSS against
+ * Mermaid's internal class names.
+ * ------------------------------------------------------------------------ */
+:root {
+  --mermaid-node-bg-color: #ffffff;
+  --mermaid-node-fg-color: #1c4e80;
+  --mermaid-label-bg-color: #ffffff;
+  --mermaid-label-fg-color: #1c4e80;
+  --mermaid-edge-color: #6b7f92;
+}
+
+.cell-output-display {
+  margin: 1.1rem 0 1.4rem 0;
+}
+
+/* Diagrams are centred and allowed to shrink on narrow viewports; Quarto already
+   makes them responsive, this just keeps the caption attached to the figure. */
+.quarto-figure figcaption,
+.quarto-float-caption {
+  font-size: 0.88em;
+  color: var(--bs-secondary-color, #55606b);
+}
+
+/* ---------------------------------------------------------------------------
+ * Code and tables
+ * ------------------------------------------------------------------------ */
+pre.sourceCode {
+  font-size: 0.82em;
+}
+
+table {
+  font-size: 0.92em;
+}
+
+/* ---------------------------------------------------------------------------
+ * The Engineering Log entry template: make the copy-paste block obvious.
+ * ------------------------------------------------------------------------ */
+.template {
+  font-size: 0.85em;
+}

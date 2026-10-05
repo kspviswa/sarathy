@@ -1,0 +1,172 @@
+---
+title: "Testing and Operations"
+---
+
+
+This appendix describes the machinery that decides whether a change is real. It is
+an appendix because it is about process rather than architecture — but it is the
+part that makes everything in the other chapters trustworthy.
+
+## The test suite {#sec-tests-suite}
+
+Tests live in `tests/`, one module per subsystem, written with `unittest`-style
+assertions and run under pytest with asyncio in automatic mode
+(`pyproject.toml`). There are 36 modules. The distribution says what the project
+actually worries about:
+
+| Area | Representative modules |
+|------|-------------------------|
+| Channels | `test_backend_channel.py`, `test_dashboard_channel.py`, `test_email_channel.py`, `test_dashboard_cli.py` |
+| Sessions | `test_session_rotation.py`, `test_sessions_index.py`, `test_archival_flag.py`, `test_history_trimmer.py`, `test_session_concurrency.py`, `test_session_topic_signal.py` |
+| Agent behaviour | `test_steer_btw.py`, `test_task_cancel.py`, `test_tool_validation.py`, `test_skills_summary_compact.py`, `test_has_image_content.py` |
+| Providers | `test_providers_manager.py`, `test_provider_role_dispatch.py`, `test_provider_cache_usage.py`, `test_provider_streaming_usage.py` |
+| Usage ledger | `test_usage_store.py`, `test_usage_recording.py`, `test_usage_footer.py` |
+| Operations | `test_cron_service.py`, `test_cron_commands.py`, `test_commands.py`, `test_heartbeat_service.py`, `test_cli_input.py` |
+
+Run them with:
+
+```bash
+pytest                       # everything
+pytest tests/test_cron_service.py   # one module
+ruff check sarathy/          # lint
+```
+
+## Test isolation is not optional {#sec-tests-isolation}
+
+The single most important fixture in the suite is an autouse one that redirects
+the usage store to a per-test temporary database and resets the module-level
+singleton around every test. Without it, any test that runs the agent loop would
+append rows to the real telemetry ledger.
+
+The store defends itself a second time: if it detects it is running under a test
+runner and no explicit path was provided, it diverts to a temporary database. Two
+independent nets exist because the cost of getting this wrong — a test suite that
+quietly corrupts production data — is much higher than the cost of the redundancy.
+
+The same principle appears in the product: the backend channel's jobs-database
+access is read-only, so a bug there cannot corrupt the ledger it reads.
+
+## What a regression test looks like here {#sec-tests-regression}
+
+Two examples, because they show what "verify before close" produces.
+
+**Stale-cache rotation.** The dashboard new-chat regression (`9d9747c`) did not
+stop at "it archives now". It added a test for the specific shape of the bug: a
+session that is *live in the cache* with messages since the last save, rotated
+through the new-chat path, and asserted that the archive contains the cached
+messages rather than the on-disk snapshot.
+
+**Contract tests for an external interface.** The backend channel tests build a
+real database with a real events table, construct the channel against it, and
+exercise the HTTP endpoint end to end — including the authorisation path, the
+envelope validation path, the high-watermark behaviour on first run, and the
+event-type filter. The envelope validation is a pure function, so it is tested
+directly as well.
+
+## Verify before close {#sec-tests-verify}
+
+The rule, stated once and applied everywhere:
+
+```{mermaid}
+%%| label: fig-verify-loop
+%%| fig-cap: "Verify before close. The loop only ends when the artifact has been looked at, and any fix discovered during verification sends you back through the tests."
+flowchart LR
+  CODE["Write the change<br/>tests land with it"] --> T1["1 · Re-run the tests"]
+  T1 -->|fail| CODE
+  T1 -->|green| LIVE["2 · Exercise the live thing<br/>call it, load it, send it"]
+  LIVE --> INSPECT["3 · Inspect the artifact"]
+  INSPECT -->|fix needed| CODE
+  INSPECT -->|looks right| T2["4 · Re-run the tests again"]
+  T2 --> CLOSE["Close and log"]
+  LIVE -.->|"flaky?"| FLAKE["Record as a defect.<br/>Retry until green is silence."]
+  style INSPECT fill:#eaf3ec,stroke:#5f8a6d
+  style FLAKE fill:#f7f0e6,stroke:#b08a3e
+```
+
+1. **Re-run the tests.** Green from an earlier run is not evidence.
+2. **Exercise the live thing.** Call the endpoint. Load the page. Send the message.
+3. **Inspect the artifact.** Read the output that will be handed over; do not
+   infer it from the code that produced it.
+4. **Re-run the tests again** if you changed anything while verifying.
+
+And the corollary: **a flaky test is a defect, not bad luck.** A suite that has to
+be re-run to be believed is not green, it is noisy. Re-run once to confirm;
+if it fails again, record it as a defect and fix the ordering or the shared state.
+Retrying until it passes converts a real signal into silence.
+
+## Change taxonomy and the action each requires {#sec-ops-matrix}
+
+| Change kind | Examples | Verification | Runtime action |
+|-------------|----------|--------------|----------------|
+| Pure logic | session rotation policy, marker parsing, tool validation | unit tests | none |
+| Behavioural | concurrency, routing, session archival stamping | unit tests covering the specific bug shape | none |
+| Interface contract | backend envelope validation, config schema | contract tests against the real consumer shape | none |
+| Configuration | model, provider, temperature, reasoning effort | read back the persisted config | none — hot-reloaded on next turn |
+| Skill content | editing a `SKILL.md` | the file watcher log line | none — reloaded in place |
+| Scheduler state | editing the cron job file | list the jobs after the change | **restart required** |
+| Gateway source | anything under `sarathy/` | full suite plus lint | **redeploy script, then restart** |
+
+The last two rows are the ones people get wrong, and they are wrong in opposite
+directions: editing scheduler state and waiting for it to take effect, and
+restarting the gateway for a configuration change that hot-reloads. The
+distinguishing question is simple: *does any long-lived process hold this in
+memory?* If yes, the change needs a restart. If no, it does not.
+
+## Restart procedure {#sec-ops-restart}
+
+Configuration-only:
+
+```
+sarathy gateway restart
+sarathy gateway status
+sarathy gateway logs --follow
+```
+
+Source: run the redeploy script. It reinstalls the package, writes a
+restart-request flag naming where the confirmation should go, restarts the daemon
+through its own CLI, and lets the new process consume the flag and send a boot
+notification reporting the version and provider status.
+
+The flag is the important part of the design: a restart is asynchronous from the
+operator's point of view, so the request is written to disk *before* the restart
+happens. That turns a silent restart into an observable one.
+
+**Never kill the daemon by process-name pattern.** A recorded incident: the pattern
+matched the shell command that was running the kill, so the session killed itself
+and recovery took roughly eight minutes. Restart through the CLI.
+
+## Deploy and version discipline {#sec-ops-version}
+
+**[ops]** Two habits, both cheap:
+
+- **Bump the version in the same commit as the behaviour change**, never in a
+  batch. The running process reports its own version at boot.
+- **Keep a deploy log** of what was deployed and when. Combined with the boot
+  notification's version line, it answers "is the fix live?" without anyone having
+  to remember.
+
+Commit messages carry the unit of work they belong to, which is what makes
+`git log --grep` useful and what the [Engineering Log](../engineering-log.qmd) is
+written from.
+
+## The book is a build artifact too {#sec-ops-book}
+
+This book follows the same discipline as the code, which is why it can be trusted
+as documentation:
+
+- **One command to rebuild.** `quarto render doc` from the repository root, using
+  only the local Quarto CLI. No other tool, no network, no package install.
+- **One command to check.** `python3 -m unittest discover tests -k book` verifies
+  that every page exists, that every internal link resolves, that every page is
+  well-formed, that the diagrams really are inline SVG in the output, and that no
+  forbidden content has crept into either the sources or the rendered pages.
+- **A sanitization gate that cannot be skipped.** The check runs over both the
+  `.qmd` sources and the rendered `.html`, because a book can leak through either
+  one — a private path in prose, or a personal name that arrived via a metadata
+  field.
+- **The output is committed-ready static HTML.** Every asset is inlined; the pages
+  make no network requests at all.
+
+The rules for adding content are in `doc/README.md`. The short version: repo paths
+only, no credentials, no identifiers, no names — and the gate will tell you if you
+slip.

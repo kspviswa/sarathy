@@ -1,0 +1,10 @@
+# Quarto build artefacts.
+#
+# doc/ holds SOURCES only. The rendered site is written to docs/ at the
+# repository root (`project.output-dir` in _quarto.yml), and docs/ is the
+# deliverable that gets committed and published.
+_quarto/
+.quarto/
+
+/.quarto/
+**/*.quarto_ipynb

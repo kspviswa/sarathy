@@ -1,0 +1,407 @@
+---
+title: "Patterns"
+---
+
+
+A pattern is only worth naming if it comes with the rule that keeps it honest.
+Each section below gives the pattern, where it lives, and the invariant that
+prevents it from rotting.
+
+## 1. Channel adapter {#sec-pat-adapter}
+
+**Pattern.** Adapter, over Strategy, over Plugin.
+
+One abstract base class (`sarathy/channels/base.py`) with three abstract methods —
+`start()`, `stop()`, `send()` — and two concrete helpers every adapter inherits:
+`is_allowed()` and `_handle_message()`. `_handle_message()` is the important one:
+it is the *only* way an adapter is allowed to get a message onto the bus, so
+permission checking and dataclass construction happen in exactly one place.
+
+```{mermaid}
+%%| label: fig-adapter
+%%| fig-cap: "The adapter seam. `BaseChannel` fixes the contract and the two invariants; the five concrete adapters only translate."
+classDiagram
+  class BaseChannel {
+    <<abstract>>
+    +str name
+    +start()
+    +stop()
+    +send(msg)
+    +is_allowed(sender_id) bool
+    #_handle_message(...)
+  }
+  class TelegramChannel
+  class DiscordChannel
+  class EmailChannel
+  class DashboardChannel
+  class BackendChannel
+  BaseChannel <|-- TelegramChannel
+  BaseChannel <|-- DiscordChannel
+  BaseChannel <|-- EmailChannel
+  BaseChannel <|-- DashboardChannel
+  BaseChannel <|-- BackendChannel
+```
+
+| Adapter | Inbound source | Outbound mechanism | Transport |
+|---------|----------------|--------------------|-----------|
+| `telegram` | Long-polling bot updates | Bot API (drafts for streaming) | `python-telegram-bot` |
+| `discord` | Gateway websocket | REST API, chunked at the length limit | `websockets` + `httpx` |
+| `email` | IMAP poll for unread | SMTP reply to the sender | stdlib `imaplib`/`smtplib` |
+| `dashboard` | REST + WebSocket from the PWA | WebSocket frames | `aiohttp` in-loop |
+| `backend` | Loopback HTTP + jobs-DB tail | Logged, or escalated to a channel | `aiohttp` in-loop |
+
+**Invariant.** A new channel never touches the agent loop, the session manager, or
+the bus internals. If adding a platform requires editing `AgentLoop`, the seam has
+leaked.
+
+**Two transport families, on purpose.** Telegram and Discord are *out-of-process*
+clients (a polling thread and a websocket that must be reconnected). Email is
+*pull-based* (poll a mailbox on an interval). Dashboard and backend are *in-loop*
+`aiohttp` servers. Supporting all three shapes in one interface is the reason the
+interface is so small.
+
+## 2. Input-matched media {#sec-pat-media}
+
+**Pattern.** Preserve the shape of the input in the output.
+
+The agent is a text engine; the channels are not. The adapter's job is to keep
+media typed end to end rather than flattening everything to text:
+
+- **Inbound.** An attachment is downloaded once, stored under the workspace media
+  directory, and referenced by path on `InboundMessage.media`. Voice notes, audio,
+  images and documents are distinguished by the platform payload, and images are
+  additionally base64-inlined into the prompt as data URLs (`ContextBuilder`).
+- **Outbound.** `OutboundMessage.media` is a list of paths, and the channel maps
+  each path to the right send call by extension — photo, voice, audio, or a
+  generic document with the original filename preserved.
+
+Two hard-won details are worth copying:
+
+- **Name downloads by content, not by handle.** Chat platforms hand out file
+  identifiers that share a long common prefix across every attachment in a chat,
+  so naming a download after a prefix of that identifier silently overwrote the
+  previous attachment. The fix hashes the *whole* identifier and keeps the
+  sender's own filename as a readable prefix (commit `e807552`).
+- **Do not fake what you do not have.** There is no in-tree text-to-speech
+  pipeline. Voice input is treated as media; a transcription provider module exists
+  for callers that configure one, and it degrades to an empty transcript with a
+  warning rather than failing the turn. The book says this explicitly rather than
+  implying a voice round-trip that does not exist.
+
+For images there is a third behaviour, "describe-then-inject": when the active
+provider is tagged with the `image` role, the turn hands the images to that
+provider first and rewrites the user's message with a textual description, so a
+small text-only main model can still reason about a screenshot.
+
+## 3. Session-key isolation {#sec-pat-sessionkey}
+
+**Pattern.** Identity as a string, computed at the edge.
+
+Every conversation is addressed by a `channel:chat_id` key. Three families exist
+and they are not interchangeable:
+
+| Key shape | Meaning | Rotation behaviour |
+|-----------|---------|--------------------|
+| `telegram:<chat>`, `discord:<guild/channel>`, `email:<address>` | A human conversation | Rotates when it reaches the size cap, mid-turn is fine |
+| `cron:<job>` | One scheduled job, reused across every run | Never mid-turn; rotates *between* runs |
+| `backend:<job>` | One job's event stream | Isolated per job, never mixed with a chat |
+| `cli:direct`, `heartbeat`, `dashboard:console` | Synthetic conversations | Ordinary interactive behaviour |
+
+Two escape hatches keep this from being rigid:
+
+- `session_key_override` on `InboundMessage` lets an adapter scope a session
+  differently from `channel:chat_id` — thread-scoped chat sessions, and the
+  backend channel's per-job isolation both use it.
+- A generated side-conversation suffix (`<key>##btw##<random>`) gives `/btw` a
+  real session of its own without inventing a new channel.
+
+`SessionManager` derives the channel from the prefix (`channel_for_key`) and
+special-cases exactly one prefix for rotation (`cron:`). That is the entire
+policy surface.
+
+**Invariant.** Two conversations never share a `Session` object. If a new
+integration needs shared context across conversations, it needs a different
+mechanism — not a shared key.
+
+## 4. Append-only transcripts with an index façade {#sec-pat-jsonl}
+
+**Pattern.** Write-ahead log plus a derived index.
+
+Sessions are JSONL files: line 1 is a metadata record, the rest are messages.
+That choice buys four things at once — append-only writes (so the prompt prefix
+stays byte-stable and provider prompt caches keep hitting), greppability, human
+readability, and trivial recovery, because a truncated file is still a valid
+prefix of a valid file.
+
+The cost is that *listing* sessions means reading every file. That is what the
+SQLite index is for: one row per session, upserted on every save, rebuilt from
+scratch if it is missing. Reading the index is a fast path; reading the metadata
+lines is the fallback when the index is absent or empty.
+
+```{mermaid}
+%%| label: fig-index
+%%| fig-cap: "The façade. Callers ask for sessions; they never learn whether the answer came from the index or from a directory scan."
+flowchart LR
+  CALL["list_sessions()"] --> TRY{"index present<br/>and non-empty?"}
+  TRY -->|yes| Q[("SELECT ... FROM sessions<br/>ORDER BY updated_at DESC")]
+  TRY -->|no| SCAN["read first line of<br/>each sessions/*.jsonl"]
+  Q --> OUT["list of session records"]
+  SCAN --> OUT
+  UP["save() / archive"] -.->|"one cheap upsert"| Q
+  style Q fill:#f7f0e6,stroke:#b08a3e
+```
+
+Two invariants keep the façade honest:
+
+- **The index is never authoritative.** If it disagrees with the files, the files
+  win. `rebuild_index()` exists precisely for that case, and it runs
+  automatically when the index file is missing at startup.
+- **Writes are one row, best effort.** A failed index upsert logs at debug level
+  and never fails the save. The transcript is the data; the index is a cache.
+
+**Archival rotation.** `archive_session()` writes a timestamped JSONL file and
+stamps it `archived: true` only when the reviewer confirms it has no pending work
+for that session. Unstamped archives are picked up by a one-shot sweep at gateway
+startup, and `prune_archives()` deletes old files while keeping anything still
+unverified. The result is that a crash between "archive" and "learn" cannot lose
+the learning.
+
+## 5. Skills as executable instructions {#sec-pat-skills}
+
+**Pattern.** Instructions as data, hot-reloaded, read on demand.
+
+A skill is a directory containing a `SKILL.md` with YAML frontmatter and a
+Markdown body. It is not code and not a plugin; it is *an instruction the agent
+chooses to read*. Three sources are merged with a fixed precedence — global,
+then workspace, then built-in, with later sources overriding earlier ones.
+
+The prompt never carries skill bodies. It carries a compact, generated summary:
+one line per category, the member names, and an availability flag derived from the
+skill's declared requirements (a CLI on `PATH`, an environment variable present).
+The agent then reads the full `SKILL.md` with the file tool when it decides the
+skill applies.
+
+```{mermaid}
+%%| label: fig-skills
+%%| fig-cap: "Skill discovery and hot reload. The file watcher is the only long-lived thread-like thing in the system, and it hands work to the event loop through a queue rather than touching state itself."
+flowchart LR
+  subgraph sources["Skill directories"]
+    S1[global skills]
+    S2[workspace skills]
+    S3[built-in skills]
+  end
+  MGR["SkillManager<br/>in-memory registry"] --> W
+  W["watchdog observer<br/>(thread)"] --> Q["queue"]
+  Q --> RELOAD["reload skill, run on_reload callbacks"]
+  RELOAD --> CMD["CommandManager sync<br/>slash commands refresh"]
+  RELOAD --> MGR
+  MGR --> SUMMARY["compact skills summary<br/>injected into the prompt"]
+  MGR --> READ["read_file(SKILL.md)<br/>when the agent decides"]
+  S1 --> MGR
+  S2 --> MGR
+  S3 --> MGR
+  style W fill:#f7f0e6,stroke:#b08a3e
+```
+
+**Invariant.** Editing a skill never requires restarting the gateway, and adding
+one never requires re-running an install step. The watcher debounces per file
+over a one-second window (editors write files twice), then hands the event to the
+event loop through a queue — the watcher thread never mutates the registry itself.
+
+**Why watchdog, not watchfiles.** The project depends on `watchdog` and not on
+`watchfiles`; this is stated in the README as a deliberate choice. The practical
+reasons are that `watchdog` exposes the underlying filesystem events (so the code
+can filter to `SKILL.md` and debounce by path), it has no Rust-backed native
+wheel to build, and it composes with a plain queue hand-off into asyncio. The
+choice is about *control over the event stream*, not throughput.
+
+**Skill-first discipline.** Skills are executable instructions, not
+documentation: read the file, then run the script it names, then record what
+happened. The built-in skills ship with real shell scripts (for example the tmux
+helpers) precisely so that "run the script" is a real instruction rather than an
+aspiration.
+
+## 6. Memory: capped files with protected sections {#sec-pat-memory}
+
+**Pattern.** Bounded buffer with a protected region.
+
+Long-term memory is two small Markdown files — facts and user profile — with hard
+character budgets (2200 and 1375 characters by default). Small on purpose: these
+files are injected into *every* system prompt, so their cost is paid on every
+turn. When the budget is exceeded, trimming is not "drop the oldest line":
+
+- the `HARD LESSONS` section is identified and preserved through any trim;
+- remaining sections are trimmed from the oldest inward, keeping the first section
+  and the most recent ones;
+- only if that is still too large does the protected set get narrowed.
+
+Two more invariants:
+
+- **Check before writing.** The memory tool refuses a write that would exceed the
+  budget, and refuses an entry that is already present. Dedup is search-then-
+  update, never append-and-hope.
+- **One writer at a time.** An `asyncio.Lock` guards writes to both files, and
+  appends are atomic read-modify-write under that lock.
+
+**Idle-time review, not parallel review.** `BackgroundReviewer`
+(`sarathy/session/review.py`) enqueues a snapshot after each turn and processes it
+only when the model is idle, with a cooldown and a busy counter rather than a
+boolean so that a side turn running alongside a main turn keeps the gate closed
+until *every* active model call finishes. The reason is stated in the module
+docstring: parallel model calls would degrade performance on local models, which
+is the whole point of running locally. Failed reviews are retried up to a bound
+and re-queued at the back so one bad snapshot cannot block the queue.
+
+## 7. Schedules as data {#sec-pat-cron}
+
+**Pattern.** Declarative payload, single store, explicit lifecycle.
+
+The scheduler (`sarathy/cron/service.py`) keeps every job in one JSON file and
+computes the next run time from the *last* run time, not from "now", so recurring
+schedules do not drift. It supports three schedule kinds — one-shot absolute,
+fixed interval, and a cron expression with an optional IANA timezone — and it
+validates the combination at add time so an invalid pair fails at the CLI rather
+than silently never firing.
+
+```{mermaid}
+%%| label: fig-cron
+%%| fig-cap: "One scheduler tick. The job payload is the single source of truth for a run: message text, delivery target, and which provider role should execute it."
+flowchart LR
+  T["timer armed for the<br/>earliest next_run"] --> DUE{"due?"}
+  DUE -->|no| T
+  DUE -->|yes| RUN["_execute_job(job)"]
+  RUN --> CALL["on_job(job)"]
+  CALL --> LOOP["agent.process_direct(<br/>session_key = cron:&lt;job&gt;)"]
+  LOOP --> DELIVER{"deliver and target set?"}
+  DELIVER -->|yes| OUT["publish_outbound"]
+  DELIVER -->|no| DASH["dashboard notification"]
+  RUN --> STATE["update last_status / last_error"]
+  STATE --> NEXT["compute next run from last run"]
+  NEXT --> SAVE["save job file"]
+  SAVE --> T
+  style LOOP fill:#eef3f8,stroke:#3f6c99
+```
+
+Two behaviours are worth stating because they are easy to get wrong:
+
+- **Missed runs are caught up at startup**, not silently skipped, but the next run
+  for recurring schedules is then recomputed so a long outage does not produce a
+  burst.
+- **The in-memory store is the working copy.** Mutations take an `asyncio.Lock`
+  and re-save the file, but the file is only read once at load. This is the
+  behaviour that produced the restart discipline in
+  [Chapter 4](04-decisions.qmd#sec-dec-cron-cache) — the scheduler is the one
+  component where an external edit is a genuine foot-gun.
+
+## 8. Jobs as a queryable ledger {#sec-pat-jobs}
+
+**Pattern.** Structured events, not log scraping.
+
+The job tooling that runs alongside the assistant writes every task to a SQLite
+database: one row per job with a status enum and a spec/result path, plus a
+`job_events` table forming a timeline of structured events. Two consumers read
+it, both read-only:
+
+- the dashboard's `/api/jobs` endpoints, which join the last event and an event
+  count per job, and serve the spec and result text for the detail view;
+- the backend channel's tailer, which wakes an isolated session when an event of
+  an interesting type appears.
+
+Completion is detected by the *producer* writing a done-marker file, not by a
+monitor grepping log output. That is a design choice with a large blast radius:
+log scraping is unparseable, races with log rotation, and produces false positives
+when a model quotes the phrase it was looking for. A file whose existence is the
+contract cannot be misread.
+
+**Invariant.** Consumers open the database with SQLite's read-only URI flag. The
+dashboard and the tailer physically cannot corrupt the ledger, which is what makes
+it safe to serve it over HTTP.
+
+## 9. Telemetry that cannot break a turn {#sec-pat-telemetry}
+
+**Pattern.** Fire-and-forget instrumentation with schema migrations.
+
+Every model call records a row into `usage.db`: tokens, cached tokens, completion
+tokens, cost, duration, finish reason, model, provider, channel, session key and
+epoch. The store is a lazy module-level singleton with thread-local connections,
+WAL journaling and a busy timeout, and it carries a real migration ladder
+(`user_version` 1 → 2 adds cost, 2 → 3 adds the session epoch) that is
+idempotent and re-checks the columns for fresh databases.
+
+Two invariants:
+
+- **Recording never raises into the turn.** Usage capture is wrapped so that a
+  telemetry failure is logged and the turn continues.
+- **Tests never touch the production ledger.** An autouse fixture points the store
+  at a per-test temporary database and resets the singleton around every test,
+  and the store itself has a second safety net that diverts to a temporary
+  database whenever it detects it is running under a test.
+
+This is a small pattern with a large payoff: it is why the assistant can afford to
+measure everything without adding a failure mode to the thing being measured.
+
+## 10. Verify before you close {#sec-pat-verify}
+
+**Pattern.** Definition of done includes the check.
+
+This is the pattern that governs how work happens, not just how code is
+structured, and it has three parts:
+
+- **Tests are part of the change, not a follow-up.** Each behaviour in this book
+  — session rotation, topic markers, backend envelopes, usage epochs, concurrency
+  ordering — arrived with its test in the same commit.
+- **The check is run by the person closing the work.** Green is not claimed from a
+  previous run; a suite that was flaky is re-run before it is believed, and if it
+  is still flaky that is recorded as a defect rather than retried until it passes.
+- **The artifact is inspected, not assumed.** A handoff report is evidence, not
+  proof; the finished thing is opened and walked.
+
+The same discipline shows up inside the product: the dashboard's session list has
+a fallback path precisely so that a missing cache degrades instead of lying, and
+the backend tailer refuses to replay history it cannot vouch for.
+
+## 11. Spec-first work {#sec-pat-spec}
+
+**Pattern.** One document per unit of work.
+
+Coding work is delegated to headless coding agents, and the contract is a single
+Markdown spec per unit: goal, verified context, precise scope, explicit
+constraints, a definition of done, and a progress tracker that a resumed run
+reads before doing anything. The agent is told to ground every claim in the
+repository, and the report at the end must contain evidence, not adjectives.
+
+Four rules make delegation safe rather than merely fast:
+
+- **Free models only.** Delegated runs use free-tier models. This is a hard rule,
+  not a preference.
+- **Verify before close.** Whoever finishes the unit re-runs the tests, exercises
+  live endpoints, and inspects the output before declaring it done.
+- **One agent per repository, serialized.** Two agents editing the same checkout
+  is a lost update waiting to happen.
+- **Restart the gateway after landing on gateway source.** Configuration changes
+  hot-reload; code changes do not. The rule that distinguishes the two is in
+  [Chapter 4](04-decisions.qmd#sec-dec-restart).
+
+## 12. Restart discipline {#sec-pat-restart}
+
+**Pattern.** Make the correct action the easy action, and name the wrong one.
+
+Changing *source* and changing *configuration* are different operations, and the
+system refuses to blur them:
+
+- **Source change** → a redeploy script: reinstall the package, write a
+  restart-request flag, restart the daemon through the CLI, then confirm with a
+  boot notification that carries version and provider status. The flag is
+  consumed by the new process at startup, which is how the operator learns what
+  is now live.
+- **Configuration change** → the CLI restart command, or nothing at all if the
+  subsystem hot-reloads (the runtime provider does; the scheduler does not).
+
+What is explicitly forbidden is killing the process by pattern from inside a
+session. A recorded incident cost roughly eight minutes of downtime because the
+kill pattern matched the shell command that was running it, severing the session
+that was doing the killing. The operational rule is now written down:
+restart through the CLI, never by hand.
+
+Next: [Chapter 4](04-decisions.qmd) tells the story behind each of these
+patterns — including the ones that were wrong first.

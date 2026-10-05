@@ -73,13 +73,15 @@ def _make_jobs_db(path: Path) -> None:
         conn.close()
 
 
-def _insert_event(path: Path, job_id: int, event_type: str, message: str = "hello") -> int:
+def _insert_event(path: Path, job_id: int, event_type: str, message: str = "hello",
+                  payload: dict | None = None) -> int:
     conn = sqlite3.connect(str(path))
     try:
         cur = conn.execute(
             "INSERT INTO job_events (job_id, ts, event_type, level, message, payload)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            (job_id, "2026-10-04T20:00:00Z", event_type, "info", message, json.dumps({})),
+            (job_id, "2026-10-04T20:00:00Z", event_type, "info", message,
+             json.dumps(payload or {})),
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -296,6 +298,22 @@ async def test_send_without_escalate_only_logs(tmp_path):
     ch = _make_channel(tmp_path)
     await ch.send(OutboundMessage(channel="backend", chat_id="42", content="quiet"))
     assert ch.bus.outbound_size == 0
+
+
+def test_tailer_prefers_stamped_escalation_over_fallback(tmp_path):
+    """jobctl stamps source_session onto every event payload (KB #396): the
+    tailer must prefer that stamped escalate_to over the live-chat fallback."""
+    jobs_db = tmp_path / "jobs.db"
+    _make_jobs_db(jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch._init_watermark()
+    _insert_event(jobs_db, 10, "completed", "done",
+                  payload={"pid": 123, "escalate_to": "telegram:9876543210",
+                           "source_session_id": "9876543210"})
+    events = ch._poll_new_events()
+    msg = ch._tail_event_to_inbound(events[0])
+    assert msg.metadata["escalate_to"] == "telegram:9876543210"
+    assert msg.metadata["source_session_id"] == "9876543210"
 
 
 def test_tailer_escalates_to_live_chat_by_default(tmp_path):

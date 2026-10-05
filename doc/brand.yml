@@ -1,0 +1,9 @@
+brand:
+  primary: "#1c4e80"
+  secondary: "#2f6f4e"
+  success: "#2f6f4e"
+  warning: "#8a6100"
+  danger: "#9b2c2c"
+  info: "#1c4e80"
+  light: "#f4f6f8"
+  dark: "#12212e"

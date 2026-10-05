@@ -1,0 +1,227 @@
+---
+title: "Engineering Log"
+---
+
+
+This is the **living page** of the book. Chapters 1 to 4 describe how the system
+works and why; this page records what *changed*, newest first, with the lesson
+attached.
+
+It is the mechanism that keeps the book honest. A decision chapter that is never
+updated is a museum; this page is the changelog that forces the rest of the book
+to be revisited whenever something moves.
+
+**Last entry:** 2026-10-04 · **Entries:** 5 · **Newest first**
+
+```{mermaid}
+%%| label: fig-log-loop
+%%| fig-cap: "The maintenance loop this page exists to drive. An entry that does not change a chapter is a changelog line; an entry that does is documentation."
+flowchart LR
+  CHANGE["A change lands"] --> ENTRY["New entry at the top<br/>what / why / lesson / where"]
+  ENTRY --> CHECK{"Does it contradict<br/>a chapter?"}
+  CHECK -->|yes| FIX["Fix the chapter<br/>in the same commit"]
+  CHECK -->|no| RENDER["Re-render and re-run<br/>the smoke test"]
+  FIX --> RENDER
+  RENDER --> DONE["Merged"]
+  ENTRY -.->|"when the lesson is general"| PATTERN["Patterns chapter"]
+  ENTRY -.->|"when the reasoning is new"| DECISION["Decisions chapter"]
+  style ENTRY fill:#eaf3ec,stroke:#5f8a6d
+```
+
+---
+
+## How to add an entry {#sec-log-howto}
+
+Append to the **top** of the list, directly under this line:
+
+1. Pick a date (the day of the change, not the day you are writing it up).
+2. Copy the template below verbatim and fill it in.
+3. Make the *lesson* sentence the point. If the entry cannot state a rule or a
+   correction, it is a changelog line, not a log entry.
+4. If the change invalidates something in a chapter, fix the chapter in the same
+   commit. A log entry that leaves the book contradicting itself is worse than no
+   entry.
+5. Re-render and re-run the smoke test (see `doc/README.md`).
+
+### Entry template {#sec-log-template}
+
+Copy everything between the rules below into a new `## YYYY-MM-DD — <title>`
+section.
+
+````markdown
+## YYYY-MM-DD — <short title>
+
+**What changed.** One or two sentences. Name the subsystem and the observable
+behaviour change. Reference the commit by short hash if there is one.
+
+**Why.** The situation that made the change necessary — a limit reached, a bug
+seen, a capability needed.
+
+**Lesson / correction.** The rule that comes out of it, phrased as an instruction
+to the next person (or the next run). This is the part future readers care
+about.
+
+**Where it lives.** The files that were touched, relative to the repository root.
+````
+
+### House rules for entries {#sec-log-rules}
+
+- **Evidence, not narrative.** Point at code, a commit, or an observable
+  behaviour. If neither exists, the entry is not ready.
+- **No personal information.** The same rules as the rest of the book: no names,
+  no identifiers, no credentials, no private paths. See `doc/README.md`.
+- **Corrections are welcome, mistakes are not hidden.** An entry that records
+  "this was wrong, here is the rule now" is more valuable than one that never
+  records a mistake.
+- **One entry per decision, not per commit.** A commit that touches three files for
+  one reason is one entry.
+
+---
+
+## 2026-10-04 — Session topics and the backend channel (0.15.0) {#log-0150}
+
+**What changed.** Two features in one release. First, a session *topic* is now
+carried on the reply itself: the prompt instructs the model to end every final
+user-facing response with exactly one trailing machine line naming a topic (or
+explicitly clearing it), and the gateway strips that line, applies it to session
+metadata, and persists it. Second, the backend channel landed — a loopback-only,
+token-gated event endpoint plus a read-only tailer over the jobs database, both
+waking isolated per-job sessions. A lightweight SQLite sessions index landed with
+it so listing sessions stops reading every transcript. Reference: `553c00e`.
+
+**Why.** Sessions had no subject line, so a long-lived conversation was
+unidentifiable in the dashboard and in any listing. And the assistant could only be
+started by a person in a chat, or on a schedule — automated work had no way to
+wake it.
+
+**Lesson / correction.** Machine-readable lines must be stripped at the edge,
+before anything else touches the content, and they must never be visible in user
+facing text. When the model fails to emit one, the gateway treats it as a no-op
+rather than an error: a missing signal degrades, it does not fail. And a
+user-locked value must never be overwritten by a model-suggested one — that
+asymmetry has to be encoded, not assumed.
+
+**Where it lives.** `sarathy/agent/loop.py`, `sarathy/agent/context.py`,
+`sarathy/agent/builtin_commands.py`, `sarathy/channels/backend.py`,
+`sarathy/channels/manager.py`, `sarathy/config/schema.py`,
+`sarathy/session/manager.py`.
+
+---
+
+## 2026-09-23 — Dashboard "new chat" parity, in four commits {#log-parity}
+
+**What changed.** The dashboard's new-chat action was brought to parity with the
+chat command, in sequence: archive the session the way the chat side does
+(`0138361`), persist the rotation and fix mobile layout and cache headers
+(`cade0bc`), archive the *live cached* session rather than the stale on-disk copy
+(`9d9747c`), and confirm it to the user with a success toast (`9d535f2`).
+
+**Why.** The mechanism existed and was wrong. Because the live conversation lives
+in memory and is only flushed to disk opportunistically, the rotation archived an
+old snapshot — every message since the last save was silently dropped from the
+archive — and never persisted the fresh session, so a reload resurrected the
+conversation that was supposed to be gone. Two archive files of identical size
+were the symptom that gave it away.
+
+**Lesson / correction.** *A rotation must archive what is actually in memory, not
+what happens to be on disk.* When a component caches, the cache is the truth and
+the file is a lagging copy — code that reads the file to make a destructive
+decision is operating on stale data. And parity is behaviour **plus**
+confirmation: a feature that works but does not say it happened is not finished.
+Walk both products end to end; do not compare mechanisms.
+
+**Where it lives.** `sarathy/session/manager.py`, the dashboard session view and
+its API handlers.
+
+---
+
+## 2026-09-22 — Per-session concurrency replaces the global dispatch lock {#log-concurrency}
+
+**What changed.** A single dispatch lock was replaced with three layers: a global
+lock for runtime hot-reload and configuration mutation, a semaphore capping
+concurrent sessions, and a per-session lock registry that creates locks on demand
+and drops them when idle. Matching guards were added around memory writes, the
+scheduler's job list, and the subagent task registry. Reference: `5929cc3`.
+
+**Why.** One slow turn blocked every other conversation — including side
+questions and background work. The assistant was effectively single-lane.
+
+**Lesson / correction.** Removing a global lock does not remove the need for
+locking; it moves the lock onto the objects that are genuinely shared. Lock
+*ordering* has to be written down at the point of acquisition, and the tests have
+to cover it: parallelism across sessions, ordering within a session, registry
+cleanup, cancellation isolation, and the global cap. A lock registry that never
+shrinks is a slow leak.
+
+**Where it lives.** `sarathy/agent/loop.py`, `sarathy/session/memory.py`,
+`sarathy/cron/service.py`, `sarathy/agent/subagent.py`, `tests/test_session_concurrency.py`.
+
+---
+
+## 2026-09-22 — Session epochs make "new conversation" reset the cost ledger {#log-epoch}
+
+**What changed.** Usage accounting gained an epoch: every usage row records the
+epoch that was current at the time, a small table holds the authoritative current
+epoch per session, and starting a new conversation advances it. The compact usage
+footer now reports the cost of the current conversation rather than of all
+time. References: `33f455b`, `3c107b1`, `054a211`.
+
+**Why.** Cost was attributed to the session key, which lives for the whole life of
+a chat. Starting a new conversation did not and could not reset the number without
+deleting history.
+
+**Lesson / correction.** *Attribute to the conversation, key on the identity.*
+Adding a dimension beat mutating history: the ledger stays append-only, and the
+authoritative epoch lives outside it so a crash between "advance" and "next turn"
+cannot desynchronise. Schema changes ship as numbered, idempotent migrations that
+re-check for existing columns.
+
+**Where it lives.** `sarathy/usage/store.py`, `sarathy/usage/footer.py`,
+`sarathy/agent/loop.py`.
+
+---
+
+## 2026-09-20 — Cron sessions rotate at the trim cap, and archives get retention {#log-cron-cap}
+
+**What changed.** Scheduled jobs now rotate their session *between* runs rather
+than never; the check runs on both the cached and the cold-load path; cron
+sessions are exempt from the save-time trim so their full history reaches the
+archive; and `prune_archives()` added an explicit retention policy that keeps
+anything still unverified. Reference: `67a3176`.
+
+**Why.** A cron session reuses one stable key and was being trimmed to the cap on
+every save, so the length could never reach the rotation threshold. The session
+was reused forever on a rolling window of stale context until a run's prompt
+overflowed — and the run reported success while producing nothing.
+
+**Lesson / correction.** *A cap and a rotation threshold are different numbers; if
+the cap keeps the value below the threshold, the rotation is dead code.* Verify
+that a limit can actually be reached before relying on the behaviour behind it.
+Rotation points must also respect the unit of work — a cron session may rotate
+between runs, never mid-run, because a mid-run rotation destroys the run's own
+context. And any directory that grows without a reaper needs an explicit retention
+policy.
+
+**Where it lives.** `sarathy/session/manager.py`, `tests/test_session_rotation.py`.
+
+---
+
+## Seeded from the history {#log-seed}
+
+These five entries were written from the commit history on 2026-10-04, working
+backwards from the release that prompted this book. They are deliberately short
+and deliberately specific: the point of an entry is the *lesson*, and a lesson
+that needs three paragraphs is usually a chapter section instead. Later entries
+should be written at the moment the decision is made, while the reasoning is still
+fresh — that is the only time the "why" is fully available.
+
+---
+
+## Related reading {#log-related}
+
+- [Chapter 3](chapters/03-patterns.qmd#sec-pat-restart) — the patterns these entries
+  exercise.
+- [Chapter 4](chapters/04-decisions.qmd) — the long-form version of each lesson.
+- `doc/README.md` — the update workflow and the sanitization rules.
+- [Appendix](chapters/05-testing-and-ops.qmd) — how a change gets verified before
+  it gets logged.

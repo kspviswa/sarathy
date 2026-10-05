@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>5&nbsp; Decisions and Backstories – Sarathy Engineering</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<link href="../engineering-log.html" rel="next">
+<link href="../chapters/03-patterns.html" rel="prev">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-e9132562829ddf2d07e2243a190d9d2f.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "sidebar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "start",
+  "type": "textbox",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<style>html{ scroll-behavior: smooth; }</style>
+<script src="../site_libs/quarto-diagram/mermaid.min.js"></script>
+<script src="../site_libs/quarto-diagram/mermaid-init.js"></script>
+<link href="../site_libs/quarto-diagram/mermaid.css" rel="stylesheet">
+
+
+<link rel="stylesheet" href="../styles.css">
+</head>
+
+<body class="nav-sidebar docked quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../chapters/04-decisions.html"><span class="chapter-number">5</span>&nbsp; <span class="chapter-title">Decisions and Backstories</span></a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+      <button type="button" class="btn quarto-search-button" aria-label="Search" onclick="window.quartoOpenSearch();">
+        <i class="bi bi-search"></i>
+      </button>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto">
+    <div class="pt-lg-2 mt-2 text-left sidebar-header">
+    <div class="sidebar-title mb-0 py-0">
+      <a href="../">Sarathy Engineering</a> 
+    </div>
+      </div>
+        <div class="mt-2 flex-shrink-0 align-items-center">
+        <div class="sidebar-search">
+        <div id="quarto-search" class="" title="Search"></div>
+        </div>
+        </div>
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text"><span class="chapter-number">1</span>&nbsp; <span class="chapter-title">Sarathy Engineering</span></span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/01-why-sarathy-exists.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text"><span class="chapter-number">2</span>&nbsp; <span class="chapter-title">Why Sarathy Exists</span></span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/02-architecture.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text"><span class="chapter-number">3</span>&nbsp; <span class="chapter-title">Architecture</span></span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/03-patterns.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text"><span class="chapter-number">4</span>&nbsp; <span class="chapter-title">Patterns</span></span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/04-decisions.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text"><span class="chapter-number">5</span>&nbsp; <span class="chapter-title">Decisions and Backstories</span></span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../engineering-log.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text"><span class="chapter-number">6</span>&nbsp; <span class="chapter-title">Engineering Log</span></span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="false">
+ <span class="menu-text">Appendices</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/05-testing-and-ops.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text"><span class="chapter-number">A</span>&nbsp; <span class="chapter-title">Testing and Operations</span></span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">Table of contents</h2>
+   
+  <ul>
+  <li><a href="#sec-dec-local" id="toc-sec-dec-local" class="nav-link active" data-scroll-target="#sec-dec-local"><span class="header-section-number">5.1</span> 1. Local-first, and what that forbids</a></li>
+  <li><a href="#sec-dec-fork" id="toc-sec-dec-fork" class="nav-link" data-scroll-target="#sec-dec-fork"><span class="header-section-number">5.2</span> 2. Fork, then diverge</a></li>
+  <li><a href="#sec-dec-process" id="toc-sec-dec-process" class="nav-link" data-scroll-target="#sec-dec-process"><span class="header-section-number">5.3</span> 3. One process, one event loop</a></li>
+  <li><a href="#sec-dec-bus" id="toc-sec-dec-bus" class="nav-link" data-scroll-target="#sec-dec-bus"><span class="header-section-number">5.4</span> 4. Channels as adapters over a two-dataclass bus</a></li>
+  <li><a href="#sec-dec-kb" id="toc-sec-dec-kb" class="nav-link" data-scroll-target="#sec-dec-kb"><span class="header-section-number">5.5</span> 5. A SQLite knowledge base instead of markdown-only memory</a></li>
+  <li><a href="#sec-dec-review" id="toc-sec-dec-review" class="nav-link" data-scroll-target="#sec-dec-review"><span class="header-section-number">5.6</span> 6. Idle-time review instead of a background thread per session</a></li>
+  <li><a href="#sec-dec-watchdog" id="toc-sec-dec-watchdog" class="nav-link" data-scroll-target="#sec-dec-watchdog"><span class="header-section-number">5.7</span> 7. watchdog over watchfiles</a></li>
+  <li><a href="#sec-dec-skillprompt" id="toc-sec-dec-skillprompt" class="nav-link" data-scroll-target="#sec-dec-skillprompt"><span class="header-section-number">5.8</span> 8. A compact skills summary instead of inlined skills</a></li>
+  <li><a href="#sec-dec-epoch" id="toc-sec-dec-epoch" class="nav-link" data-scroll-target="#sec-dec-epoch"><span class="header-section-number">5.9</span> 9. Session epochs: cost accounting that survives “start a new chat”</a></li>
+  <li><a href="#sec-dec-cron-cap" id="toc-sec-dec-cron-cap" class="nav-link" data-scroll-target="#sec-dec-cron-cap"><span class="header-section-number">5.10</span> 10. The 500-message cap and what a long-lived cron session did about it</a></li>
+  <li><a href="#sec-dec-cron-cache" id="toc-sec-dec-cron-cache" class="nav-link" data-scroll-target="#sec-dec-cron-cache"><span class="header-section-number">5.11</span> 11. The scheduler caches jobs in memory, so restart discipline became a rule</a></li>
+  <li><a href="#sec-dec-backend" id="toc-sec-dec-backend" class="nav-link" data-scroll-target="#sec-dec-backend"><span class="header-section-number">5.12</span> 12. The backend channel: a third trigger path</a></li>
+  <li><a href="#sec-dec-jobsdb" id="toc-sec-dec-jobsdb" class="nav-link" data-scroll-target="#sec-dec-jobsdb"><span class="header-section-number">5.13</span> 13. Jobs are a ledger, not a log file</a></li>
+  <li><a href="#sec-dec-parity" id="toc-sec-dec-parity" class="nav-link" data-scroll-target="#sec-dec-parity"><span class="header-section-number">5.14</span> 14. Dashboard parity means behaviour <em>and</em> confirmation</a></li>
+  <li><a href="#sec-dec-concurrency" id="toc-sec-dec-concurrency" class="nav-link" data-scroll-target="#sec-dec-concurrency"><span class="header-section-number">5.15</span> 15. Per-session concurrency instead of one global dispatch lock</a></li>
+  <li><a href="#sec-dec-restart" id="toc-sec-dec-restart" class="nav-link" data-scroll-target="#sec-dec-restart"><span class="header-section-number">5.16</span> 16. Restart: script for source, CLI for configuration</a></li>
+  <li><a href="#sec-dec-versioning" id="toc-sec-dec-versioning" class="nav-link" data-scroll-target="#sec-dec-versioning"><span class="header-section-number">5.17</span> 17. Versioning: the deploy log is the source of truth</a></li>
+  <li><a href="#sec-dec-testing" id="toc-sec-dec-testing" class="nav-link" data-scroll-target="#sec-dec-testing"><span class="header-section-number">5.18</span> 18. Tests, and treating a green suite as a claim</a></li>
+  <li><a href="#sec-dec-common" id="toc-sec-dec-common" class="nav-link" data-scroll-target="#sec-dec-common"><span class="header-section-number">5.19</span> What the decisions have in common</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title"><span class="chapter-number">5</span>&nbsp; <span class="chapter-title">Decisions and Backstories</span></h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>Every entry here has the same shape: the situation, the options that were real, the choice, and what the choice cost. Entries marked <strong>[ops]</strong> are operational practice from the operator’s engineering notes; the repository cannot corroborate them, and they are labelled so a reader can tell the difference.</p>
+<section id="sec-dec-local" class="level2" data-number="5.1">
+<h2 data-number="5.1" class="anchored" data-anchor-id="sec-dec-local"><span class="header-section-number">5.1</span> 1. Local-first, and what that forbids</h2>
+<p><strong>Situation.</strong> Mainstream assistants in this category are cloud products with large dependency surfaces. The author wanted an assistant that runs on one machine and can be understood end to end.</p>
+<p><strong>Options considered.</strong> (a) Extend a general framework; (b) keep the dependency list small and support local model servers only; (c) local-first with hosted escape hatches where they are genuinely better.</p>
+<p><strong>Choice.</strong> (c), with a strong bias toward (b). The provider registry supports four kinds — three local, one “any OpenAI-compatible endpoint” — and nothing requires an account. Web search and speech-to-text may use hosted providers, but both degrade to a warning when unconfigured.</p>
+<p><strong>Cost.</strong> Features that assume a strong hosted model are simply absent. Reasoning effort is opt-in because not every local model supports it. The <code>image</code> provider role exists because a text-only main model cannot read a screenshot.</p>
+</section>
+<section id="sec-dec-fork" class="level2" data-number="5.2">
+<h2 data-number="5.2" class="anchored" data-anchor-id="sec-dec-fork"><span class="header-section-number">5.2</span> 2. Fork, then diverge</h2>
+<p><strong>Situation.</strong> Build a personal assistant. Write one from scratch, or start from something that already works?</p>
+<p><strong>Choice.</strong> Fork an existing minimal Python agent and keep its skeleton — bus, loop, tools — while growing a different architecture around it.</p>
+<p><strong>Why.</strong> The fork’s shape is genuinely good for this problem: a message bus, a tool loop, a provider layer. There was no reason to rewrite those. Everything the project is actually <em>about</em> — channels, sessions, memory, scheduling, a web UI, a job ledger — did not exist in the starting point and now constitutes most of the code.</p>
+<p><strong>Cost.</strong> Over 878 commits the divergence is total: the channel layer, session management, the gateway lifecycle, the dashboard and the backend trigger path are all new. The fork is now ancestry rather than architecture. What remains of the original is the shape of the turn loop and the module layout, both of which have been heavily extended.</p>
+</section>
+<section id="sec-dec-process" class="level2" data-number="5.3">
+<h2 data-number="5.3" class="anchored" data-anchor-id="sec-dec-process"><span class="header-section-number">5.3</span> 3. One process, one event loop</h2>
+<p><strong>Situation.</strong> The system needs a web dashboard, a chat bot, a scheduler, an IMAP poller and a model client. Each could be its own process.</p>
+<p><strong>Options considered.</strong> (a) Multi-process with IPC; (b) one process with threads; (c) one asyncio process hosting everything, including the HTTP servers.</p>
+<p><strong>Choice.</strong> (c).</p>
+<p><strong>Why it works.</strong> The dashboard’s <code>aiohttp</code> app and the backend channel’s app run <em>inside the gateway’s event loop</em>. There is no serialisation between the web request that starts a turn and the turn itself: the request handler publishes an <code>InboundMessage</code> and returns. A websocket frame and a cron tick travel the same path a Telegram update does. Threads are used in exactly one place — the skill file watcher — and it hands work back to the loop through a queue.</p>
+<p><strong>Cost.</strong> One slow blocking call in the loop stalls everything. This is why the heavy model listing and context-length detection run in a thread or behind short timeouts, and why the reviewer is gated on model idleness instead of running concurrently.</p>
+</section>
+<section id="sec-dec-bus" class="level2" data-number="5.4">
+<h2 data-number="5.4" class="anchored" data-anchor-id="sec-dec-bus"><span class="header-section-number">5.4</span> 4. Channels as adapters over a two-dataclass bus</h2>
+<p><strong>Situation.</strong> Five very different integrations need to reach the same agent.</p>
+<p><strong>Rejected first.</strong> Giving the agent a channel-specific entry point, or inventing a richer event hierarchy per channel.</p>
+<p><strong>Choice.</strong> Two dataclasses and two queues. <code>InboundMessage</code> and <code>OutboundMessage</code>, with a free-form <code>metadata</code> dict on both.</p>
+<p><strong>Why.</strong> The bus stays two concepts wide forever. Anything new a channel needs — thread identifiers, image roles, progress flags, side-conversation markers — travels in <code>metadata</code> instead of widening the bus. Session identity is a property computed on the message, so every downstream subsystem agrees on it for free.</p>
+<p><strong>Cost.</strong> <code>metadata</code> is untyped, and the consequences of that are handled by convention: keys are underscore-prefixed for internal markers, and every consumer that reads one documents what it expects. A wrong key fails quietly. This is a deliberate trade of static safety for extensibility in a system with exactly one integrator.</p>
+</section>
+<section id="sec-dec-kb" class="level2" data-number="5.5">
+<h2 data-number="5.5" class="anchored" data-anchor-id="sec-dec-kb"><span class="header-section-number">5.5</span> 5. A SQLite knowledge base instead of markdown-only memory</h2>
+<p><strong>[ops]</strong> This decision lives in the operator’s workspace tooling, not in the package, so it is described as practice.</p>
+<p><strong>Situation.</strong> Markdown memory files are pleasant to read and edit by hand, but they stop working as a knowledge base past a few hundred facts: recall is substring matching, everything is in every prompt, and consolidation turns into guesswork about what to merge.</p>
+<p><strong>Choice.</strong> Durable facts live in a SQLite database with full-text search, behind a small command-line interface. The Markdown memory files are demoted to <em>indexes</em> — short, human-readable pointers into the database — rather than being the store.</p>
+<p><strong>Why.</strong> Search becomes a query instead of a grep, dedup becomes search-then-update instead of eyeballing, and the index files stay small enough to be injected into a prompt without cost. The single-writer discipline that follows from a CLI is the point: every durable fact enters through one path, so there is no question about who wrote what or when.</p>
+<p><strong>Cost.</strong> A fact that is not in the database does not exist, including for the operator. The CLI is a hard dependency of the workflow, and the index files drift if they are edited by hand — which is exactly why they are treated as generated.</p>
+</section>
+<section id="sec-dec-review" class="level2" data-number="5.6">
+<h2 data-number="5.6" class="anchored" data-anchor-id="sec-dec-review"><span class="header-section-number">5.6</span> 6. Idle-time review instead of a background thread per session</h2>
+<p><strong>Situation.</strong> The agent should learn durable facts from conversations. Commit <code>9046c87</code> records the earlier design: three writers — a per-message suggestion hook, a periodic consolidation pass, and a periodic archival pass — all writing the same memory file, producing duplicate entries and lost writes.</p>
+<p><strong>Choices.</strong> (a) Fix the races; (b) keep one writer but run it concurrently; (c) keep one writer and run it only when the model is idle.</p>
+<p><strong>Choice.</strong> (c), and the reviewer refuses to start while any model call is in flight.</p>
+<p><strong>Why.</strong> The concurrency is not the interesting constraint — the <em>hardware</em> is. Two simultaneous calls to a local model server halve throughput for the user’s own conversation. Idle-time review costs the user nothing and still runs after every turn.</p>
+<p><strong>Crash safety.</strong> The compromise this creates is that a session can be archived before its review finished. That is handled explicitly rather than ignored: the archive is stamped <code>archived: false</code>, a one-shot sweep at gateway startup re-processes anything still unstamped and then flips the stamp, and the archive pruner refuses to delete unstamped files. Learning is at-least-once, and the dedup check before each write makes that safe.</p>
+</section>
+<section id="sec-dec-watchdog" class="level2" data-number="5.7">
+<h2 data-number="5.7" class="anchored" data-anchor-id="sec-dec-watchdog"><span class="header-section-number">5.7</span> 7. watchdog over watchfiles</h2>
+<p><strong>Situation.</strong> Skills must hot-reload without a restart.</p>
+<p><strong>Choice.</strong> <code>watchdog</code>’s <code>Observer</code> with a custom event handler, not <code>watchfiles</code>.</p>
+<p><strong>Why.</strong> The handler receives raw filesystem events, which makes two things easy that would otherwise need extra machinery: filtering to <code>SKILL.md</code> only, and debouncing per path. The handler runs on a watchdog thread and does nothing but push <code>(event_type, path)</code> onto an <code>asyncio.Queue</code>; all mutation happens on the event loop, so the registry is never touched from two threads. It is also a pure Python package with no native wheel to build, which matters for a tool whose whole premise is “install it and it works”.</p>
+<p><strong>Cost.</strong> The debounce window is a hand-rolled one-second timer rather than a library feature, and the observer’s lifecycle has to be managed explicitly on start and stop.</p>
+</section>
+<section id="sec-dec-skillprompt" class="level2" data-number="5.8">
+<h2 data-number="5.8" class="anchored" data-anchor-id="sec-dec-skillprompt"><span class="header-section-number">5.8</span> 8. A compact skills summary instead of inlined skills</h2>
+<p><strong>Situation.</strong> Skills are Markdown documents. Inlining them all into the system prompt would be expensive and would blow the context on a small local model.</p>
+<p><strong>Choice.</strong> Generate a compact summary — category, count, availability, member names — and let the agent read the full <code>SKILL.md</code> with the file tool when it decides the skill applies.</p>
+<p><strong>Why.</strong> Skill <em>discovery</em> becomes cheap and constant-size, while skill <em>content</em> is paid for only when used. Availability is computed from each skill’s declared requirements so the summary tells the model what is actually runnable on this machine, not merely what is installed.</p>
+<p><strong>Cost.</strong> The agent has to make a decision to spend a tool call. A skill with a weak name or description simply never gets read; the summary line is therefore the most important text in the file, not the body.</p>
+</section>
+<section id="sec-dec-epoch" class="level2" data-number="5.9">
+<h2 data-number="5.9" class="anchored" data-anchor-id="sec-dec-epoch"><span class="header-section-number">5.9</span> 9. Session epochs: cost accounting that survives “start a new chat”</h2>
+<p><strong>Situation.</strong> Usage is recorded per session key. But a session key is reused across the whole life of a chat, so “how much has this conversation cost?” grows without bound and <code>/new</code> does not reset it.</p>
+<p><strong>Choice.</strong> Add an epoch counter, persisted per session key. Every usage row carries the epoch that was current when it was recorded, and a new conversation advances the epoch.</p>
+<p><strong>Why.</strong> Cost can then be reported per <em>conversation</em> rather than per <em>key</em>, with no destructive deletion of history — the ledger stays append-only and the <code>usage_sessions</code> table holds the authoritative current epoch, so a crash between “advance” and “next turn” cannot desynchronise. The footer shows the session cost at the current epoch.</p>
+<p><strong>Cost.</strong> One more dimension in every usage query and one more migration step (schema version 3). The epoch is resolved once per turn, not per record, so the hot path stays cheap.</p>
+</section>
+<section id="sec-dec-cron-cap" class="level2" data-number="5.10">
+<h2 data-number="5.10" class="anchored" data-anchor-id="sec-dec-cron-cap"><span class="header-section-number">5.10</span> 10. The 500-message cap and what a long-lived cron session did about it</h2>
+<p><strong>Situation.</strong> Sessions are trimmed to a configurable cap — 500 messages by default — when saved to disk. Cron jobs reuse a <em>stable</em> per-job key, so their session is truncated forever and never grows past the rotation threshold.</p>
+<p><strong>The failure.</strong> Because the trim kept the file at the cap, the rotation check never fired. The session was reused indefinitely on a rolling window of stale context until a run’s prompt blew past the model’s context, at which point the run silently produced nothing and <em>still reported success</em>. Commit <code>67a3176</code> records the fix and the reasoning.</p>
+<div class="cell" data-layout-align="default">
+<div class="cell-output-display">
+<div id="fig-rotation" class="quarto-float quarto-figure quarto-figure-center anchored">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-rotation-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<div>
+<pre class="mermaid mermaid-js" data-label="fig-rotation">flowchart TB
+  ADD["add_message()"] --&gt; Q1{"interactive&lt;br/&gt;session?"}
+  Q1 --&gt;|yes| R1{"messages &gt;=&lt;br/&gt;rotation cap?"}
+  R1 --&gt;|yes| ARC["archive + fresh session"]
+  R1 --&gt;|no| KEEP["append"]
+  Q1 --&gt;|no| KEEP
+  GOC["get_or_create()&lt;br/&gt;between turns"] --&gt; Q2{"cron session?"}
+  Q2 --&gt;|yes| R2{"messages &gt;&lt;br/&gt;trim cap?"}
+  R2 --&gt;|yes| ARC
+  R2 --&gt;|no| KEEP
+  Q2 --&gt;|no| R3{"messages &gt;=&lt;br/&gt;rotation cap?"}
+  R3 --&gt;|yes| ARC
+  R3 --&gt;|no| KEEP
+  style ARC fill:#eaf3ec,stroke:#5f8a6d
+</pre>
+</div>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-rotation-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;5.1: Rotation policy after the fix. Interactive sessions may rotate mid-turn; cron sessions rotate only between runs, so a run in progress is never interrupted.
+</figcaption>
+</figure>
+</div>
+</div>
+</div>
+<p><strong>The rule that came out of it.</strong></p>
+<ul>
+<li>Cron sessions never rotate mid-turn — a rotation in the middle of a run would destroy the run’s context.</li>
+<li>Cron sessions rotate <em>between</em> runs, at the trim cap, on both the cached path and the cold-load path (a session loaded from disk after a restart may already be over the threshold).</li>
+<li>Cron sessions are exempt from the save-time trim, with a generous safety cap instead, so the archive captures their full history rather than a rolling window.</li>
+<li>Archives get an explicit retention policy, because nothing else reaps them.</li>
+</ul>
+<p><strong>The generalisable lesson.</strong> A cap and a rotation threshold are different numbers. When a trim keeps a value below the threshold that triggers rotation, the rotation is dead code that nobody notices until the context explodes.</p>
+</section>
+<section id="sec-dec-cron-cache" class="level2" data-number="5.11">
+<h2 data-number="5.11" class="anchored" data-anchor-id="sec-dec-cron-cache"><span class="header-section-number">5.11</span> 11. The scheduler caches jobs in memory, so restart discipline became a rule</h2>
+<p><strong>Situation.</strong> The scheduler reads its job file once at startup and keeps the job list in memory, re-saving the file on every mutation.</p>
+<p><strong>The failure.</strong> Editing the job file from outside — by hand, or with a script that was not the scheduler — is silently undone. The next save writes the in-memory copy back over the edit. Nothing errors; the change simply disappears.</p>
+<p><strong>Choice.</strong> Keep the cache. It is the right structure: one owner for the job list, no read-modify-write races between the CLI and the timer, no file locking.</p>
+<p><strong>The price, paid explicitly.</strong> Editing scheduler state is now an operation that requires a gateway restart to take effect, so that fact became a documented operational rule rather than a trap:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 26%">
+<col style="width: 46%">
+<col style="width: 26%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Change</th>
+<th>Takes effect</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Model, provider, temperature, reasoning effort</td>
+<td>Next turn</td>
+<td>Nothing — hot-reloaded by mtime check</td>
+</tr>
+<tr class="even">
+<td>Skill file</td>
+<td>Immediately</td>
+<td>Nothing — file watcher</td>
+</tr>
+<tr class="odd">
+<td>Workspace file or memory</td>
+<td>Next turn</td>
+<td>Nothing</td>
+</tr>
+<tr class="even">
+<td>Cron job file</td>
+<td><strong>After restart</strong></td>
+<td>Restart the gateway</td>
+</tr>
+<tr class="odd">
+<td>Gateway source</td>
+<td><strong>After restart</strong></td>
+<td>Redeploy script, then restart</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Lesson.</strong> Caching in-memory is almost always the right call; the mistake is failing to write down which caches exist. Here the cache is the reason the restart rule exists, and the rule is now a table rather than folklore.</p>
+</section>
+<section id="sec-dec-backend" class="level2" data-number="5.12">
+<h2 data-number="5.12" class="anchored" data-anchor-id="sec-dec-backend"><span class="header-section-number">5.12</span> 12. The backend channel: a third trigger path</h2>
+<p><strong>Situation.</strong> Originally there were two ways to start a turn: a human in a chat, or a schedule. Both are person-shaped. Automated work — a long-running job, a worker, a migration — has nobody to press the button.</p>
+<p><strong>Choice.</strong> A channel adapter that is not a chat platform at all. It accepts signed event envelopes on a loopback endpoint and tails the jobs database for new events, and each event wakes an isolated session scoped to its job.</p>
+<p><strong>Why an adapter, not a hook.</strong> Because an adapter gets session isolation, the message bus, usage accounting, the agent loop, and reply handling for free. A hook would have to reimplement all of it, badly.</p>
+<p><strong>Why two ways in.</strong> Pushing over HTTP is simple and immediate, and a producer may not have a database. Tailing the database needs no producer changes at all: a job that already writes events gets woken for free. The tailer stores a high-watermark and starts <em>after</em> existing rows, so enabling it never replays history into a session.</p>
+<p><strong>Security posture.</strong> Refuses to start without a credential, forces a non-loopback bind address back to loopback, compares credentials in constant time, and opens the jobs database read-only.</p>
+<p><strong>Cost.</strong> Replies have nowhere to go. They are logged, unless the envelope names a channel to escalate to — which is the one case where a machine-initiated turn is allowed to interrupt a human.</p>
+</section>
+<section id="sec-dec-jobsdb" class="level2" data-number="5.13">
+<h2 data-number="5.13" class="anchored" data-anchor-id="sec-dec-jobsdb"><span class="header-section-number">5.13</span> 13. Jobs are a ledger, not a log file</h2>
+<p><strong>[ops]</strong> The job tooling is workspace-side; the <em>consumers</em> are in the package.</p>
+<p><strong>Situation.</strong> Long-running delegated work needs to be observable: what is running, what is stuck, what finished, and what did it actually produce.</p>
+<p><strong>Rejected.</strong> Parsing the agent’s log output.</p>
+<p><strong>Choice.</strong> One SQLite database with a jobs table (status enum, repo, model, spec and result paths, timestamps) and a <code>job_events</code> table forming the timeline.</p>
+<p><strong>Why.</strong> A status enum is queryable; a log line is not. A structured event table supports “show me everything that happened to this job in order” with one indexed query, which is exactly what the dashboard’s detail view does. And because the events are rows, the backend tailer can select on them.</p>
+<p><strong>Completion detection is a file, not a pattern match.</strong> The producer writes a done-marker file when the work is genuinely finished. Nothing greps a log for a success phrase. Grepping logs is fragile in a way that is invisible until it matters: log rotation truncates the evidence, concurrent runs interleave, and a model quoting the phrase it was looking for produces a false positive. A file’s existence is a contract that cannot be misread.</p>
+</section>
+<section id="sec-dec-parity" class="level2" data-number="5.14">
+<h2 data-number="5.14" class="anchored" data-anchor-id="sec-dec-parity"><span class="header-section-number">5.14</span> 14. Dashboard parity means behaviour <em>and</em> confirmation</h2>
+<p><strong>Situation.</strong> The dashboard is supposed to be “the same assistant, in a browser”. The first attempts implemented the <em>mechanism</em> — an endpoint that starts a new session — and still did not match.</p>
+<p><strong>The chain of commits is the story:</strong></p>
+<ol type="1">
+<li><code>0138361</code> — make the dashboard’s “new chat” archive the session the way Telegram’s <code>/new</code> does. Mechanism parity.</li>
+<li><code>cade0bc</code> — persist the rotation to disk, fix the mobile layout and the PWA cache headers.</li>
+<li><code>9d9747c</code> — fix the subtle one: the new-chat path was archiving a <em>stale disk copy</em> of the session, because the live conversation only lives in memory and is flushed opportunistically. Every message since the last save was silently dropped from the archive. The fix archives the cached session when there is one.</li>
+<li><code>9d535f2</code> — add the success toast, so the user is told “session archived, new chat started”.</li>
+</ol>
+<p><strong>The rule.</strong> Parity is behaviour <em>plus</em> confirmation UX. A feature that works but does not say it happened is not done. The user must not have to open the transcript to find out whether something was saved.</p>
+</section>
+<section id="sec-dec-concurrency" class="level2" data-number="5.15">
+<h2 data-number="5.15" class="anchored" data-anchor-id="sec-dec-concurrency"><span class="header-section-number">5.15</span> 15. Per-session concurrency instead of one global dispatch lock</h2>
+<p><strong>Situation.</strong> A single lock around message dispatch meant one slow turn blocked every other conversation — including <code>/btw</code> side questions and background work.</p>
+<p><strong>Choice.</strong> Three layers, in a fixed order: a global lock for runtime hot-reload and config mutation, a semaphore capping concurrent sessions, then a per-session lock. Commit <code>5929cc3</code> and its tests cover cross-session parallelism, ordering within a session, registry cleanup when locks go idle, <code>/stop</code> isolation, and the global cap.</p>
+<p><strong>Why a lock <em>registry</em> rather than a single lock.</strong> Sessions are created and destroyed constantly; a fixed set of locks would leak. The registry creates a lock on first use and drops it when it is unlocked with no waiters, which is why the tests assert the registry does not grow.</p>
+<p><strong>Why the lock ordering is documented.</strong> Deadlock avoidance by convention is fragile. The rule — global before session, never the reverse — is written at the point of acquisition where it would be violated, and the concurrency tests are what keep the convention honest.</p>
+<p><strong>The same commit added guards elsewhere</strong> for the same reason: an <code>asyncio.Lock</code> around memory writes, the scheduler’s job list, and the subagent task registry. The lesson is that per-session concurrency does not remove the need for locking; it moves it to the objects that are actually shared.</p>
+</section>
+<section id="sec-dec-restart" class="level2" data-number="5.16">
+<h2 data-number="5.16" class="anchored" data-anchor-id="sec-dec-restart"><span class="header-section-number">5.16</span> 16. Restart: script for source, CLI for configuration</h2>
+<p><strong>Situation.</strong> After landing a change to the gateway, the running process still has the old code. Something has to restart it.</p>
+<p><strong>Choices.</strong> (a) Kill by pattern; (b) restart by hand; (c) a redeploy script for source and a CLI restart for configuration.</p>
+<p><strong>Choice.</strong> (c). The redeploy script reinstalls the package, writes a restart-request flag containing where to send the confirmation, restarts the daemon through its own CLI, and lets the new process consume the flag and send a boot notification reporting version and provider status. Configuration-only changes use the CLI restart command.</p>
+<p><strong>The incident that produced the rule.</strong> An ad-hoc <code>kill</code> by process-name pattern was run from inside a session. The pattern matched the shell command that was running the kill, so the session killed itself. Recovery took roughly eight minutes. The rule is now blunt: <strong>restart through the CLI, never by hand.</strong></p>
+<p><strong>Why the flag file exists at all.</strong> Because a restart is asynchronous from the operator’s point of view. Writing “please tell me when you’re back” to disk before restarting is what turns a silent restart into an observable one — and it is why the confirmation includes the version that is now live, which is what <a href="#sec-dec-versioning">versioning</a> depends on.</p>
+</section>
+<section id="sec-dec-versioning" class="level2" data-number="5.17">
+<h2 data-number="5.17" class="anchored" data-anchor-id="sec-dec-versioning"><span class="header-section-number">5.17</span> 17. Versioning: the deploy log is the source of truth</h2>
+<p><strong>[ops]</strong></p>
+<p><strong>Situation.</strong> With an editable install and a restart-based deploy, “which code is running?” becomes a real question, not a rhetorical one.</p>
+<p><strong>Choice.</strong> Semantic version bumps committed alongside the change, a deploy log recording each deployed version, commit messages that reference the unit of work, and a boot notification that reports the version of the running process.</p>
+<p><strong>Why.</strong> The running process reports its own version at boot, and the deploy log records what was pushed when. Together they answer “is the fix live?” without anyone having to remember. Referencing the work unit in the commit message is what makes the history navigable: <code>git log --grep</code> finds every change belonging to a decision, and the Engineering Log at the end of this book is written from exactly that history.</p>
+<p><strong>Cost.</strong> Version discipline is manual. It is kept honest by bumping in the same commit as the behaviour change, never in a batch.</p>
+</section>
+<section id="sec-dec-testing" class="level2" data-number="5.18">
+<h2 data-number="5.18" class="anchored" data-anchor-id="sec-dec-testing"><span class="header-section-number">5.18</span> 18. Tests, and treating a green suite as a claim</h2>
+<p><strong>Situation.</strong> A single-operator project still accumulates enough moving parts — a scheduler, a watcher, three HTTP servers, four databases — that regressions are guaranteed without tests.</p>
+<p><strong>Choice.</strong> <code>unittest</code>-style suites under <code>tests/</code>, mandatory for every unit of work, plus two pieces of hygiene that matter more than usual here:</p>
+<ul>
+<li><strong>Isolation by default.</strong> An autouse fixture redirects the usage store to a per-test temporary database, so no test can write to the production ledger even if the test author forgets. The store has its own second net for the same reason.</li>
+<li><strong>A flaky test is a defect.</strong> A suite that must be re-run to be believed is not green, it is noisy. The rule is: re-run before trusting green; if it fails again, record it and fix it.</li>
+</ul>
+<p><strong>And the cultural half.</strong> Incidents and corrections are written down as durable facts, and the most important ones are promoted into the protected hard-lessons region of memory so trimming can never drop them. The cap-and-protect design in <a href="../chapters/03-patterns.html#sec-pat-memory">Chapter 3</a> exists because of this: the most valuable thing in the memory file is the thing that must survive.</p>
+</section>
+<section id="sec-dec-common" class="level2" data-number="5.19">
+<h2 data-number="5.19" class="anchored" data-anchor-id="sec-dec-common"><span class="header-section-number">5.19</span> What the decisions have in common</h2>
+<p>Read the list backwards and a single theme emerges: <strong>the code is the cheap part, the invariants are the expensive part.</strong></p>
+<ul>
+<li>Every cache in the system is documented as a cache, so “why did my edit vanish” is answerable.</li>
+<li>Every trimmer protects its most valuable content, because trimming is where value silently leaks.</li>
+<li>Every fan-out point — the bus, the API, the lock registry — has an invariant written at the point where it would be broken.</li>
+<li>Every capability that could be asynchronous but shouldn’t, isn’t: review waits for idleness, the scheduler waits for its timer, one agent per repository waits for the last one.</li>
+</ul>
+<p>The through-line from Chapter 1 is intact. The requirement was that the data flow be traceable. The decisions above are what it costs to keep that true as the system grows.</p>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+  <div class="nav-page nav-page-previous">
+      <a href="../chapters/03-patterns.html" class="pagination-link" aria-label="Patterns">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-number">4</span>&nbsp; <span class="chapter-title">Patterns</span></span>
+      </a>          
+  </div>
+  <div class="nav-page nav-page-next">
+      <a href="../engineering-log.html" class="pagination-link" aria-label="Engineering Log">
+        <span class="nav-page-text"><span class="chapter-number">6</span>&nbsp; <span class="chapter-title">Engineering Log</span></span> <i class="bi bi-arrow-right-short"></i>
+      </a>
+  </div>
+</nav>
+</div> <!-- /content -->
+
+
+
+
+<script src="../site_libs/quarto-html/zenscroll-min.js"></script>
+</body></html>

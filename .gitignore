@@ -4,6 +4,10 @@
 dist/
 build/
 docs/
+# ...except the rendered "Sarathy Engineering" book, which is a tracked
+# deliverable: sources live in doc/, the rendered site is committed to docs/
+# and published from there.
+!docs/
 *.egg-info/
 *.egg
 *.pyc

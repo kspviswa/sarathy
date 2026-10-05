@@ -1,0 +1,146 @@
+---
+title: "Why Sarathy Exists"
+---
+
+
+## The problem, stated honestly {#sec-origin-problem}
+
+Personal AI assistants are, at the time of writing, mostly products rather than
+systems. They are large, opinionated, and — for the person actually trying to
+understand them — opaque. The author's complaint, recorded in the project README,
+is specific and worth quoting as a design constraint rather than as a complaint:
+
+> mainstream open implementations of this category are "heavily bloated and
+> impossible for me to understand the data flow"; they "cater to all needs".
+
+That is the whole brief. Two words in it carry the engineering programme:
+
+- **"bloated"** → build only the features actually used, and be able to delete the
+  rest without ceremony. Every subsystem must justify its existence.
+- **"data flow"** → the operator must be able to trace any message end to end, by
+  reading code, without a debugger or an observability stack. Traceability is a
+  first-class requirement, not a nice-to-have.
+
+Those two words explain most of what follows in this book. A message bus with two
+dataclasses, rather than an event-sourcing framework, exists because the data flow
+must be legible. JSONL session files, rather than a document database, exist because
+a human must be able to read a conversation with `cat`. A `Tool` ABC with one
+`execute()` method, rather than a plugin marketplace, exists because "bloated" is
+the failure mode being engineered against.
+
+## The starting point {#sec-origin-fork}
+
+Sarathy is a fork of **nanobot**, an existing minimal Python agent. Two other
+projects shaped the direction: **nanoclaw**, which demonstrated that a genuinely
+small assistant is enough for daily use, and a public argument for personalizing
+agents — assistants tuned to one person rather than to everybody.
+
+Forking rather than starting from zero was a deliberate trade: inherit a working
+agent loop, message bus and provider layer, and spend the saved effort on the parts
+that are actually personal — memory, channels, sessions, scheduling. The cost of
+that trade is now visible in the tree: the fork's shape (bus → loop → tools) is
+still the skeleton, and everything distinctive has been grown on top of it.
+
+The name means *helper, guide, driver, mentor* in both Sanskrit and Tamil. It is
+chosen to describe the relationship the author wants with the tool: a driver who
+holds the map, not an oracle.
+
+## From fork to independent architecture {#sec-origin-evolution}
+
+The fork was a starting point, not a destination. Over 878 commits the package
+moved from "nanobot, lightly edited" to a system with subsystems that did not exist
+at all in the original:
+
+```{mermaid}
+%%| label: fig-evolution
+%%| fig-cap: "Subsystems that exist today and did not exist in the starting fork. Each row is a commit range in the history, not a plan."
+flowchart LR
+  subgraph fork["The fork, as inherited"]
+    F1[bus] --> F2[agent loop] --> F3[tools]
+    F1 --> F4[providers]
+  end
+  subgraph grown["Grown on top, in order"]
+    G1[channel adapters] --> G2[session store + archival]
+    G2 --> G3[skills + hot reload]
+    G3 --> G4[memory + idle-time review]
+    G4 --> G5[cron + heartbeat]
+    G5 --> G6[web dashboard]
+    G6 --> G7[usage telemetry]
+    G7 --> G8[backend trigger path]
+  end
+  F3 --> G1
+  F4 --> G7
+  style fork fill:#eef2f6,stroke:#8aa0b4
+  style grown fill:#eaf3ec,stroke:#5f8a6d
+```
+
+Four structural changes mark the transition from "fork" to "architecture":
+
+1. **The gateway.** The assistant stopped being a one-shot CLI and became a
+   long-lived daemon (`sarathy/gateway/run.py`) that owns every subsystem in a
+   single asyncio process. Lifecycle management (`start`/`stop`/`restart`/
+   `status`/`logs`) and log rotation came with it
+   (`sarathy/gateway/manager.py`).
+2. **Channels as adapters.** Telegram, Discord, Email, a web dashboard and — since
+   0.15.0 — a localhost-only backend trigger path all implement one interface
+   (`sarathy/channels/base.py`) and speak two dataclasses. The agent stopped
+   knowing which chat platform it was talking to.
+3. **Sessions became a subsystem.** Append-only JSONL transcripts with a metadata
+   header line, an LRU cache in front, a SQLite index beside them, and explicit
+   archival with a verification stamp (`sarathy/session/manager.py`).
+4. **Learning became a pipeline.** Memory writes used to race with each other from
+   three different call sites; they are now produced by a single idle-time
+   reviewer that refuses to run while the main model is busy
+   (`sarathy/session/review.py`).
+
+Each of those is documented in [Chapter 2](02-architecture.qmd); the reasoning
+behind them is in [Chapter 4](04-decisions.qmd).
+
+## What "local-first" means here, concretely {#sec-origin-local-first}
+
+"Local-first" is usually a slogan. In this repository it is a specific, checkable
+set of commitments:
+
+- **Local models are the default, not a fallback.** The default model in
+  `sarathy/config/schema.py` is a local Ollama model; the provider registry
+  (`sarathy/providers/registry.py`) carries exactly four kinds — Ollama, LMStudio,
+  vLLM, and "any OpenAI-compatible endpoint" — and three of the four are local by
+  construction.
+- **No mandatory cloud service.** There is no account, no signup, no hosted
+  component in the happy path. Web search and speech-to-text have optional hosted
+  providers behind configuration keys, and the assistant degrades cleanly when they
+  are absent (`sarathy/providers/transcription.py` logs a warning and returns an
+  empty transcript rather than failing).
+- **One machine.** The gateway, the database, the model server and the dashboard
+  all live on the same host. The only inbound socket bound to anything other than
+  loopback is the dashboard, and it is explicitly a LAN-reachable web UI with
+  pairing-key authentication (`sarathy/channels/dashboard/server.py`).
+- **Plain files as the substrate.** Sessions, memory, skills, cron definitions and
+  templates are all files you can open in an editor. SQLite appears only where a
+  query surface genuinely earns it: the sessions index, the usage ledger, and the
+  jobs ledger that the dashboard reads.
+- **Stdlib-first Python.** Requires Python 3.11+, ships as a single wheel, and leans
+  on the standard library (`asyncio`, `sqlite3`, `dataclasses`, `argparse`-era
+  `pathlib`) for the architecture; third-party libraries are used at the edges
+  where they earn their place (LLM transport, chat-platform APIs, HTTP).
+
+## What this project is not {#sec-origin-scope}
+
+Stated up front so the book is not read as a framework recommendation:
+
+- **It is not a general-purpose framework.** The README says so explicitly and
+  declines feature requests and pull requests; the project exists as a working
+  personal assistant that happens to be public.
+- **It is not a research artifact.** There are no benchmarks, no eval harness, no
+  model comparisons. The success criterion is "the assistant works every day".
+- **It is not multi-tenant.** Session keys are scoped to one operator's channels.
+  There is no concept of two users sharing a gateway.
+- **It is not a place for secrets.** Credentials live in the operator's own config
+  file, are never written to sessions, and are redacted before any config value is
+  handed back over the dashboard API (`redact_config` in
+  `sarathy/channels/dashboard/auth.py`).
+
+## Where the rest of the book goes {#sec-origin-next}
+
+Chapter 2 opens the hood: one gateway process, one bus, one loop, and the exact
+path a message takes from a chat app to a reply.

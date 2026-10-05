@@ -1,0 +1,105 @@
+---
+title: "Sarathy Engineering"
+subtitle: "Architecture, patterns and the decisions behind a local-first personal AI assistant"
+---
+
+
+**Last updated:** 2026-10-04 · **Status:** living document · **Book version:** tracks release 0.15.0
+
+Sarathy is a personal AI assistant built to run **locally**, on the operator's own
+hardware, against local models. This book is the engineering record behind it: how
+the system is put together, which patterns it leans on, and *why* each significant
+decision was made the way it was.
+
+It is written for engineers, not for users. If you want to install and run the
+assistant, read the project README instead. If you want to know how the thing is
+built and why it is built that way, you are in the right place.
+
+## How to read this book {#sec-how-to-read}
+
+The chapters are meant to be read in order, but they are independent:
+
+| # | Chapter | What it answers |
+|---|---------|-----------------|
+| — | This page | Orientation, house rules, provenance |
+| 1 | [Why Sarathy exists](chapters/01-why-sarathy-exists.qmd) | What problem the project was built to solve, and where it came from |
+| 2 | [Architecture](chapters/02-architecture.qmd) | How a message actually travels through the system |
+| 3 | [Patterns](chapters/03-patterns.qmd) | The recurring design patterns, and the rules that keep them honest |
+| 4 | [Decisions](chapters/04-decisions.qmd) | The backstories: what was tried, what was chosen, what it cost |
+| — | [Engineering Log](engineering-log.qmd) | Dated, newest-first record of notable changes and lessons |
+| 5 | [Testing & operations](chapters/05-testing-and-ops.qmd) (appendix) | How changes are verified and shipped |
+
+```{mermaid}
+%%| label: fig-book-map
+%%| fig-cap: "The shape of the book. Chapters 2 to 4 answer what the system is, how it is built, and why; the log is the append-only spine that keeps all three honest."
+flowchart LR
+  IDX["Cover<br/>house rules"] --> C1["1 · Origins"]
+  C1 --> C2["2 · Architecture"]
+  C2 --> C3["3 · Patterns"]
+  C3 --> C4["4 · Decisions"]
+  C4 --> LOG["Engineering Log<br/>living, newest first"]
+  C3 --> APX["Appendix<br/>testing and operations"]
+  C4 --> APX
+  LOG -.->|"lesson feeds back into"| C3
+  LOG -.->|"decision feeds back into"| C4
+  style LOG fill:#eaf3ec,stroke:#5f8a6d
+```
+
+## House rules for this book {#sec-house-rules}
+
+This book is destined for public hosting. Three rules are absolute, and they are
+enforced mechanically by the smoke test rather than by good intentions:
+
+1. **No personal information.** No real names — the book says "the operator", "the
+   author", "the user". No chat identifiers, no contact details, no credentials of
+   any kind.
+2. **No private paths.** Everything is named relative to the repository root
+   (`sarathy/agent/loop.py`) or relative to the *workspace* (`workspace/sessions/`).
+   The machine's home directories are never spelled out.
+3. **No private content.** Nothing from the operator's actual conversations, memory
+   store or job records is quoted. The book describes *mechanisms*, never payloads.
+
+Anything added to the book has to pass `python3 -m unittest discover tests -k book`,
+which scans both the `.qmd` sources and the rendered `.html` for the patterns above.
+See the update workflow in `doc/README.md` for how to add a chapter or a log entry.
+
+## Provenance: how claims in this book are sourced {#sec-provenance}
+
+Nothing here is invented. Every factual claim traces to one of four places, and the
+book says which:
+
+- **The code.** Repository-relative file paths and symbols, e.g.
+  `sarathy/session/manager.py` (`SessionManager._should_rotate`).
+- **The history.** Commits are referenced by their short hash and subject, e.g.
+  `67a3176` *"rotate cron sessions at the trim cap"*.
+- **The operator's engineering notes.** A small number of decisions are *not*
+  visible in the code at all — they are operational practice (how work is
+  delegated, how releases are tracked). Those are drawn from the author's notes
+  and are labelled explicitly as such, because the repository cannot corroborate
+  them.
+- **Absence of evidence.** Where the repository contradicts an expectation, the book
+  says so rather than papering over it. For example, there is no in-tree
+  text-to-speech pipeline; see the media-handling pattern in Chapter 3.
+
+## Provenance of the numbers {#sec-numbers}
+
+A few figures appear repeatedly. Their sources, as of 2026-10-04:
+
+| Figure | Value | Source |
+|--------|-------|--------|
+| Commits on `main` | 878 | `git log --oneline \| wc -l` |
+| Declared package version | 0.15.0 | `pyproject.toml` |
+| Python floor | 3.11 | `pyproject.toml` (`requires-python`) |
+| Python lines in `sarathy/` | ~16.7k | `find sarathy -name '*.py' \| xargs wc -l` |
+| Test modules | 36 | `ls tests/*.py` |
+| Built-in channel adapters | 5 | `sarathy/channels/manager.py` |
+| Built-in slash commands | 17 | `sarathy/agent/builtin_commands.py` |
+
+## Where to start {#sec-where-to-start}
+
+If you only read one diagram, read the [system map](chapters/02-architecture.qmd#fig-system-map)
+in Chapter 2: one flowchart, one sequence diagram, and you understand the shape of
+the whole thing.
+
+If you only read one chapter, read Chapter 4. Every design decision that cost
+something is written down there, including the ones that were wrong first.

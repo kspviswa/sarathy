@@ -1,0 +1,461 @@
+---
+title: "Decisions and Backstories"
+---
+
+
+Every entry here has the same shape: the situation, the options that were real,
+the choice, and what the choice cost. Entries marked **[ops]** are operational
+practice from the operator's engineering notes; the repository cannot corroborate
+them, and they are labelled so a reader can tell the difference.
+
+## 1. Local-first, and what that forbids {#sec-dec-local}
+
+**Situation.** Mainstream assistants in this category are cloud products with
+large dependency surfaces. The author wanted an assistant that runs on one machine
+and can be understood end to end.
+
+**Options considered.** (a) Extend a general framework; (b) keep the dependency
+list small and support local model servers only; (c) local-first with hosted
+escape hatches where they are genuinely better.
+
+**Choice.** (c), with a strong bias toward (b). The provider registry supports
+four kinds — three local, one "any OpenAI-compatible endpoint" — and nothing
+requires an account. Web search and speech-to-text may use hosted providers, but
+both degrade to a warning when unconfigured.
+
+**Cost.** Features that assume a strong hosted model are simply absent. Reasoning
+effort is opt-in because not every local model supports it. The `image` provider
+role exists because a text-only main model cannot read a screenshot.
+
+## 2. Fork, then diverge {#sec-dec-fork}
+
+**Situation.** Build a personal assistant. Write one from scratch, or start from
+something that already works?
+
+**Choice.** Fork an existing minimal Python agent and keep its skeleton — bus,
+loop, tools — while growing a different architecture around it.
+
+**Why.** The fork's shape is genuinely good for this problem: a message bus, a
+tool loop, a provider layer. There was no reason to rewrite those. Everything the
+project is actually *about* — channels, sessions, memory, scheduling, a web UI, a
+job ledger — did not exist in the starting point and now constitutes most of the
+code.
+
+**Cost.** Over 878 commits the divergence is total: the channel layer, session
+management, the gateway lifecycle, the dashboard and the backend trigger path are
+all new. The fork is now ancestry rather than architecture. What remains of the
+original is the shape of the turn loop and the module layout, both of which have
+been heavily extended.
+
+## 3. One process, one event loop {#sec-dec-process}
+
+**Situation.** The system needs a web dashboard, a chat bot, a scheduler, an IMAP
+poller and a model client. Each could be its own process.
+
+**Options considered.** (a) Multi-process with IPC; (b) one process with threads;
+(c) one asyncio process hosting everything, including the HTTP servers.
+
+**Choice.** (c).
+
+**Why it works.** The dashboard's `aiohttp` app and the backend channel's app run
+*inside the gateway's event loop*. There is no serialisation between the web
+request that starts a turn and the turn itself: the request handler publishes an
+`InboundMessage` and returns. A websocket frame and a cron tick travel the same
+path a Telegram update does. Threads are used in exactly one place — the skill
+file watcher — and it hands work back to the loop through a queue.
+
+**Cost.** One slow blocking call in the loop stalls everything. This is why the
+heavy model listing and context-length detection run in a thread or behind short
+timeouts, and why the reviewer is gated on model idleness instead of running
+concurrently.
+
+## 4. Channels as adapters over a two-dataclass bus {#sec-dec-bus}
+
+**Situation.** Five very different integrations need to reach the same agent.
+
+**Rejected first.** Giving the agent a channel-specific entry point, or inventing
+a richer event hierarchy per channel.
+
+**Choice.** Two dataclasses and two queues. `InboundMessage` and
+`OutboundMessage`, with a free-form `metadata` dict on both.
+
+**Why.** The bus stays two concepts wide forever. Anything new a channel needs —
+thread identifiers, image roles, progress flags, side-conversation markers —
+travels in `metadata` instead of widening the bus. Session identity is a property
+computed on the message, so every downstream subsystem agrees on it for free.
+
+**Cost.** `metadata` is untyped, and the consequences of that are handled by
+convention: keys are underscore-prefixed for internal markers, and every consumer
+that reads one documents what it expects. A wrong key fails quietly. This is a
+deliberate trade of static safety for extensibility in a system with exactly one
+integrator.
+
+## 5. A SQLite knowledge base instead of markdown-only memory {#sec-dec-kb}
+
+**[ops]** This decision lives in the operator's workspace tooling, not in the
+package, so it is described as practice.
+
+**Situation.** Markdown memory files are pleasant to read and edit by hand, but
+they stop working as a knowledge base past a few hundred facts: recall is
+substring matching, everything is in every prompt, and consolidation turns into
+guesswork about what to merge.
+
+**Choice.** Durable facts live in a SQLite database with full-text search, behind
+a small command-line interface. The Markdown memory files are demoted to *indexes*
+— short, human-readable pointers into the database — rather than being the store.
+
+**Why.** Search becomes a query instead of a grep, dedup becomes
+search-then-update instead of eyeballing, and the index files stay small enough to
+be injected into a prompt without cost. The single-writer discipline that follows
+from a CLI is the point: every durable fact enters through one path, so there is
+no question about who wrote what or when.
+
+**Cost.** A fact that is not in the database does not exist, including for the
+operator. The CLI is a hard dependency of the workflow, and the index files drift
+if they are edited by hand — which is exactly why they are treated as generated.
+
+## 6. Idle-time review instead of a background thread per session {#sec-dec-review}
+
+**Situation.** The agent should learn durable facts from conversations. Commit
+`9046c87` records the earlier design: three writers — a per-message suggestion
+hook, a periodic consolidation pass, and a periodic archival pass — all writing the
+same memory file, producing duplicate entries and lost writes.
+
+**Choices.** (a) Fix the races; (b) keep one writer but run it concurrently;
+(c) keep one writer and run it only when the model is idle.
+
+**Choice.** (c), and the reviewer refuses to start while any model call is in
+flight.
+
+**Why.** The concurrency is not the interesting constraint — the *hardware* is.
+Two simultaneous calls to a local model server halve throughput for the user's
+own conversation. Idle-time review costs the user nothing and still runs after
+every turn.
+
+**Crash safety.** The compromise this creates is that a session can be archived
+before its review finished. That is handled explicitly rather than ignored: the
+archive is stamped `archived: false`, a one-shot sweep at gateway startup
+re-processes anything still unstamped and then flips the stamp, and the archive
+pruner refuses to delete unstamped files. Learning is at-least-once, and the
+dedup check before each write makes that safe.
+
+## 7. watchdog over watchfiles {#sec-dec-watchdog}
+
+**Situation.** Skills must hot-reload without a restart.
+
+**Choice.** `watchdog`'s `Observer` with a custom event handler, not
+`watchfiles`.
+
+**Why.** The handler receives raw filesystem events, which makes two things easy
+that would otherwise need extra machinery: filtering to `SKILL.md` only, and
+debouncing per path. The handler runs on a watchdog thread and does nothing but
+push `(event_type, path)` onto an `asyncio.Queue`; all mutation happens on the
+event loop, so the registry is never touched from two threads. It is also a pure
+Python package with no native wheel to build, which matters for a tool whose
+whole premise is "install it and it works".
+
+**Cost.** The debounce window is a hand-rolled one-second timer rather than a
+library feature, and the observer's lifecycle has to be managed explicitly on
+start and stop.
+
+## 8. A compact skills summary instead of inlined skills {#sec-dec-skillprompt}
+
+**Situation.** Skills are Markdown documents. Inlining them all into the system
+prompt would be expensive and would blow the context on a small local model.
+
+**Choice.** Generate a compact summary — category, count, availability, member
+names — and let the agent read the full `SKILL.md` with the file tool when it
+decides the skill applies.
+
+**Why.** Skill *discovery* becomes cheap and constant-size, while skill *content*
+is paid for only when used. Availability is computed from each skill's declared
+requirements so the summary tells the model what is actually runnable on this
+machine, not merely what is installed.
+
+**Cost.** The agent has to make a decision to spend a tool call. A skill with a
+weak name or description simply never gets read; the summary line is therefore the
+most important text in the file, not the body.
+
+## 9. Session epochs: cost accounting that survives "start a new chat" {#sec-dec-epoch}
+
+**Situation.** Usage is recorded per session key. But a session key is reused
+across the whole life of a chat, so "how much has this conversation cost?" grows
+without bound and `/new` does not reset it.
+
+**Choice.** Add an epoch counter, persisted per session key. Every usage row
+carries the epoch that was current when it was recorded, and a new conversation
+advances the epoch.
+
+**Why.** Cost can then be reported per *conversation* rather than per *key*, with
+no destructive deletion of history — the ledger stays append-only and the
+`usage_sessions` table holds the authoritative current epoch, so a crash between
+"advance" and "next turn" cannot desynchronise. The footer shows the session cost
+at the current epoch.
+
+**Cost.** One more dimension in every usage query and one more migration step
+(schema version 3). The epoch is resolved once per turn, not per record, so the
+hot path stays cheap.
+
+## 10. The 500-message cap and what a long-lived cron session did about it {#sec-dec-cron-cap}
+
+**Situation.** Sessions are trimmed to a configurable cap — 500 messages by
+default — when saved to disk. Cron jobs reuse a *stable* per-job key, so their
+session is truncated forever and never grows past the rotation threshold.
+
+**The failure.** Because the trim kept the file at the cap, the rotation check
+never fired. The session was reused indefinitely on a rolling window of stale
+context until a run's prompt blew past the model's context, at which point the run
+silently produced nothing and *still reported success*. Commit `67a3176` records
+the fix and the reasoning.
+
+```{mermaid}
+%%| label: fig-rotation
+%%| fig-cap: "Rotation policy after the fix. Interactive sessions may rotate mid-turn; cron sessions rotate only between runs, so a run in progress is never interrupted."
+flowchart TB
+  ADD["add_message()"] --> Q1{"interactive<br/>session?"}
+  Q1 -->|yes| R1{"messages >=<br/>rotation cap?"}
+  R1 -->|yes| ARC["archive + fresh session"]
+  R1 -->|no| KEEP["append"]
+  Q1 -->|no| KEEP
+  GOC["get_or_create()<br/>between turns"] --> Q2{"cron session?"}
+  Q2 -->|yes| R2{"messages ><br/>trim cap?"}
+  R2 -->|yes| ARC
+  R2 -->|no| KEEP
+  Q2 -->|no| R3{"messages >=<br/>rotation cap?"}
+  R3 -->|yes| ARC
+  R3 -->|no| KEEP
+  style ARC fill:#eaf3ec,stroke:#5f8a6d
+```
+
+**The rule that came out of it.**
+
+- Cron sessions never rotate mid-turn — a rotation in the middle of a run would
+  destroy the run's context.
+- Cron sessions rotate *between* runs, at the trim cap, on both the cached path and
+  the cold-load path (a session loaded from disk after a restart may already be
+  over the threshold).
+- Cron sessions are exempt from the save-time trim, with a generous safety cap
+  instead, so the archive captures their full history rather than a rolling
+  window.
+- Archives get an explicit retention policy, because nothing else reaps them.
+
+**The generalisable lesson.** A cap and a rotation threshold are different
+numbers. When a trim keeps a value below the threshold that triggers rotation, the
+rotation is dead code that nobody notices until the context explodes.
+
+## 11. The scheduler caches jobs in memory, so restart discipline became a rule {#sec-dec-cron-cache}
+
+**Situation.** The scheduler reads its job file once at startup and keeps the job
+list in memory, re-saving the file on every mutation.
+
+**The failure.** Editing the job file from outside — by hand, or with a script
+that was not the scheduler — is silently undone. The next save writes the
+in-memory copy back over the edit. Nothing errors; the change simply disappears.
+
+**Choice.** Keep the cache. It is the right structure: one owner for the job list,
+no read-modify-write races between the CLI and the timer, no file locking.
+
+**The price, paid explicitly.** Editing scheduler state is now an operation that
+requires a gateway restart to take effect, so that fact became a documented
+operational rule rather than a trap:
+
+| Change | Takes effect | Action |
+|--------|--------------|--------|
+| Model, provider, temperature, reasoning effort | Next turn | Nothing — hot-reloaded by mtime check |
+| Skill file | Immediately | Nothing — file watcher |
+| Workspace file or memory | Next turn | Nothing |
+| Cron job file | **After restart** | Restart the gateway |
+| Gateway source | **After restart** | Redeploy script, then restart |
+
+**Lesson.** Caching in-memory is almost always the right call; the mistake is
+failing to write down which caches exist. Here the cache is the reason the
+restart rule exists, and the rule is now a table rather than folklore.
+
+## 12. The backend channel: a third trigger path {#sec-dec-backend}
+
+**Situation.** Originally there were two ways to start a turn: a human in a chat,
+or a schedule. Both are person-shaped. Automated work — a long-running job, a
+worker, a migration — has nobody to press the button.
+
+**Choice.** A channel adapter that is not a chat platform at all. It accepts
+signed event envelopes on a loopback endpoint and tails the jobs database for new
+events, and each event wakes an isolated session scoped to its job.
+
+**Why an adapter, not a hook.** Because an adapter gets session isolation, the
+message bus, usage accounting, the agent loop, and reply handling for free. A hook
+would have to reimplement all of it, badly.
+
+**Why two ways in.** Pushing over HTTP is simple and immediate, and a producer may
+not have a database. Tailing the database needs no producer changes at all: a job
+that already writes events gets woken for free. The tailer stores a high-watermark
+and starts *after* existing rows, so enabling it never replays history into a
+session.
+
+**Security posture.** Refuses to start without a credential, forces a non-loopback
+bind address back to loopback, compares credentials in constant time, and opens the
+jobs database read-only.
+
+**Cost.** Replies have nowhere to go. They are logged, unless the envelope names a
+channel to escalate to — which is the one case where a machine-initiated turn is
+allowed to interrupt a human.
+
+## 13. Jobs are a ledger, not a log file {#sec-dec-jobsdb}
+
+**[ops]** The job tooling is workspace-side; the *consumers* are in the package.
+
+**Situation.** Long-running delegated work needs to be observable: what is
+running, what is stuck, what finished, and what did it actually produce.
+
+**Rejected.** Parsing the agent's log output.
+
+**Choice.** One SQLite database with a jobs table (status enum, repo, model, spec
+and result paths, timestamps) and a `job_events` table forming the timeline.
+
+**Why.** A status enum is queryable; a log line is not. A structured event table
+supports "show me everything that happened to this job in order" with one indexed
+query, which is exactly what the dashboard's detail view does. And because the
+events are rows, the backend tailer can select on them.
+
+**Completion detection is a file, not a pattern match.** The producer writes a
+done-marker file when the work is genuinely finished. Nothing greps a log for a
+success phrase. Grepping logs is fragile in a way that is invisible until it
+matters: log rotation truncates the evidence, concurrent runs interleave, and a
+model quoting the phrase it was looking for produces a false positive. A file's
+existence is a contract that cannot be misread.
+
+## 14. Dashboard parity means behaviour *and* confirmation {#sec-dec-parity}
+
+**Situation.** The dashboard is supposed to be "the same assistant, in a browser".
+The first attempts implemented the *mechanism* — an endpoint that starts a new
+session — and still did not match.
+
+**The chain of commits is the story:**
+
+1. `0138361` — make the dashboard's "new chat" archive the session the way
+   Telegram's `/new` does. Mechanism parity.
+2. `cade0bc` — persist the rotation to disk, fix the mobile layout and the PWA
+   cache headers.
+3. `9d9747c` — fix the subtle one: the new-chat path was archiving a *stale disk
+   copy* of the session, because the live conversation only lives in memory and is
+   flushed opportunistically. Every message since the last save was silently
+   dropped from the archive. The fix archives the cached session when there is one.
+4. `9d535f2` — add the success toast, so the user is told "session archived, new
+   chat started".
+
+**The rule.** Parity is behaviour *plus* confirmation UX. A feature that works but
+does not say it happened is not done. The user must not have to open the
+transcript to find out whether something was saved.
+
+## 15. Per-session concurrency instead of one global dispatch lock {#sec-dec-concurrency}
+
+**Situation.** A single lock around message dispatch meant one slow turn blocked
+every other conversation — including `/btw` side questions and background work.
+
+**Choice.** Three layers, in a fixed order: a global lock for runtime hot-reload
+and config mutation, a semaphore capping concurrent sessions, then a per-session
+lock. Commit `5929cc3` and its tests cover cross-session parallelism, ordering
+within a session, registry cleanup when locks go idle, `/stop` isolation, and the
+global cap.
+
+**Why a lock *registry* rather than a single lock.** Sessions are created and
+destroyed constantly; a fixed set of locks would leak. The registry creates a lock
+on first use and drops it when it is unlocked with no waiters, which is why the
+tests assert the registry does not grow.
+
+**Why the lock ordering is documented.** Deadlock avoidance by convention is
+fragile. The rule — global before session, never the reverse — is written at the
+point of acquisition where it would be violated, and the concurrency tests are
+what keep the convention honest.
+
+**The same commit added guards elsewhere** for the same reason: an `asyncio.Lock`
+around memory writes, the scheduler's job list, and the subagent task registry.
+The lesson is that per-session concurrency does not remove the need for locking;
+it moves it to the objects that are actually shared.
+
+## 16. Restart: script for source, CLI for configuration {#sec-dec-restart}
+
+**Situation.** After landing a change to the gateway, the running process still
+has the old code. Something has to restart it.
+
+**Choices.** (a) Kill by pattern; (b) restart by hand; (c) a redeploy script for
+source and a CLI restart for configuration.
+
+**Choice.** (c). The redeploy script reinstalls the package, writes a
+restart-request flag containing where to send the confirmation, restarts the
+daemon through its own CLI, and lets the new process consume the flag and send a
+boot notification reporting version and provider status. Configuration-only
+changes use the CLI restart command.
+
+**The incident that produced the rule.** An ad-hoc `kill` by process-name pattern
+was run from inside a session. The pattern matched the shell command that was
+running the kill, so the session killed itself. Recovery took roughly eight
+minutes. The rule is now blunt: **restart through the CLI, never by hand.**
+
+**Why the flag file exists at all.** Because a restart is asynchronous from the
+operator's point of view. Writing "please tell me when you're back" to disk before
+restarting is what turns a silent restart into an observable one — and it is why
+the confirmation includes the version that is now live, which is what
+[versioning](#sec-dec-versioning) depends on.
+
+## 17. Versioning: the deploy log is the source of truth {#sec-dec-versioning}
+
+**[ops]**
+
+**Situation.** With an editable install and a restart-based deploy, "which code is
+running?" becomes a real question, not a rhetorical one.
+
+**Choice.** Semantic version bumps committed alongside the change, a deploy log
+recording each deployed version, commit messages that reference the unit of work,
+and a boot notification that reports the version of the running process.
+
+**Why.** The running process reports its own version at boot, and the deploy log
+records what was pushed when. Together they answer "is the fix live?" without
+anyone having to remember. Referencing the work unit in the commit message is what
+makes the history navigable: `git log --grep` finds every change belonging to a
+decision, and the Engineering Log at the end of this book is written from exactly
+that history.
+
+**Cost.** Version discipline is manual. It is kept honest by bumping in the same
+commit as the behaviour change, never in a batch.
+
+## 18. Tests, and treating a green suite as a claim {#sec-dec-testing}
+
+**Situation.** A single-operator project still accumulates enough moving parts —
+a scheduler, a watcher, three HTTP servers, four databases — that regressions are
+guaranteed without tests.
+
+**Choice.** `unittest`-style suites under `tests/`, mandatory for every unit of
+work, plus two pieces of hygiene that matter more than usual here:
+
+- **Isolation by default.** An autouse fixture redirects the usage store to a
+  per-test temporary database, so no test can write to the production ledger even
+  if the test author forgets. The store has its own second net for the same
+  reason.
+- **A flaky test is a defect.** A suite that must be re-run to be believed is not
+  green, it is noisy. The rule is: re-run before trusting green; if it fails
+  again, record it and fix it.
+
+**And the cultural half.** Incidents and corrections are written down as durable
+facts, and the most important ones are promoted into the protected hard-lessons
+region of memory so trimming can never drop them. The cap-and-protect design in
+[Chapter 3](03-patterns.qmd#sec-pat-memory) exists because of this: the most
+valuable thing in the memory file is the thing that must survive.
+
+## What the decisions have in common {#sec-dec-common}
+
+Read the list backwards and a single theme emerges: **the code is the cheap part,
+the invariants are the expensive part.**
+
+- Every cache in the system is documented as a cache, so "why did my edit vanish"
+  is answerable.
+- Every trimmer protects its most valuable content, because trimming is where
+  value silently leaks.
+- Every fan-out point — the bus, the API, the lock registry — has an invariant
+  written at the point where it would be broken.
+- Every capability that could be asynchronous but shouldn't, isn't: review waits
+  for idleness, the scheduler waits for its timer, one agent per repository waits
+  for the last one.
+
+The through-line from Chapter 1 is intact. The requirement was that the data flow
+be traceable. The decisions above are what it costs to keep that true as the system
+grows.

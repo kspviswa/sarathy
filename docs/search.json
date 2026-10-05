@@ -1,0 +1,761 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Sarathy Engineering",
+    "section": "",
+    "text": "0.1 How to read this book\nLast updated: 2026-10-04 · Status: living document · Book version: tracks release 0.15.0\nSarathy is a personal AI assistant built to run locally, on the operator’s own hardware, against local models. This book is the engineering record behind it: how the system is put together, which patterns it leans on, and why each significant decision was made the way it was.\nIt is written for engineers, not for users. If you want to install and run the assistant, read the project README instead. If you want to know how the thing is built and why it is built that way, you are in the right place.\nThe chapters are meant to be read in order, but they are independent:\nflowchart LR\n  IDX[\"Cover&lt;br/&gt;house rules\"] --&gt; C1[\"1 · Origins\"]\n  C1 --&gt; C2[\"2 · Architecture\"]\n  C2 --&gt; C3[\"3 · Patterns\"]\n  C3 --&gt; C4[\"4 · Decisions\"]\n  C4 --&gt; LOG[\"Engineering Log&lt;br/&gt;living, newest first\"]\n  C3 --&gt; APX[\"Appendix&lt;br/&gt;testing and operations\"]\n  C4 --&gt; APX\n  LOG -.-&gt;|\"lesson feeds back into\"| C3\n  LOG -.-&gt;|\"decision feeds back into\"| C4\n  style LOG fill:#eaf3ec,stroke:#5f8a6d\n\n\n\n\nFigure 1: The shape of the book. Chapters 2 to 4 answer what the system is, how it is built, and why; the log is the append-only spine that keeps all three honest.",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Sarathy Engineering</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#sec-how-to-read",
+    "href": "index.html#sec-how-to-read",
+    "title": "Sarathy Engineering",
+    "section": "",
+    "text": "#\nChapter\nWhat it answers\n\n\n\n\n—\nThis page\nOrientation, house rules, provenance\n\n\n1\nWhy Sarathy exists\nWhat problem the project was built to solve, and where it came from\n\n\n2\nArchitecture\nHow a message actually travels through the system\n\n\n3\nPatterns\nThe recurring design patterns, and the rules that keep them honest\n\n\n4\nDecisions\nThe backstories: what was tried, what was chosen, what it cost\n\n\n—\nEngineering Log\nDated, newest-first record of notable changes and lessons\n\n\n5\nTesting & operations (appendix)\nHow changes are verified and shipped",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Sarathy Engineering</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#sec-house-rules",
+    "href": "index.html#sec-house-rules",
+    "title": "Sarathy Engineering",
+    "section": "0.2 House rules for this book",
+    "text": "0.2 House rules for this book\nThis book is destined for public hosting. Three rules are absolute, and they are enforced mechanically by the smoke test rather than by good intentions:\n\nNo personal information. No real names — the book says “the operator”, “the author”, “the user”. No chat identifiers, no contact details, no credentials of any kind.\nNo private paths. Everything is named relative to the repository root (sarathy/agent/loop.py) or relative to the workspace (workspace/sessions/). The machine’s home directories are never spelled out.\nNo private content. Nothing from the operator’s actual conversations, memory store or job records is quoted. The book describes mechanisms, never payloads.\n\nAnything added to the book has to pass python3 -m unittest discover tests -k book, which scans both the .qmd sources and the rendered .html for the patterns above. See the update workflow in doc/README.md for how to add a chapter or a log entry.",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Sarathy Engineering</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#sec-provenance",
+    "href": "index.html#sec-provenance",
+    "title": "Sarathy Engineering",
+    "section": "0.3 Provenance: how claims in this book are sourced",
+    "text": "0.3 Provenance: how claims in this book are sourced\nNothing here is invented. Every factual claim traces to one of four places, and the book says which:\n\nThe code. Repository-relative file paths and symbols, e.g. sarathy/session/manager.py (SessionManager._should_rotate).\nThe history. Commits are referenced by their short hash and subject, e.g. 67a3176 “rotate cron sessions at the trim cap”.\nThe operator’s engineering notes. A small number of decisions are not visible in the code at all — they are operational practice (how work is delegated, how releases are tracked). Those are drawn from the author’s notes and are labelled explicitly as such, because the repository cannot corroborate them.\nAbsence of evidence. Where the repository contradicts an expectation, the book says so rather than papering over it. For example, there is no in-tree text-to-speech pipeline; see the media-handling pattern in Chapter 3.",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Sarathy Engineering</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#sec-numbers",
+    "href": "index.html#sec-numbers",
+    "title": "Sarathy Engineering",
+    "section": "0.4 Provenance of the numbers",
+    "text": "0.4 Provenance of the numbers\nA few figures appear repeatedly. Their sources, as of 2026-10-04:\n\n\n\n\n\n\n\n\nFigure\nValue\nSource\n\n\n\n\nCommits on main\n878\ngit log --oneline \\| wc -l\n\n\nDeclared package version\n0.15.0\npyproject.toml\n\n\nPython floor\n3.11\npyproject.toml (requires-python)\n\n\nPython lines in sarathy/\n~16.7k\nfind sarathy -name '*.py' \\| xargs wc -l\n\n\nTest modules\n36\nls tests/*.py\n\n\nBuilt-in channel adapters\n5\nsarathy/channels/manager.py\n\n\nBuilt-in slash commands\n17\nsarathy/agent/builtin_commands.py",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Sarathy Engineering</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#sec-where-to-start",
+    "href": "index.html#sec-where-to-start",
+    "title": "Sarathy Engineering",
+    "section": "0.5 Where to start",
+    "text": "0.5 Where to start\nIf you only read one diagram, read the system map in Chapter 2: one flowchart, one sequence diagram, and you understand the shape of the whole thing.\nIf you only read one chapter, read Chapter 4. Every design decision that cost something is written down there, including the ones that were wrong first.",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Sarathy Engineering</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/01-why-sarathy-exists.html",
+    "href": "chapters/01-why-sarathy-exists.html",
+    "title": "2  Why Sarathy Exists",
+    "section": "",
+    "text": "2.1 The problem, stated honestly\nPersonal AI assistants are, at the time of writing, mostly products rather than systems. They are large, opinionated, and — for the person actually trying to understand them — opaque. The author’s complaint, recorded in the project README, is specific and worth quoting as a design constraint rather than as a complaint:\nThat is the whole brief. Two words in it carry the engineering programme:\nThose two words explain most of what follows in this book. A message bus with two dataclasses, rather than an event-sourcing framework, exists because the data flow must be legible. JSONL session files, rather than a document database, exist because a human must be able to read a conversation with cat. A Tool ABC with one execute() method, rather than a plugin marketplace, exists because “bloated” is the failure mode being engineered against.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Why Sarathy Exists</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/01-why-sarathy-exists.html#sec-origin-problem",
+    "href": "chapters/01-why-sarathy-exists.html#sec-origin-problem",
+    "title": "2  Why Sarathy Exists",
+    "section": "",
+    "text": "mainstream open implementations of this category are “heavily bloated and impossible for me to understand the data flow”; they “cater to all needs”.\n\n\n\n“bloated” → build only the features actually used, and be able to delete the rest without ceremony. Every subsystem must justify its existence.\n“data flow” → the operator must be able to trace any message end to end, by reading code, without a debugger or an observability stack. Traceability is a first-class requirement, not a nice-to-have.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Why Sarathy Exists</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/01-why-sarathy-exists.html#sec-origin-fork",
+    "href": "chapters/01-why-sarathy-exists.html#sec-origin-fork",
+    "title": "2  Why Sarathy Exists",
+    "section": "2.2 The starting point",
+    "text": "2.2 The starting point\nSarathy is a fork of nanobot, an existing minimal Python agent. Two other projects shaped the direction: nanoclaw, which demonstrated that a genuinely small assistant is enough for daily use, and a public argument for personalizing agents — assistants tuned to one person rather than to everybody.\nForking rather than starting from zero was a deliberate trade: inherit a working agent loop, message bus and provider layer, and spend the saved effort on the parts that are actually personal — memory, channels, sessions, scheduling. The cost of that trade is now visible in the tree: the fork’s shape (bus → loop → tools) is still the skeleton, and everything distinctive has been grown on top of it.\nThe name means helper, guide, driver, mentor in both Sanskrit and Tamil. It is chosen to describe the relationship the author wants with the tool: a driver who holds the map, not an oracle.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Why Sarathy Exists</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/01-why-sarathy-exists.html#sec-origin-evolution",
+    "href": "chapters/01-why-sarathy-exists.html#sec-origin-evolution",
+    "title": "2  Why Sarathy Exists",
+    "section": "2.3 From fork to independent architecture",
+    "text": "2.3 From fork to independent architecture\nThe fork was a starting point, not a destination. Over 878 commits the package moved from “nanobot, lightly edited” to a system with subsystems that did not exist at all in the original:\n\n\n\n\n\n\nflowchart LR\n  subgraph fork[\"The fork, as inherited\"]\n    F1[bus] --&gt; F2[agent loop] --&gt; F3[tools]\n    F1 --&gt; F4[providers]\n  end\n  subgraph grown[\"Grown on top, in order\"]\n    G1[channel adapters] --&gt; G2[session store + archival]\n    G2 --&gt; G3[skills + hot reload]\n    G3 --&gt; G4[memory + idle-time review]\n    G4 --&gt; G5[cron + heartbeat]\n    G5 --&gt; G6[web dashboard]\n    G6 --&gt; G7[usage telemetry]\n    G7 --&gt; G8[backend trigger path]\n  end\n  F3 --&gt; G1\n  F4 --&gt; G7\n  style fork fill:#eef2f6,stroke:#8aa0b4\n  style grown fill:#eaf3ec,stroke:#5f8a6d\n\n\n\n\nFigure 2.1: Subsystems that exist today and did not exist in the starting fork. Each row is a commit range in the history, not a plan.\n\n\n\n\n\nFour structural changes mark the transition from “fork” to “architecture”:\n\nThe gateway. The assistant stopped being a one-shot CLI and became a long-lived daemon (sarathy/gateway/run.py) that owns every subsystem in a single asyncio process. Lifecycle management (start/stop/restart/ status/logs) and log rotation came with it (sarathy/gateway/manager.py).\nChannels as adapters. Telegram, Discord, Email, a web dashboard and — since 0.15.0 — a localhost-only backend trigger path all implement one interface (sarathy/channels/base.py) and speak two dataclasses. The agent stopped knowing which chat platform it was talking to.\nSessions became a subsystem. Append-only JSONL transcripts with a metadata header line, an LRU cache in front, a SQLite index beside them, and explicit archival with a verification stamp (sarathy/session/manager.py).\nLearning became a pipeline. Memory writes used to race with each other from three different call sites; they are now produced by a single idle-time reviewer that refuses to run while the main model is busy (sarathy/session/review.py).\n\nEach of those is documented in Chapter 2; the reasoning behind them is in Chapter 4.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Why Sarathy Exists</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/01-why-sarathy-exists.html#sec-origin-local-first",
+    "href": "chapters/01-why-sarathy-exists.html#sec-origin-local-first",
+    "title": "2  Why Sarathy Exists",
+    "section": "2.4 What “local-first” means here, concretely",
+    "text": "2.4 What “local-first” means here, concretely\n“Local-first” is usually a slogan. In this repository it is a specific, checkable set of commitments:\n\nLocal models are the default, not a fallback. The default model in sarathy/config/schema.py is a local Ollama model; the provider registry (sarathy/providers/registry.py) carries exactly four kinds — Ollama, LMStudio, vLLM, and “any OpenAI-compatible endpoint” — and three of the four are local by construction.\nNo mandatory cloud service. There is no account, no signup, no hosted component in the happy path. Web search and speech-to-text have optional hosted providers behind configuration keys, and the assistant degrades cleanly when they are absent (sarathy/providers/transcription.py logs a warning and returns an empty transcript rather than failing).\nOne machine. The gateway, the database, the model server and the dashboard all live on the same host. The only inbound socket bound to anything other than loopback is the dashboard, and it is explicitly a LAN-reachable web UI with pairing-key authentication (sarathy/channels/dashboard/server.py).\nPlain files as the substrate. Sessions, memory, skills, cron definitions and templates are all files you can open in an editor. SQLite appears only where a query surface genuinely earns it: the sessions index, the usage ledger, and the jobs ledger that the dashboard reads.\nStdlib-first Python. Requires Python 3.11+, ships as a single wheel, and leans on the standard library (asyncio, sqlite3, dataclasses, argparse-era pathlib) for the architecture; third-party libraries are used at the edges where they earn their place (LLM transport, chat-platform APIs, HTTP).",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Why Sarathy Exists</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/01-why-sarathy-exists.html#sec-origin-scope",
+    "href": "chapters/01-why-sarathy-exists.html#sec-origin-scope",
+    "title": "2  Why Sarathy Exists",
+    "section": "2.5 What this project is not",
+    "text": "2.5 What this project is not\nStated up front so the book is not read as a framework recommendation:\n\nIt is not a general-purpose framework. The README says so explicitly and declines feature requests and pull requests; the project exists as a working personal assistant that happens to be public.\nIt is not a research artifact. There are no benchmarks, no eval harness, no model comparisons. The success criterion is “the assistant works every day”.\nIt is not multi-tenant. Session keys are scoped to one operator’s channels. There is no concept of two users sharing a gateway.\nIt is not a place for secrets. Credentials live in the operator’s own config file, are never written to sessions, and are redacted before any config value is handed back over the dashboard API (redact_config in sarathy/channels/dashboard/auth.py).",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Why Sarathy Exists</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/01-why-sarathy-exists.html#sec-origin-next",
+    "href": "chapters/01-why-sarathy-exists.html#sec-origin-next",
+    "title": "2  Why Sarathy Exists",
+    "section": "2.6 Where the rest of the book goes",
+    "text": "2.6 Where the rest of the book goes\nChapter 2 opens the hood: one gateway process, one bus, one loop, and the exact path a message takes from a chat app to a reply.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Why Sarathy Exists</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html",
+    "href": "chapters/02-architecture.html",
+    "title": "3  Architecture",
+    "section": "",
+    "text": "3.1 The system map\nSarathy is one asyncio process. Everything that can talk to the outside world — five channel adapters, the agent loop, the session store, the scheduler, the background reviewer, the heartbeat, and an embedded web server — runs inside a single event loop started by run_gateway() in sarathy/gateway/run.py.\nThat single decision is the source of most of the system’s simplicity: no IPC, no serialisation at the seams, no distributed tracing, and a data flow you can read end to end in one function.\nflowchart TB\n  subgraph ext[\"Outside the process\"]\n    TG[Telegram]\n    DC[Discord]\n    EM[Email]\n    HTTP[HTTP / event]\n    UI[Browser]\n    CRONEXT[cron CLI]\n  end\n\n  subgraph proc[\"sarathy gateway — one asyncio process\"]\n    direction TB\n    subgraph adapters[\"Channel adapters — sarathy/channels/\"]\n      C1[telegram]\n      C2[discord]\n      C3[email]\n      C4[dashboard]\n      C5[backend]\n    end\n    BUS[(\"MessageBus&lt;br/&gt;inbound + outbound queues\")]\n    LOOP[\"AgentLoop&lt;br/&gt;sarathy/agent/loop.py\"]\n    SM[(\"SessionManager&lt;br/&gt;JSONL + SQLite index\")]\n    CTX[\"ContextBuilder\"]\n    PROV[\"RuntimeProvider&lt;br/&gt;local LLM providers\"]\n    TOOLS[\"ToolRegistry\"]\n    SK[\"SkillManager&lt;br/&gt;hot reload\"]\n    REV[\"BackgroundReviewer\"]\n    CRON[\"CronService\"]\n    HB[\"HeartbeatService\"]\n    USG[(\"usage.db&lt;br/&gt;telemetry\")]\n  end\n\n  subgraph ws[\"Workspace (files)\"]\n    W1[memory]\n    W2[sessions + archived_sessions]\n    W3[skills]\n    W4[cron/jobs.json]\n  end\n\n  TG --&gt; C1\n  DC --&gt; C2\n  EM --&gt; C3\n  UI --&gt; C4\n  HTTP --&gt; C5\n  CRONEXT --&gt; CRON\n\n  C1 --&gt; BUS\n  C2 --&gt; BUS\n  C3 --&gt; BUS\n  C4 --&gt; BUS\n  C5 --&gt; BUS\n  BUS --&gt; LOOP\n  LOOP --&gt; SM\n  LOOP --&gt; CTX\n  LOOP --&gt; TOOLS\n  LOOP --&gt; PROV\n  LOOP --&gt; USG\n  LOOP --&gt; REV\n  SM --&gt; W2\n  CTX --&gt; W1\n  SK --&gt; W3\n  CRON --&gt; W4\n  CRON --&gt; LOOP\n  HB --&gt; LOOP\n  LOOP --&gt; BUS\n  BUS --&gt; C1\n  BUS --&gt; C2\n  BUS --&gt; C3\n  BUS --&gt; C4\n  BUS --&gt; C5\n\n  style proc fill:#eef3f8,stroke:#3f6c99\n  style ext fill:#faf3e8,stroke:#b08a3e\n  style ws fill:#eaf3ec,stroke:#5f8a6d\n  style adapters fill:#ffffff,stroke:#7f9db9\n\n\n\n\nFigure 3.1: The whole system in one picture. The middle box is one asyncio process; the top box is everything that reaches it from outside, and the bottom box is the state it writes to disk. The only trust boundary that matters is the top one — loopback for automation, LAN for the dashboard.\nRead the picture in three moves:",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-map",
+    "href": "chapters/02-architecture.html#sec-arch-map",
+    "title": "3  Architecture",
+    "section": "",
+    "text": "Adapters translate, they do not think. Every channel adapter turns its platform’s events into InboundMessage and its replies into OutboundMessage, and publishes them on one shared MessageBus. The agent never learns whether a turn came from a chat app, a browser tab, or a scheduled job.\nThe loop owns the turn. AgentLoop is the only component that calls the model, runs tools, or writes to a session.\nState lives in files. Sessions, memory, skills and cron definitions are files in the workspace. SQLite appears in exactly three places, each of which needs a real query surface (see Chapter 3).",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-gateway",
+    "href": "chapters/02-architecture.html#sec-arch-gateway",
+    "title": "3  Architecture",
+    "section": "3.2 The gateway process",
+    "text": "3.2 The gateway process\nrun_gateway() is a straight-line assembly function, which is deliberate: you can read it top to bottom and know the whole object graph. In order it constructs:\n\n\n\n\n\n\n\n\n\nStep\nObject\nFile\nWhy it is created here\n\n\n\n\n1\nMessageBus\nbus/queue.py\nTwo asyncio.Queues, nothing else\n\n\n2\nRuntimeProvider\nproviders/manager.py\nOwns the live provider + model + sampling params\n\n\n3\nSessionManager\nsession/manager.py\nJSONL store, LRU cache, SQLite index\n\n\n4\nCronService\ncron/service.py\nScheduler over a single JSON job file\n\n\n5\nAgentLoop\nagent/loop.py\nThe turn engine; receives the bus, provider, sessions, tools config\n\n\n6\nBackgroundReviewer\nsession/review.py\nIdle-time learning, attached to the loop\n\n\n7\nSkillManager + CommandManager\nagent/skills.py, core/commands.py\nSkills become slash commands\n\n\n8\nChannelManager\nchannels/manager.py\nInstantiates and starts the enabled adapters\n\n\n9\nHeartbeatService\nheartbeat/service.py\nPeriodic wake-up, bound to the agent\n\n\n10\ncron/heartbeat callbacks\nwired in run.py\nBridge from timers into the agent loop\n\n\n\nThen it does the only interesting thing structurally:\nawait asyncio.gather(\n    agent.run(),        # consumes the inbound queue forever\n    channels_task,      # starts adapters + outbound dispatcher forever\n)\nagent.run() and the channel set are the two long-lived coroutines. Everything else — cron ticks, heartbeat ticks, background review, MCP connection setup — is a task spawned from one of them. Shutdown is symmetric: MCP exit stack closed, heartbeat stopped, cron stopped, agent stopped, channels stopped.\n\n3.2.1 Process lifecycle\nThe daemon itself is managed by a thin wrapper, sarathy/gateway/manager.py: start spawns python -m sarathy.gateway.run --port N with start_new_session=True, writes the child’s PID to a file, and lets the child redirect its output to a timestamped log. stop sends SIGTERM. status probes the PID with signal 0 and clears the file if the process is gone. logs tails the newest log file, with --follow for tail -f behaviour.\n\n\n\n\n\n\nstateDiagram-v2\n  [*] --&gt; Absent\n  Absent --&gt; Running: start\n  Running --&gt; Absent: stop / SIGTERM\n  Running --&gt; Starting: restart\n  Starting --&gt; Running: child healthy after 1s\n  Starting --&gt; Absent: child exited early\n  Absent --&gt; Running: restart (was absent)\n\n\n\n\nFigure 3.2: Gateway lifecycle as exposed by the CLI. restart is a stop followed by a start; there is no in-place reload, because several subsystems hold process-wide state (see Chapter 4).\n\n\n\n\n\nNote what is not here: no supervisor, no service manager, no container orchestration, no PID-file locking beyond the single file. The daemon is deliberately the simplest thing that survives a terminal closing.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-bus",
+    "href": "chapters/02-architecture.html#sec-arch-bus",
+    "title": "3  Architecture",
+    "section": "3.3 The message bus",
+    "text": "3.3 The message bus\nTwo dataclasses and two queues (sarathy/bus/events.py, sarathy/bus/queue.py):\n@dataclass\nclass InboundMessage:\n    channel: str\n    sender_id: str\n    chat_id: str\n    content: str\n    timestamp: datetime = field(default_factory=datetime.now)\n    media: list[str] = field(default_factory=list)\n    metadata: dict[str, Any] = field(default_factory=dict)\n    session_key_override: str | None = None\n\n    @property\n    def session_key(self) -&gt; str:\n        return self.session_key_override or f\"{self.channel}:{self.chat_id}\"\nThat session_key property is the load-bearing line of the whole design. Session isolation is not a policy enforced at the storage layer; it is a string computed once, at the edge, and carried by the message. Everything downstream — caching, archival, cost accounting, /stop targeting — keys off that string. If the channel layer computes the right key, the rest of the system cannot get it wrong.\nmetadata is the second load-bearing decision: it is the per-channel escape hatch. Message identifiers for threaded replies, image-provider role overrides, tool-hint flags, _progress markers, /btw markers, and usage-role overrides all travel as metadata rather than as new message types or new bus methods. The bus never learns a new concept.\nOutboundMessage is smaller — channel, chat_id, content, reply_to, media, metadata — because the send path is genuinely uniform: look the channel up by name, call send().",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-journey",
+    "href": "chapters/02-architecture.html#sec-arch-journey",
+    "title": "3  Architecture",
+    "section": "3.4 A message’s journey",
+    "text": "3.4 A message’s journey\n\n\n\n\n\n\nsequenceDiagram\n    autonumber\n    participant U as User\n    participant C as Channel\n    participant B as MessageBus\n    participant L as AgentLoop\n    participant S as SessionManager\n    participant P as LLM provider\n    participant T as ToolRegistry\n\n    U-&gt;&gt;C: send message\n    C-&gt;&gt;C: is_allowed(sender_id)\n    C-&gt;&gt;B: publish_inbound(InboundMessage)\n    B-&gt;&gt;L: consume_inbound()\n    L-&gt;&gt;L: global lock + semaphore + per-session lock\n    L-&gt;&gt;S: get_or_create(session_key)\n    L-&gt;&gt;L: ContextBuilder.build_messages()\n    loop until final answer or iteration cap\n        L-&gt;&gt;P: chat(messages, tool definitions)\n        P--&gt;&gt;L: content and/or tool calls\n        L-&gt;&gt;T: execute(tool, params)\n        T--&gt;&gt;L: result string\n    end\n    L-&gt;&gt;S: save(session) — append JSONL + index upsert\n    L-&gt;&gt;B: publish_outbound(OutboundMessage)\n    B-&gt;&gt;C: routed by msg.channel\n    C-&gt;&gt;U: deliver\n\n\n\n\nFigure 3.3: One user message, end to end. Solid arrows are calls; the loop at the bottom is the only place the model is ever called.\n\n\n\n\n\nFour things in that diagram are worth reading twice.\nPermission is checked at the edge, once. BaseChannel._handle_message calls is_allowed(sender_id) and drops the message if the sender is not on the allow-list. The agent loop never re-checks, because it cannot be reached by anything that did not pass through an adapter.\nConcurrency is layered, and the order is fixed. _dispatch() acquires, in order: the global lock (which guards runtime hot-reload, config mutations and the archival sweep), then a semaphore capping concurrent sessions (maxConcurrentSessions, default 4, clamped to 1..16), then the per-session lock. The rule “never hold a session lock while acquiring the global lock” is written into the code as a comment at the point where it would be violated.\nThe model is called from exactly one place. _run_agent_loop() is a while iteration &lt; max_iterations loop around a single provider.chat() call. Everything that looks like an agent loop elsewhere in the system — cron runs, heartbeat ticks, /btw side turns, subagents — re-enters this same function. That is what makes the cost ledger, the usage footer, the steer injection point and the reviewer idle-gate work without special cases.\nProgress is a message, not a channel. Long turns emit intermediate OutboundMessages carrying _progress (and optionally _tool_hint) metadata. The outbound dispatcher drops them unless the channel config asks for them (sendProgress, sendToolHints). Channels that support drafts rewrite the same message over and over; channels that do not simply ignore them.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-loop",
+    "href": "chapters/02-architecture.html#sec-arch-loop",
+    "title": "3  Architecture",
+    "section": "3.5 The agent loop, in detail",
+    "text": "3.5 The agent loop, in detail\nAgentLoop.run() is a poll loop with a one-second timeout so it can notice shutdown, plus three commands it intercepts before dispatching:\n\n/stop — cancels every tracked task for that session key and every subagent spawned from it.\n/steer — enqueues an instruction into the running session’s steer queue. The loop drains that queue at the top of every iteration, so a steer takes effect immediately after the current tool call returns, not after the whole turn. If the session is idle, the prefix is stripped and the text is dispatched as an ordinary message.\n/btw — starts a genuinely concurrent second turn against a snapshot of the session, in its own ##btw## session, whose result is delivered when it is ready. It even saves and restores the message tool’s per-turn state so the side turn cannot pollute duplicate suppression for the main turn.\n\nEverything else is dispatched as a task, tracked per session key, so that a slow turn in one chat never blocks another.\nInside _run_agent_loop(), per iteration, in this exact order:\n\nDrain the steer queue and append any steers as synthetic user messages.\nIf a per-turn provider role was requested and images are present, hand the images to the provider tagged with the image role and rewrite the user message with a textual description (the “describe-then-inject” step).\nCall the provider, streaming if the session or channel asks for it.\nRecord usage telemetry — always, and never fatally: a telemetry failure must not break a turn.\nIf there are tool calls: emit a tool hint, execute each one through the registry, append the results, and loop.\nOtherwise stop, and let the caller apply topic markers, the usage footer and session persistence.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-tools",
+    "href": "chapters/02-architecture.html#sec-arch-tools",
+    "title": "3  Architecture",
+    "section": "3.6 Tools",
+    "text": "3.6 Tools\nA tool is a dataclass-shaped ABC with four members: name, description, parameters (a JSON schema) and async execute(**kwargs) -&gt; str (sarathy/agent/tools/base.py). The registry turns that into OpenAI-style function definitions and enforces three things before the tool body runs (sarathy/agent/tools/registry.py):\n\nschema validation of the incoming parameters, with a readable error listing which parameter was wrong;\na uniform error string, appended with an explicit instruction to the model to analyse the failure and try a different approach rather than repeating the same call;\nregistration order stability, so the cached prompt prefix does not churn.\n\nThe default set registered at construction time is: filesystem (read, write, edit, list), shell execution, web fetch, optional web search, message send, subagent spawn, cron (only when a scheduler is wired in), memory, and skill management. MCP servers, if configured, are connected lazily on the first turn and their tools are merged into the same registry, so the agent cannot tell where a tool came from.\nWorkspace restriction is enforced at tool construction, not at call time: restrict_to_workspace becomes the allowed_dir passed into the filesystem tools and the working directory for the shell tool.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-sessions",
+    "href": "chapters/02-architecture.html#sec-arch-sessions",
+    "title": "3  Architecture",
+    "section": "3.7 Sessions",
+    "text": "3.7 Sessions\nSessionManager (sarathy/session/manager.py) is three cooperating things:\n\nan LRU cache (OrderedDict, default 50 entries) of live Session objects, because a session is mutated in memory and flushed to disk opportunistically;\na JSONL file per session key, whose first line is a metadata record and whose remaining lines are messages — append-friendly, greppable, and readable by anything that speaks JSON;\na SQLite index (sessions/index.db) holding one row per session (key, channel, topic, timestamps, archived flag) so listing sessions is a single indexed query instead of reading every transcript.\n\nA Session is deliberately a plain list of message dicts plus a metadata dict. get_history() slices the unconsolidated tail, aligns it to a user turn so the model never sees an orphaned tool result, and projects only the fields the API cares about. History is append-only for prompt-cache efficiency: nothing in the turn path edits or rewrites past messages.\nRotation happens in two places for two reasons. Session.add_message() rotates mid-turn when an interactive session reaches its size cap. get_or_create() rotates between turns for cron sessions, which must never rotate mid-run — see the 500-message hard lesson.\nArchival writes a timestamped JSONL file into archived_sessions/, stamped archived: true only when the reviewer confirms it had no pending work for that session. Unstamped archives are re-verified once at gateway startup as crash recovery, and prune_archives() reaps old files while keeping anything still unverified, so a crash can never silently discard pending learning.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-providers",
+    "href": "chapters/02-architecture.html#sec-arch-providers",
+    "title": "3  Architecture",
+    "section": "3.8 Providers and hot reload",
+    "text": "3.8 Providers and hot reload\nproviders/registry.py holds a frozen table of provider metadata: name, keywords, environment variable, display name, LiteLLM prefix, whether it is local, and a default API base. Four kinds are supported — three local, one “anything OpenAI-compatible”. providers/manager.py turns a config entry into a client: direct HTTP client for OpenAI-compatible endpoints (which preserves reasoning content that LiteLLM would flatten), LiteLLM otherwise.\nThe interesting part is RuntimeProvider. It holds the live provider and model, and it re-reads the config file when — and only when — the file’s modification time changes:\ndef refresh(self) -&gt; bool:\n    mtime = self._file_mtime()\n    if mtime == self._mtime:\n        return False\n    ...\nRebuilding the client only happens if the active provider, model, temperature, max tokens or reasoning effort actually changed. A failed rebuild keeps the old provider rather than dropping to no provider at all. Every turn calls runtime.apply_to(agent) under the global lock, which is why switching models from the dashboard or the CLI takes effect on the next message without a restart — while changing gateway source still requires a restart. The distinction is drawn on purpose; see Chapter 4.\nProviders also carry roles (main, local, image), resolved per turn. A cron job payload can declare that it wants the local role, and the loop swaps the provider for that turn only, restores it in a finally block, and stamps the reply so the operator can see which provider ran it.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-dashboard",
+    "href": "chapters/02-architecture.html#sec-arch-dashboard",
+    "title": "3  Architecture",
+    "section": "3.9 The dashboard as a channel",
+    "text": "3.9 The dashboard as a channel\nThe dashboard is not a separate service. DashboardChannel starts an aiohttp application inside the gateway’s own event loop (sarathy/channels/dashboard/server.py), serves the built single-page app, and exposes a REST API that operates directly on config, sessions and workspace files.\n\n\n\n\n\n\nflowchart LR\n  UI[\"Browser / PWA\"] --&gt;|REST| API[\"aiohttp router\"]\n  UI &lt;--&gt;|WebSocket| WS[\"/ws frames\"]\n  subgraph API\n    direction TB\n    AUTH[\"auth middleware&lt;br/&gt;pairing key → device token\"]\n    CHAT[\"/api/chat, /api/chat/stop\"]\n    SESS[\"/api/sessions, /api/session*\"]\n    CONF[\"/api/config, /api/providers*\"]\n    USAGE[\"/api/usage/summary\"]\n    JOBS[\"/api/jobs, /api/jobs/{id}\"]\n    WS[(\"workspace files\")]\n    CFG[(\"config file\")]\n  end\n  AUTH --&gt; CHAT & SESS & CONF & USAGE & JOBS\n  CHAT --&gt; BUS[(\"MessageBus\")]\n  BUS --&gt; LOOP[\"AgentLoop\"]\n  JOBS -. \"read-only\" .-&gt; JOBSDB[(\"jobs.db\")]\n  CONF --&gt; CFG\n  SESS --&gt; WS\n\n\n\n\nFigure 3.4: The dashboard’s API surface, grouped by what it touches. Reads over the jobs database are strictly read-only; anything that mutates state goes through the same code paths the agent uses.\n\n\n\n\n\nTwo details are deliberate. First, the auth middleware validates pairing keys against the on-disk config on every request, so revoking a key from the CLI takes effect immediately instead of at the next restart; devices that pair successfully receive an opaque token whose hash is persisted, so a reconnect after a restart stays authenticated. Second, any config value whose key looks sensitive is replaced with a placeholder before the config document is handed back over the API, so the UI can render “set / not set” without ever receiving the value.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-backend",
+    "href": "chapters/02-architecture.html#sec-arch-backend",
+    "title": "3  Architecture",
+    "section": "3.10 The backend trigger path",
+    "text": "3.10 The backend trigger path\nAdded in 0.15.0, sarathy/channels/backend.py is the one adapter that is not a chat platform. It exists so that programs — not people — can start a turn. It has two independent ways in:\n\na loopback-only HTTP endpoint that accepts a signed event envelope;\na tailer that polls a jobs database read-only for new rows in an events table and wakes a session per job.\n\n\n\n\n\n\n\nflowchart LR\n  subgraph producers[\"Event producers\"]\n    P1[Job runner]\n    P2[Worker]\n    P3[Operator tooling]\n  end\n  subgraph backend[\"BackendChannel\"]\n    E{{\"POST /event&lt;br/&gt;token-gated\"}}\n    T[\"jobs.db tailer&lt;br/&gt;read-only, high-watermark\"]\n  end\n  P1 --&gt; E\n  P2 --&gt; E\n  P3 --&gt; E\n  P1 -.-&gt;|\"event rows\"| T\n  P2 -.-&gt;|\"event rows\"| T\n  T --&gt; F[\"filter by event type\"]\n  E --&gt; N[\"InboundMessage&lt;br/&gt;session_key_override = backend:&lt;job&gt;\"]\n  F --&gt; N\n  N --&gt; BUS[(\"MessageBus\")]\n  BUS --&gt; LOG[\"log, or escalate_to channel\"]\n  style backend fill:#eef3f8,stroke:#3f6c99\n\n\n\n\nFigure 3.5: The backend channel: two ways in, one isolated session out. Replies have nowhere to go, so they are logged, or escalated to a named channel when the envelope asks for it.\n\n\n\n\n\nThe security posture is conservative by construction, not by policy:\n\nit refuses to start at all if no credential is configured;\na non-loopback bind address is forced back to loopback with a warning, so misconfiguration cannot expose it;\nthe token comparison is constant-time;\nthe jobs database is opened with SQLite’s read-only URI flag, so the tailer physically cannot write;\nthe tailer stores a high-watermark and, on first run, initialises it to the current maximum event id — history is never replayed into a session.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-architecture.html#sec-arch-state",
+    "href": "chapters/02-architecture.html#sec-arch-state",
+    "title": "3  Architecture",
+    "section": "3.11 Where the state lives",
+    "text": "3.11 Where the state lives\n\n\n\n\n\n\nflowchart TB\n  subgraph files[\"Plain files — default\"]\n    F1[\"workspace/memory/*.md&lt;br/&gt;capped, protected sections\"]\n    F2[\"workspace/sessions/*.jsonl&lt;br/&gt;metadata line + messages\"]\n    F3[\"workspace/archived_sessions/*.jsonl\"]\n    F4[\"workspace/skills/&lt;name&gt;/SKILL.md\"]\n    F5[\"cron/jobs.json&lt;br/&gt;single job file\"]\n  end\n  subgraph sqlite[\"SQLite — only where queries earn it\"]\n    D1[\"sessions/index.db&lt;br/&gt;one row per session\"]\n    D2[\"usage.db&lt;br/&gt;append-only event ledger + epochs\"]\n    D3[\"jobs.db&lt;br/&gt;written by the job tooling, read by the dashboard\"]\n  end\n  LOOP[\"AgentLoop\"] --&gt; F1 & F2\n  LOOP --&gt; D2\n  SM[\"SessionManager\"] --&gt; F2 & F3 & D1\n  J[\"Jobs tooling (outside the package)\"] --&gt; D3\n  style files fill:#eaf3ec,stroke:#5f8a6d\n  style sqlite fill:#f7f0e6,stroke:#b08a3e\n\n\n\n\nFigure 3.6: Storage by kind. Files are the default because they are inspectable; SQLite appears only where a query surface earns it.\n\n\n\n\n\nThe rule of thumb the codebase follows: if you would open it in a text editor to understand it, it is a file; if you would only ever query it, it is SQLite. Sessions and memory are files because reading a transcript is a real debugging need. The sessions index, the usage ledger and the jobs ledger are SQLite because nothing reads them by eye — they exist to answer questions, and a directory of JSONL files cannot answer “all sessions updated in the last week” without a scan.\nNext: Chapter 3 takes the components above and names the patterns they implement.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Architecture</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html",
+    "href": "chapters/03-patterns.html",
+    "title": "4  Patterns",
+    "section": "",
+    "text": "4.1 1. Channel adapter\nA pattern is only worth naming if it comes with the rule that keeps it honest. Each section below gives the pattern, where it lives, and the invariant that prevents it from rotting.\nPattern. Adapter, over Strategy, over Plugin.\nOne abstract base class (sarathy/channels/base.py) with three abstract methods — start(), stop(), send() — and two concrete helpers every adapter inherits: is_allowed() and _handle_message(). _handle_message() is the important one: it is the only way an adapter is allowed to get a message onto the bus, so permission checking and dataclass construction happen in exactly one place.\nclassDiagram\n  class BaseChannel {\n    &lt;&lt;abstract&gt;&gt;\n    +str name\n    +start()\n    +stop()\n    +send(msg)\n    +is_allowed(sender_id) bool\n    #_handle_message(...)\n  }\n  class TelegramChannel\n  class DiscordChannel\n  class EmailChannel\n  class DashboardChannel\n  class BackendChannel\n  BaseChannel &lt;|-- TelegramChannel\n  BaseChannel &lt;|-- DiscordChannel\n  BaseChannel &lt;|-- EmailChannel\n  BaseChannel &lt;|-- DashboardChannel\n  BaseChannel &lt;|-- BackendChannel\n\n\n\n\nFigure 4.1: The adapter seam. BaseChannel fixes the contract and the two invariants; the five concrete adapters only translate.\nInvariant. A new channel never touches the agent loop, the session manager, or the bus internals. If adding a platform requires editing AgentLoop, the seam has leaked.\nTwo transport families, on purpose. Telegram and Discord are out-of-process clients (a polling thread and a websocket that must be reconnected). Email is pull-based (poll a mailbox on an interval). Dashboard and backend are in-loop aiohttp servers. Supporting all three shapes in one interface is the reason the interface is so small.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-adapter",
+    "href": "chapters/03-patterns.html#sec-pat-adapter",
+    "title": "4  Patterns",
+    "section": "",
+    "text": "Adapter\nInbound source\nOutbound mechanism\nTransport\n\n\n\n\ntelegram\nLong-polling bot updates\nBot API (drafts for streaming)\npython-telegram-bot\n\n\ndiscord\nGateway websocket\nREST API, chunked at the length limit\nwebsockets + httpx\n\n\nemail\nIMAP poll for unread\nSMTP reply to the sender\nstdlib imaplib/smtplib\n\n\ndashboard\nREST + WebSocket from the PWA\nWebSocket frames\naiohttp in-loop\n\n\nbackend\nLoopback HTTP + jobs-DB tail\nLogged, or escalated to a channel\naiohttp in-loop",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-media",
+    "href": "chapters/03-patterns.html#sec-pat-media",
+    "title": "4  Patterns",
+    "section": "4.2 2. Input-matched media",
+    "text": "4.2 2. Input-matched media\nPattern. Preserve the shape of the input in the output.\nThe agent is a text engine; the channels are not. The adapter’s job is to keep media typed end to end rather than flattening everything to text:\n\nInbound. An attachment is downloaded once, stored under the workspace media directory, and referenced by path on InboundMessage.media. Voice notes, audio, images and documents are distinguished by the platform payload, and images are additionally base64-inlined into the prompt as data URLs (ContextBuilder).\nOutbound. OutboundMessage.media is a list of paths, and the channel maps each path to the right send call by extension — photo, voice, audio, or a generic document with the original filename preserved.\n\nTwo hard-won details are worth copying:\n\nName downloads by content, not by handle. Chat platforms hand out file identifiers that share a long common prefix across every attachment in a chat, so naming a download after a prefix of that identifier silently overwrote the previous attachment. The fix hashes the whole identifier and keeps the sender’s own filename as a readable prefix (commit e807552).\nDo not fake what you do not have. There is no in-tree text-to-speech pipeline. Voice input is treated as media; a transcription provider module exists for callers that configure one, and it degrades to an empty transcript with a warning rather than failing the turn. The book says this explicitly rather than implying a voice round-trip that does not exist.\n\nFor images there is a third behaviour, “describe-then-inject”: when the active provider is tagged with the image role, the turn hands the images to that provider first and rewrites the user’s message with a textual description, so a small text-only main model can still reason about a screenshot.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-sessionkey",
+    "href": "chapters/03-patterns.html#sec-pat-sessionkey",
+    "title": "4  Patterns",
+    "section": "4.3 3. Session-key isolation",
+    "text": "4.3 3. Session-key isolation\nPattern. Identity as a string, computed at the edge.\nEvery conversation is addressed by a channel:chat_id key. Three families exist and they are not interchangeable:\n\n\n\n\n\n\n\n\nKey shape\nMeaning\nRotation behaviour\n\n\n\n\ntelegram:&lt;chat&gt;, discord:&lt;guild/channel&gt;, email:&lt;address&gt;\nA human conversation\nRotates when it reaches the size cap, mid-turn is fine\n\n\ncron:&lt;job&gt;\nOne scheduled job, reused across every run\nNever mid-turn; rotates between runs\n\n\nbackend:&lt;job&gt;\nOne job’s event stream\nIsolated per job, never mixed with a chat\n\n\ncli:direct, heartbeat, dashboard:console\nSynthetic conversations\nOrdinary interactive behaviour\n\n\n\nTwo escape hatches keep this from being rigid:\n\nsession_key_override on InboundMessage lets an adapter scope a session differently from channel:chat_id — thread-scoped chat sessions, and the backend channel’s per-job isolation both use it.\nA generated side-conversation suffix (&lt;key&gt;##btw##&lt;random&gt;) gives /btw a real session of its own without inventing a new channel.\n\nSessionManager derives the channel from the prefix (channel_for_key) and special-cases exactly one prefix for rotation (cron:). That is the entire policy surface.\nInvariant. Two conversations never share a Session object. If a new integration needs shared context across conversations, it needs a different mechanism — not a shared key.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-jsonl",
+    "href": "chapters/03-patterns.html#sec-pat-jsonl",
+    "title": "4  Patterns",
+    "section": "4.4 4. Append-only transcripts with an index façade",
+    "text": "4.4 4. Append-only transcripts with an index façade\nPattern. Write-ahead log plus a derived index.\nSessions are JSONL files: line 1 is a metadata record, the rest are messages. That choice buys four things at once — append-only writes (so the prompt prefix stays byte-stable and provider prompt caches keep hitting), greppability, human readability, and trivial recovery, because a truncated file is still a valid prefix of a valid file.\nThe cost is that listing sessions means reading every file. That is what the SQLite index is for: one row per session, upserted on every save, rebuilt from scratch if it is missing. Reading the index is a fast path; reading the metadata lines is the fallback when the index is absent or empty.\n\n\n\n\n\n\nflowchart LR\n  CALL[\"list_sessions()\"] --&gt; TRY{\"index present&lt;br/&gt;and non-empty?\"}\n  TRY --&gt;|yes| Q[(\"SELECT ... FROM sessions&lt;br/&gt;ORDER BY updated_at DESC\")]\n  TRY --&gt;|no| SCAN[\"read first line of&lt;br/&gt;each sessions/*.jsonl\"]\n  Q --&gt; OUT[\"list of session records\"]\n  SCAN --&gt; OUT\n  UP[\"save() / archive\"] -.-&gt;|\"one cheap upsert\"| Q\n  style Q fill:#f7f0e6,stroke:#b08a3e\n\n\n\n\nFigure 4.2: The façade. Callers ask for sessions; they never learn whether the answer came from the index or from a directory scan.\n\n\n\n\n\nTwo invariants keep the façade honest:\n\nThe index is never authoritative. If it disagrees with the files, the files win. rebuild_index() exists precisely for that case, and it runs automatically when the index file is missing at startup.\nWrites are one row, best effort. A failed index upsert logs at debug level and never fails the save. The transcript is the data; the index is a cache.\n\nArchival rotation. archive_session() writes a timestamped JSONL file and stamps it archived: true only when the reviewer confirms it has no pending work for that session. Unstamped archives are picked up by a one-shot sweep at gateway startup, and prune_archives() deletes old files while keeping anything still unverified. The result is that a crash between “archive” and “learn” cannot lose the learning.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-skills",
+    "href": "chapters/03-patterns.html#sec-pat-skills",
+    "title": "4  Patterns",
+    "section": "4.5 5. Skills as executable instructions",
+    "text": "4.5 5. Skills as executable instructions\nPattern. Instructions as data, hot-reloaded, read on demand.\nA skill is a directory containing a SKILL.md with YAML frontmatter and a Markdown body. It is not code and not a plugin; it is an instruction the agent chooses to read. Three sources are merged with a fixed precedence — global, then workspace, then built-in, with later sources overriding earlier ones.\nThe prompt never carries skill bodies. It carries a compact, generated summary: one line per category, the member names, and an availability flag derived from the skill’s declared requirements (a CLI on PATH, an environment variable present). The agent then reads the full SKILL.md with the file tool when it decides the skill applies.\n\n\n\n\n\n\nflowchart LR\n  subgraph sources[\"Skill directories\"]\n    S1[global skills]\n    S2[workspace skills]\n    S3[built-in skills]\n  end\n  MGR[\"SkillManager&lt;br/&gt;in-memory registry\"] --&gt; W\n  W[\"watchdog observer&lt;br/&gt;(thread)\"] --&gt; Q[\"queue\"]\n  Q --&gt; RELOAD[\"reload skill, run on_reload callbacks\"]\n  RELOAD --&gt; CMD[\"CommandManager sync&lt;br/&gt;slash commands refresh\"]\n  RELOAD --&gt; MGR\n  MGR --&gt; SUMMARY[\"compact skills summary&lt;br/&gt;injected into the prompt\"]\n  MGR --&gt; READ[\"read_file(SKILL.md)&lt;br/&gt;when the agent decides\"]\n  S1 --&gt; MGR\n  S2 --&gt; MGR\n  S3 --&gt; MGR\n  style W fill:#f7f0e6,stroke:#b08a3e\n\n\n\n\nFigure 4.3: Skill discovery and hot reload. The file watcher is the only long-lived thread-like thing in the system, and it hands work to the event loop through a queue rather than touching state itself.\n\n\n\n\n\nInvariant. Editing a skill never requires restarting the gateway, and adding one never requires re-running an install step. The watcher debounces per file over a one-second window (editors write files twice), then hands the event to the event loop through a queue — the watcher thread never mutates the registry itself.\nWhy watchdog, not watchfiles. The project depends on watchdog and not on watchfiles; this is stated in the README as a deliberate choice. The practical reasons are that watchdog exposes the underlying filesystem events (so the code can filter to SKILL.md and debounce by path), it has no Rust-backed native wheel to build, and it composes with a plain queue hand-off into asyncio. The choice is about control over the event stream, not throughput.\nSkill-first discipline. Skills are executable instructions, not documentation: read the file, then run the script it names, then record what happened. The built-in skills ship with real shell scripts (for example the tmux helpers) precisely so that “run the script” is a real instruction rather than an aspiration.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-memory",
+    "href": "chapters/03-patterns.html#sec-pat-memory",
+    "title": "4  Patterns",
+    "section": "4.6 6. Memory: capped files with protected sections",
+    "text": "4.6 6. Memory: capped files with protected sections\nPattern. Bounded buffer with a protected region.\nLong-term memory is two small Markdown files — facts and user profile — with hard character budgets (2200 and 1375 characters by default). Small on purpose: these files are injected into every system prompt, so their cost is paid on every turn. When the budget is exceeded, trimming is not “drop the oldest line”:\n\nthe HARD LESSONS section is identified and preserved through any trim;\nremaining sections are trimmed from the oldest inward, keeping the first section and the most recent ones;\nonly if that is still too large does the protected set get narrowed.\n\nTwo more invariants:\n\nCheck before writing. The memory tool refuses a write that would exceed the budget, and refuses an entry that is already present. Dedup is search-then- update, never append-and-hope.\nOne writer at a time. An asyncio.Lock guards writes to both files, and appends are atomic read-modify-write under that lock.\n\nIdle-time review, not parallel review. BackgroundReviewer (sarathy/session/review.py) enqueues a snapshot after each turn and processes it only when the model is idle, with a cooldown and a busy counter rather than a boolean so that a side turn running alongside a main turn keeps the gate closed until every active model call finishes. The reason is stated in the module docstring: parallel model calls would degrade performance on local models, which is the whole point of running locally. Failed reviews are retried up to a bound and re-queued at the back so one bad snapshot cannot block the queue.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-cron",
+    "href": "chapters/03-patterns.html#sec-pat-cron",
+    "title": "4  Patterns",
+    "section": "4.7 7. Schedules as data",
+    "text": "4.7 7. Schedules as data\nPattern. Declarative payload, single store, explicit lifecycle.\nThe scheduler (sarathy/cron/service.py) keeps every job in one JSON file and computes the next run time from the last run time, not from “now”, so recurring schedules do not drift. It supports three schedule kinds — one-shot absolute, fixed interval, and a cron expression with an optional IANA timezone — and it validates the combination at add time so an invalid pair fails at the CLI rather than silently never firing.\n\n\n\n\n\n\nflowchart LR\n  T[\"timer armed for the&lt;br/&gt;earliest next_run\"] --&gt; DUE{\"due?\"}\n  DUE --&gt;|no| T\n  DUE --&gt;|yes| RUN[\"_execute_job(job)\"]\n  RUN --&gt; CALL[\"on_job(job)\"]\n  CALL --&gt; LOOP[\"agent.process_direct(&lt;br/&gt;session_key = cron:&lt;job&gt;)\"]\n  LOOP --&gt; DELIVER{\"deliver and target set?\"}\n  DELIVER --&gt;|yes| OUT[\"publish_outbound\"]\n  DELIVER --&gt;|no| DASH[\"dashboard notification\"]\n  RUN --&gt; STATE[\"update last_status / last_error\"]\n  STATE --&gt; NEXT[\"compute next run from last run\"]\n  NEXT --&gt; SAVE[\"save job file\"]\n  SAVE --&gt; T\n  style LOOP fill:#eef3f8,stroke:#3f6c99\n\n\n\n\nFigure 4.4: One scheduler tick. The job payload is the single source of truth for a run: message text, delivery target, and which provider role should execute it.\n\n\n\n\n\nTwo behaviours are worth stating because they are easy to get wrong:\n\nMissed runs are caught up at startup, not silently skipped, but the next run for recurring schedules is then recomputed so a long outage does not produce a burst.\nThe in-memory store is the working copy. Mutations take an asyncio.Lock and re-save the file, but the file is only read once at load. This is the behaviour that produced the restart discipline in Chapter 4 — the scheduler is the one component where an external edit is a genuine foot-gun.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-jobs",
+    "href": "chapters/03-patterns.html#sec-pat-jobs",
+    "title": "4  Patterns",
+    "section": "4.8 8. Jobs as a queryable ledger",
+    "text": "4.8 8. Jobs as a queryable ledger\nPattern. Structured events, not log scraping.\nThe job tooling that runs alongside the assistant writes every task to a SQLite database: one row per job with a status enum and a spec/result path, plus a job_events table forming a timeline of structured events. Two consumers read it, both read-only:\n\nthe dashboard’s /api/jobs endpoints, which join the last event and an event count per job, and serve the spec and result text for the detail view;\nthe backend channel’s tailer, which wakes an isolated session when an event of an interesting type appears.\n\nCompletion is detected by the producer writing a done-marker file, not by a monitor grepping log output. That is a design choice with a large blast radius: log scraping is unparseable, races with log rotation, and produces false positives when a model quotes the phrase it was looking for. A file whose existence is the contract cannot be misread.\nInvariant. Consumers open the database with SQLite’s read-only URI flag. The dashboard and the tailer physically cannot corrupt the ledger, which is what makes it safe to serve it over HTTP.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-telemetry",
+    "href": "chapters/03-patterns.html#sec-pat-telemetry",
+    "title": "4  Patterns",
+    "section": "4.9 9. Telemetry that cannot break a turn",
+    "text": "4.9 9. Telemetry that cannot break a turn\nPattern. Fire-and-forget instrumentation with schema migrations.\nEvery model call records a row into usage.db: tokens, cached tokens, completion tokens, cost, duration, finish reason, model, provider, channel, session key and epoch. The store is a lazy module-level singleton with thread-local connections, WAL journaling and a busy timeout, and it carries a real migration ladder (user_version 1 → 2 adds cost, 2 → 3 adds the session epoch) that is idempotent and re-checks the columns for fresh databases.\nTwo invariants:\n\nRecording never raises into the turn. Usage capture is wrapped so that a telemetry failure is logged and the turn continues.\nTests never touch the production ledger. An autouse fixture points the store at a per-test temporary database and resets the singleton around every test, and the store itself has a second safety net that diverts to a temporary database whenever it detects it is running under a test.\n\nThis is a small pattern with a large payoff: it is why the assistant can afford to measure everything without adding a failure mode to the thing being measured.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-verify",
+    "href": "chapters/03-patterns.html#sec-pat-verify",
+    "title": "4  Patterns",
+    "section": "4.10 10. Verify before you close",
+    "text": "4.10 10. Verify before you close\nPattern. Definition of done includes the check.\nThis is the pattern that governs how work happens, not just how code is structured, and it has three parts:\n\nTests are part of the change, not a follow-up. Each behaviour in this book — session rotation, topic markers, backend envelopes, usage epochs, concurrency ordering — arrived with its test in the same commit.\nThe check is run by the person closing the work. Green is not claimed from a previous run; a suite that was flaky is re-run before it is believed, and if it is still flaky that is recorded as a defect rather than retried until it passes.\nThe artifact is inspected, not assumed. A handoff report is evidence, not proof; the finished thing is opened and walked.\n\nThe same discipline shows up inside the product: the dashboard’s session list has a fallback path precisely so that a missing cache degrades instead of lying, and the backend tailer refuses to replay history it cannot vouch for.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-spec",
+    "href": "chapters/03-patterns.html#sec-pat-spec",
+    "title": "4  Patterns",
+    "section": "4.11 11. Spec-first work",
+    "text": "4.11 11. Spec-first work\nPattern. One document per unit of work.\nCoding work is delegated to headless coding agents, and the contract is a single Markdown spec per unit: goal, verified context, precise scope, explicit constraints, a definition of done, and a progress tracker that a resumed run reads before doing anything. The agent is told to ground every claim in the repository, and the report at the end must contain evidence, not adjectives.\nFour rules make delegation safe rather than merely fast:\n\nFree models only. Delegated runs use free-tier models. This is a hard rule, not a preference.\nVerify before close. Whoever finishes the unit re-runs the tests, exercises live endpoints, and inspects the output before declaring it done.\nOne agent per repository, serialized. Two agents editing the same checkout is a lost update waiting to happen.\nRestart the gateway after landing on gateway source. Configuration changes hot-reload; code changes do not. The rule that distinguishes the two is in Chapter 4.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-patterns.html#sec-pat-restart",
+    "href": "chapters/03-patterns.html#sec-pat-restart",
+    "title": "4  Patterns",
+    "section": "4.12 12. Restart discipline",
+    "text": "4.12 12. Restart discipline\nPattern. Make the correct action the easy action, and name the wrong one.\nChanging source and changing configuration are different operations, and the system refuses to blur them:\n\nSource change → a redeploy script: reinstall the package, write a restart-request flag, restart the daemon through the CLI, then confirm with a boot notification that carries version and provider status. The flag is consumed by the new process at startup, which is how the operator learns what is now live.\nConfiguration change → the CLI restart command, or nothing at all if the subsystem hot-reloads (the runtime provider does; the scheduler does not).\n\nWhat is explicitly forbidden is killing the process by pattern from inside a session. A recorded incident cost roughly eight minutes of downtime because the kill pattern matched the shell command that was running it, severing the session that was doing the killing. The operational rule is now written down: restart through the CLI, never by hand.\nNext: Chapter 4 tells the story behind each of these patterns — including the ones that were wrong first.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Patterns</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html",
+    "href": "chapters/04-decisions.html",
+    "title": "5  Decisions and Backstories",
+    "section": "",
+    "text": "5.1 1. Local-first, and what that forbids\nEvery entry here has the same shape: the situation, the options that were real, the choice, and what the choice cost. Entries marked [ops] are operational practice from the operator’s engineering notes; the repository cannot corroborate them, and they are labelled so a reader can tell the difference.\nSituation. Mainstream assistants in this category are cloud products with large dependency surfaces. The author wanted an assistant that runs on one machine and can be understood end to end.\nOptions considered. (a) Extend a general framework; (b) keep the dependency list small and support local model servers only; (c) local-first with hosted escape hatches where they are genuinely better.\nChoice. (c), with a strong bias toward (b). The provider registry supports four kinds — three local, one “any OpenAI-compatible endpoint” — and nothing requires an account. Web search and speech-to-text may use hosted providers, but both degrade to a warning when unconfigured.\nCost. Features that assume a strong hosted model are simply absent. Reasoning effort is opt-in because not every local model supports it. The image provider role exists because a text-only main model cannot read a screenshot.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-fork",
+    "href": "chapters/04-decisions.html#sec-dec-fork",
+    "title": "5  Decisions and Backstories",
+    "section": "5.2 2. Fork, then diverge",
+    "text": "5.2 2. Fork, then diverge\nSituation. Build a personal assistant. Write one from scratch, or start from something that already works?\nChoice. Fork an existing minimal Python agent and keep its skeleton — bus, loop, tools — while growing a different architecture around it.\nWhy. The fork’s shape is genuinely good for this problem: a message bus, a tool loop, a provider layer. There was no reason to rewrite those. Everything the project is actually about — channels, sessions, memory, scheduling, a web UI, a job ledger — did not exist in the starting point and now constitutes most of the code.\nCost. Over 878 commits the divergence is total: the channel layer, session management, the gateway lifecycle, the dashboard and the backend trigger path are all new. The fork is now ancestry rather than architecture. What remains of the original is the shape of the turn loop and the module layout, both of which have been heavily extended.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-process",
+    "href": "chapters/04-decisions.html#sec-dec-process",
+    "title": "5  Decisions and Backstories",
+    "section": "5.3 3. One process, one event loop",
+    "text": "5.3 3. One process, one event loop\nSituation. The system needs a web dashboard, a chat bot, a scheduler, an IMAP poller and a model client. Each could be its own process.\nOptions considered. (a) Multi-process with IPC; (b) one process with threads; (c) one asyncio process hosting everything, including the HTTP servers.\nChoice. (c).\nWhy it works. The dashboard’s aiohttp app and the backend channel’s app run inside the gateway’s event loop. There is no serialisation between the web request that starts a turn and the turn itself: the request handler publishes an InboundMessage and returns. A websocket frame and a cron tick travel the same path a Telegram update does. Threads are used in exactly one place — the skill file watcher — and it hands work back to the loop through a queue.\nCost. One slow blocking call in the loop stalls everything. This is why the heavy model listing and context-length detection run in a thread or behind short timeouts, and why the reviewer is gated on model idleness instead of running concurrently.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-bus",
+    "href": "chapters/04-decisions.html#sec-dec-bus",
+    "title": "5  Decisions and Backstories",
+    "section": "5.4 4. Channels as adapters over a two-dataclass bus",
+    "text": "5.4 4. Channels as adapters over a two-dataclass bus\nSituation. Five very different integrations need to reach the same agent.\nRejected first. Giving the agent a channel-specific entry point, or inventing a richer event hierarchy per channel.\nChoice. Two dataclasses and two queues. InboundMessage and OutboundMessage, with a free-form metadata dict on both.\nWhy. The bus stays two concepts wide forever. Anything new a channel needs — thread identifiers, image roles, progress flags, side-conversation markers — travels in metadata instead of widening the bus. Session identity is a property computed on the message, so every downstream subsystem agrees on it for free.\nCost. metadata is untyped, and the consequences of that are handled by convention: keys are underscore-prefixed for internal markers, and every consumer that reads one documents what it expects. A wrong key fails quietly. This is a deliberate trade of static safety for extensibility in a system with exactly one integrator.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-kb",
+    "href": "chapters/04-decisions.html#sec-dec-kb",
+    "title": "5  Decisions and Backstories",
+    "section": "5.5 5. A SQLite knowledge base instead of markdown-only memory",
+    "text": "5.5 5. A SQLite knowledge base instead of markdown-only memory\n[ops] This decision lives in the operator’s workspace tooling, not in the package, so it is described as practice.\nSituation. Markdown memory files are pleasant to read and edit by hand, but they stop working as a knowledge base past a few hundred facts: recall is substring matching, everything is in every prompt, and consolidation turns into guesswork about what to merge.\nChoice. Durable facts live in a SQLite database with full-text search, behind a small command-line interface. The Markdown memory files are demoted to indexes — short, human-readable pointers into the database — rather than being the store.\nWhy. Search becomes a query instead of a grep, dedup becomes search-then-update instead of eyeballing, and the index files stay small enough to be injected into a prompt without cost. The single-writer discipline that follows from a CLI is the point: every durable fact enters through one path, so there is no question about who wrote what or when.\nCost. A fact that is not in the database does not exist, including for the operator. The CLI is a hard dependency of the workflow, and the index files drift if they are edited by hand — which is exactly why they are treated as generated.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-review",
+    "href": "chapters/04-decisions.html#sec-dec-review",
+    "title": "5  Decisions and Backstories",
+    "section": "5.6 6. Idle-time review instead of a background thread per session",
+    "text": "5.6 6. Idle-time review instead of a background thread per session\nSituation. The agent should learn durable facts from conversations. Commit 9046c87 records the earlier design: three writers — a per-message suggestion hook, a periodic consolidation pass, and a periodic archival pass — all writing the same memory file, producing duplicate entries and lost writes.\nChoices. (a) Fix the races; (b) keep one writer but run it concurrently; (c) keep one writer and run it only when the model is idle.\nChoice. (c), and the reviewer refuses to start while any model call is in flight.\nWhy. The concurrency is not the interesting constraint — the hardware is. Two simultaneous calls to a local model server halve throughput for the user’s own conversation. Idle-time review costs the user nothing and still runs after every turn.\nCrash safety. The compromise this creates is that a session can be archived before its review finished. That is handled explicitly rather than ignored: the archive is stamped archived: false, a one-shot sweep at gateway startup re-processes anything still unstamped and then flips the stamp, and the archive pruner refuses to delete unstamped files. Learning is at-least-once, and the dedup check before each write makes that safe.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-watchdog",
+    "href": "chapters/04-decisions.html#sec-dec-watchdog",
+    "title": "5  Decisions and Backstories",
+    "section": "5.7 7. watchdog over watchfiles",
+    "text": "5.7 7. watchdog over watchfiles\nSituation. Skills must hot-reload without a restart.\nChoice. watchdog’s Observer with a custom event handler, not watchfiles.\nWhy. The handler receives raw filesystem events, which makes two things easy that would otherwise need extra machinery: filtering to SKILL.md only, and debouncing per path. The handler runs on a watchdog thread and does nothing but push (event_type, path) onto an asyncio.Queue; all mutation happens on the event loop, so the registry is never touched from two threads. It is also a pure Python package with no native wheel to build, which matters for a tool whose whole premise is “install it and it works”.\nCost. The debounce window is a hand-rolled one-second timer rather than a library feature, and the observer’s lifecycle has to be managed explicitly on start and stop.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-skillprompt",
+    "href": "chapters/04-decisions.html#sec-dec-skillprompt",
+    "title": "5  Decisions and Backstories",
+    "section": "5.8 8. A compact skills summary instead of inlined skills",
+    "text": "5.8 8. A compact skills summary instead of inlined skills\nSituation. Skills are Markdown documents. Inlining them all into the system prompt would be expensive and would blow the context on a small local model.\nChoice. Generate a compact summary — category, count, availability, member names — and let the agent read the full SKILL.md with the file tool when it decides the skill applies.\nWhy. Skill discovery becomes cheap and constant-size, while skill content is paid for only when used. Availability is computed from each skill’s declared requirements so the summary tells the model what is actually runnable on this machine, not merely what is installed.\nCost. The agent has to make a decision to spend a tool call. A skill with a weak name or description simply never gets read; the summary line is therefore the most important text in the file, not the body.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-epoch",
+    "href": "chapters/04-decisions.html#sec-dec-epoch",
+    "title": "5  Decisions and Backstories",
+    "section": "5.9 9. Session epochs: cost accounting that survives “start a new chat”",
+    "text": "5.9 9. Session epochs: cost accounting that survives “start a new chat”\nSituation. Usage is recorded per session key. But a session key is reused across the whole life of a chat, so “how much has this conversation cost?” grows without bound and /new does not reset it.\nChoice. Add an epoch counter, persisted per session key. Every usage row carries the epoch that was current when it was recorded, and a new conversation advances the epoch.\nWhy. Cost can then be reported per conversation rather than per key, with no destructive deletion of history — the ledger stays append-only and the usage_sessions table holds the authoritative current epoch, so a crash between “advance” and “next turn” cannot desynchronise. The footer shows the session cost at the current epoch.\nCost. One more dimension in every usage query and one more migration step (schema version 3). The epoch is resolved once per turn, not per record, so the hot path stays cheap.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-cron-cap",
+    "href": "chapters/04-decisions.html#sec-dec-cron-cap",
+    "title": "5  Decisions and Backstories",
+    "section": "5.10 10. The 500-message cap and what a long-lived cron session did about it",
+    "text": "5.10 10. The 500-message cap and what a long-lived cron session did about it\nSituation. Sessions are trimmed to a configurable cap — 500 messages by default — when saved to disk. Cron jobs reuse a stable per-job key, so their session is truncated forever and never grows past the rotation threshold.\nThe failure. Because the trim kept the file at the cap, the rotation check never fired. The session was reused indefinitely on a rolling window of stale context until a run’s prompt blew past the model’s context, at which point the run silently produced nothing and still reported success. Commit 67a3176 records the fix and the reasoning.\n\n\n\n\n\n\nflowchart TB\n  ADD[\"add_message()\"] --&gt; Q1{\"interactive&lt;br/&gt;session?\"}\n  Q1 --&gt;|yes| R1{\"messages &gt;=&lt;br/&gt;rotation cap?\"}\n  R1 --&gt;|yes| ARC[\"archive + fresh session\"]\n  R1 --&gt;|no| KEEP[\"append\"]\n  Q1 --&gt;|no| KEEP\n  GOC[\"get_or_create()&lt;br/&gt;between turns\"] --&gt; Q2{\"cron session?\"}\n  Q2 --&gt;|yes| R2{\"messages &gt;&lt;br/&gt;trim cap?\"}\n  R2 --&gt;|yes| ARC\n  R2 --&gt;|no| KEEP\n  Q2 --&gt;|no| R3{\"messages &gt;=&lt;br/&gt;rotation cap?\"}\n  R3 --&gt;|yes| ARC\n  R3 --&gt;|no| KEEP\n  style ARC fill:#eaf3ec,stroke:#5f8a6d\n\n\n\n\nFigure 5.1: Rotation policy after the fix. Interactive sessions may rotate mid-turn; cron sessions rotate only between runs, so a run in progress is never interrupted.\n\n\n\n\n\nThe rule that came out of it.\n\nCron sessions never rotate mid-turn — a rotation in the middle of a run would destroy the run’s context.\nCron sessions rotate between runs, at the trim cap, on both the cached path and the cold-load path (a session loaded from disk after a restart may already be over the threshold).\nCron sessions are exempt from the save-time trim, with a generous safety cap instead, so the archive captures their full history rather than a rolling window.\nArchives get an explicit retention policy, because nothing else reaps them.\n\nThe generalisable lesson. A cap and a rotation threshold are different numbers. When a trim keeps a value below the threshold that triggers rotation, the rotation is dead code that nobody notices until the context explodes.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-cron-cache",
+    "href": "chapters/04-decisions.html#sec-dec-cron-cache",
+    "title": "5  Decisions and Backstories",
+    "section": "5.11 11. The scheduler caches jobs in memory, so restart discipline became a rule",
+    "text": "5.11 11. The scheduler caches jobs in memory, so restart discipline became a rule\nSituation. The scheduler reads its job file once at startup and keeps the job list in memory, re-saving the file on every mutation.\nThe failure. Editing the job file from outside — by hand, or with a script that was not the scheduler — is silently undone. The next save writes the in-memory copy back over the edit. Nothing errors; the change simply disappears.\nChoice. Keep the cache. It is the right structure: one owner for the job list, no read-modify-write races between the CLI and the timer, no file locking.\nThe price, paid explicitly. Editing scheduler state is now an operation that requires a gateway restart to take effect, so that fact became a documented operational rule rather than a trap:\n\n\n\n\n\n\n\n\nChange\nTakes effect\nAction\n\n\n\n\nModel, provider, temperature, reasoning effort\nNext turn\nNothing — hot-reloaded by mtime check\n\n\nSkill file\nImmediately\nNothing — file watcher\n\n\nWorkspace file or memory\nNext turn\nNothing\n\n\nCron job file\nAfter restart\nRestart the gateway\n\n\nGateway source\nAfter restart\nRedeploy script, then restart\n\n\n\nLesson. Caching in-memory is almost always the right call; the mistake is failing to write down which caches exist. Here the cache is the reason the restart rule exists, and the rule is now a table rather than folklore.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-backend",
+    "href": "chapters/04-decisions.html#sec-dec-backend",
+    "title": "5  Decisions and Backstories",
+    "section": "5.12 12. The backend channel: a third trigger path",
+    "text": "5.12 12. The backend channel: a third trigger path\nSituation. Originally there were two ways to start a turn: a human in a chat, or a schedule. Both are person-shaped. Automated work — a long-running job, a worker, a migration — has nobody to press the button.\nChoice. A channel adapter that is not a chat platform at all. It accepts signed event envelopes on a loopback endpoint and tails the jobs database for new events, and each event wakes an isolated session scoped to its job.\nWhy an adapter, not a hook. Because an adapter gets session isolation, the message bus, usage accounting, the agent loop, and reply handling for free. A hook would have to reimplement all of it, badly.\nWhy two ways in. Pushing over HTTP is simple and immediate, and a producer may not have a database. Tailing the database needs no producer changes at all: a job that already writes events gets woken for free. The tailer stores a high-watermark and starts after existing rows, so enabling it never replays history into a session.\nSecurity posture. Refuses to start without a credential, forces a non-loopback bind address back to loopback, compares credentials in constant time, and opens the jobs database read-only.\nCost. Replies have nowhere to go. They are logged, unless the envelope names a channel to escalate to — which is the one case where a machine-initiated turn is allowed to interrupt a human.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-jobsdb",
+    "href": "chapters/04-decisions.html#sec-dec-jobsdb",
+    "title": "5  Decisions and Backstories",
+    "section": "5.13 13. Jobs are a ledger, not a log file",
+    "text": "5.13 13. Jobs are a ledger, not a log file\n[ops] The job tooling is workspace-side; the consumers are in the package.\nSituation. Long-running delegated work needs to be observable: what is running, what is stuck, what finished, and what did it actually produce.\nRejected. Parsing the agent’s log output.\nChoice. One SQLite database with a jobs table (status enum, repo, model, spec and result paths, timestamps) and a job_events table forming the timeline.\nWhy. A status enum is queryable; a log line is not. A structured event table supports “show me everything that happened to this job in order” with one indexed query, which is exactly what the dashboard’s detail view does. And because the events are rows, the backend tailer can select on them.\nCompletion detection is a file, not a pattern match. The producer writes a done-marker file when the work is genuinely finished. Nothing greps a log for a success phrase. Grepping logs is fragile in a way that is invisible until it matters: log rotation truncates the evidence, concurrent runs interleave, and a model quoting the phrase it was looking for produces a false positive. A file’s existence is a contract that cannot be misread.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-parity",
+    "href": "chapters/04-decisions.html#sec-dec-parity",
+    "title": "5  Decisions and Backstories",
+    "section": "5.14 14. Dashboard parity means behaviour and confirmation",
+    "text": "5.14 14. Dashboard parity means behaviour and confirmation\nSituation. The dashboard is supposed to be “the same assistant, in a browser”. The first attempts implemented the mechanism — an endpoint that starts a new session — and still did not match.\nThe chain of commits is the story:\n\n0138361 — make the dashboard’s “new chat” archive the session the way Telegram’s /new does. Mechanism parity.\ncade0bc — persist the rotation to disk, fix the mobile layout and the PWA cache headers.\n9d9747c — fix the subtle one: the new-chat path was archiving a stale disk copy of the session, because the live conversation only lives in memory and is flushed opportunistically. Every message since the last save was silently dropped from the archive. The fix archives the cached session when there is one.\n9d535f2 — add the success toast, so the user is told “session archived, new chat started”.\n\nThe rule. Parity is behaviour plus confirmation UX. A feature that works but does not say it happened is not done. The user must not have to open the transcript to find out whether something was saved.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-concurrency",
+    "href": "chapters/04-decisions.html#sec-dec-concurrency",
+    "title": "5  Decisions and Backstories",
+    "section": "5.15 15. Per-session concurrency instead of one global dispatch lock",
+    "text": "5.15 15. Per-session concurrency instead of one global dispatch lock\nSituation. A single lock around message dispatch meant one slow turn blocked every other conversation — including /btw side questions and background work.\nChoice. Three layers, in a fixed order: a global lock for runtime hot-reload and config mutation, a semaphore capping concurrent sessions, then a per-session lock. Commit 5929cc3 and its tests cover cross-session parallelism, ordering within a session, registry cleanup when locks go idle, /stop isolation, and the global cap.\nWhy a lock registry rather than a single lock. Sessions are created and destroyed constantly; a fixed set of locks would leak. The registry creates a lock on first use and drops it when it is unlocked with no waiters, which is why the tests assert the registry does not grow.\nWhy the lock ordering is documented. Deadlock avoidance by convention is fragile. The rule — global before session, never the reverse — is written at the point of acquisition where it would be violated, and the concurrency tests are what keep the convention honest.\nThe same commit added guards elsewhere for the same reason: an asyncio.Lock around memory writes, the scheduler’s job list, and the subagent task registry. The lesson is that per-session concurrency does not remove the need for locking; it moves it to the objects that are actually shared.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-restart",
+    "href": "chapters/04-decisions.html#sec-dec-restart",
+    "title": "5  Decisions and Backstories",
+    "section": "5.16 16. Restart: script for source, CLI for configuration",
+    "text": "5.16 16. Restart: script for source, CLI for configuration\nSituation. After landing a change to the gateway, the running process still has the old code. Something has to restart it.\nChoices. (a) Kill by pattern; (b) restart by hand; (c) a redeploy script for source and a CLI restart for configuration.\nChoice. (c). The redeploy script reinstalls the package, writes a restart-request flag containing where to send the confirmation, restarts the daemon through its own CLI, and lets the new process consume the flag and send a boot notification reporting version and provider status. Configuration-only changes use the CLI restart command.\nThe incident that produced the rule. An ad-hoc kill by process-name pattern was run from inside a session. The pattern matched the shell command that was running the kill, so the session killed itself. Recovery took roughly eight minutes. The rule is now blunt: restart through the CLI, never by hand.\nWhy the flag file exists at all. Because a restart is asynchronous from the operator’s point of view. Writing “please tell me when you’re back” to disk before restarting is what turns a silent restart into an observable one — and it is why the confirmation includes the version that is now live, which is what versioning depends on.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-versioning",
+    "href": "chapters/04-decisions.html#sec-dec-versioning",
+    "title": "5  Decisions and Backstories",
+    "section": "5.17 17. Versioning: the deploy log is the source of truth",
+    "text": "5.17 17. Versioning: the deploy log is the source of truth\n[ops]\nSituation. With an editable install and a restart-based deploy, “which code is running?” becomes a real question, not a rhetorical one.\nChoice. Semantic version bumps committed alongside the change, a deploy log recording each deployed version, commit messages that reference the unit of work, and a boot notification that reports the version of the running process.\nWhy. The running process reports its own version at boot, and the deploy log records what was pushed when. Together they answer “is the fix live?” without anyone having to remember. Referencing the work unit in the commit message is what makes the history navigable: git log --grep finds every change belonging to a decision, and the Engineering Log at the end of this book is written from exactly that history.\nCost. Version discipline is manual. It is kept honest by bumping in the same commit as the behaviour change, never in a batch.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-testing",
+    "href": "chapters/04-decisions.html#sec-dec-testing",
+    "title": "5  Decisions and Backstories",
+    "section": "5.18 18. Tests, and treating a green suite as a claim",
+    "text": "5.18 18. Tests, and treating a green suite as a claim\nSituation. A single-operator project still accumulates enough moving parts — a scheduler, a watcher, three HTTP servers, four databases — that regressions are guaranteed without tests.\nChoice. unittest-style suites under tests/, mandatory for every unit of work, plus two pieces of hygiene that matter more than usual here:\n\nIsolation by default. An autouse fixture redirects the usage store to a per-test temporary database, so no test can write to the production ledger even if the test author forgets. The store has its own second net for the same reason.\nA flaky test is a defect. A suite that must be re-run to be believed is not green, it is noisy. The rule is: re-run before trusting green; if it fails again, record it and fix it.\n\nAnd the cultural half. Incidents and corrections are written down as durable facts, and the most important ones are promoted into the protected hard-lessons region of memory so trimming can never drop them. The cap-and-protect design in Chapter 3 exists because of this: the most valuable thing in the memory file is the thing that must survive.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-decisions.html#sec-dec-common",
+    "href": "chapters/04-decisions.html#sec-dec-common",
+    "title": "5  Decisions and Backstories",
+    "section": "5.19 What the decisions have in common",
+    "text": "5.19 What the decisions have in common\nRead the list backwards and a single theme emerges: the code is the cheap part, the invariants are the expensive part.\n\nEvery cache in the system is documented as a cache, so “why did my edit vanish” is answerable.\nEvery trimmer protects its most valuable content, because trimming is where value silently leaks.\nEvery fan-out point — the bus, the API, the lock registry — has an invariant written at the point where it would be broken.\nEvery capability that could be asynchronous but shouldn’t, isn’t: review waits for idleness, the scheduler waits for its timer, one agent per repository waits for the last one.\n\nThe through-line from Chapter 1 is intact. The requirement was that the data flow be traceable. The decisions above are what it costs to keep that true as the system grows.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Decisions and Backstories</span>"
+    ]
+  },
+  {
+    "objectID": "engineering-log.html",
+    "href": "engineering-log.html",
+    "title": "6  Engineering Log",
+    "section": "",
+    "text": "6.1 How to add an entry\nThis is the living page of the book. Chapters 1 to 4 describe how the system works and why; this page records what changed, newest first, with the lesson attached.\nIt is the mechanism that keeps the book honest. A decision chapter that is never updated is a museum; this page is the changelog that forces the rest of the book to be revisited whenever something moves.\nLast entry: 2026-10-04 · Entries: 5 · Newest first\nAppend to the top of the list, directly under this line:",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Engineering Log</span>"
+    ]
+  },
+  {
+    "objectID": "engineering-log.html#sec-log-howto",
+    "href": "engineering-log.html#sec-log-howto",
+    "title": "6  Engineering Log",
+    "section": "",
+    "text": "Pick a date (the day of the change, not the day you are writing it up).\nCopy the template below verbatim and fill it in.\nMake the lesson sentence the point. If the entry cannot state a rule or a correction, it is a changelog line, not a log entry.\nIf the change invalidates something in a chapter, fix the chapter in the same commit. A log entry that leaves the book contradicting itself is worse than no entry.\nRe-render and re-run the smoke test (see doc/README.md).\n\n\n6.1.1 Entry template\nCopy everything between the rules below into a new ## YYYY-MM-DD — &lt;title&gt; section.\n## YYYY-MM-DD — &lt;short title&gt;\n\n**What changed.** One or two sentences. Name the subsystem and the observable\nbehaviour change. Reference the commit by short hash if there is one.\n\n**Why.** The situation that made the change necessary — a limit reached, a bug\nseen, a capability needed.\n\n**Lesson / correction.** The rule that comes out of it, phrased as an instruction\nto the next person (or the next run). This is the part future readers care\nabout.\n\n**Where it lives.** The files that were touched, relative to the repository root.\n\n\n6.1.2 House rules for entries\n\nEvidence, not narrative. Point at code, a commit, or an observable behaviour. If neither exists, the entry is not ready.\nNo personal information. The same rules as the rest of the book: no names, no identifiers, no credentials, no private paths. See doc/README.md.\nCorrections are welcome, mistakes are not hidden. An entry that records “this was wrong, here is the rule now” is more valuable than one that never records a mistake.\nOne entry per decision, not per commit. A commit that touches three files for one reason is one entry.",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Engineering Log</span>"
+    ]
+  },
+  {
+    "objectID": "engineering-log.html#log-0150",
+    "href": "engineering-log.html#log-0150",
+    "title": "6  Engineering Log",
+    "section": "6.2 2026-10-04 — Session topics and the backend channel (0.15.0)",
+    "text": "6.2 2026-10-04 — Session topics and the backend channel (0.15.0)\nWhat changed. Two features in one release. First, a session topic is now carried on the reply itself: the prompt instructs the model to end every final user-facing response with exactly one trailing machine line naming a topic (or explicitly clearing it), and the gateway strips that line, applies it to session metadata, and persists it. Second, the backend channel landed — a loopback-only, token-gated event endpoint plus a read-only tailer over the jobs database, both waking isolated per-job sessions. A lightweight SQLite sessions index landed with it so listing sessions stops reading every transcript. Reference: 553c00e.\nWhy. Sessions had no subject line, so a long-lived conversation was unidentifiable in the dashboard and in any listing. And the assistant could only be started by a person in a chat, or on a schedule — automated work had no way to wake it.\nLesson / correction. Machine-readable lines must be stripped at the edge, before anything else touches the content, and they must never be visible in user facing text. When the model fails to emit one, the gateway treats it as a no-op rather than an error: a missing signal degrades, it does not fail. And a user-locked value must never be overwritten by a model-suggested one — that asymmetry has to be encoded, not assumed.\nWhere it lives. sarathy/agent/loop.py, sarathy/agent/context.py, sarathy/agent/builtin_commands.py, sarathy/channels/backend.py, sarathy/channels/manager.py, sarathy/config/schema.py, sarathy/session/manager.py.",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Engineering Log</span>"
+    ]
+  },
+  {
+    "objectID": "engineering-log.html#log-parity",
+    "href": "engineering-log.html#log-parity",
+    "title": "6  Engineering Log",
+    "section": "6.3 2026-09-23 — Dashboard “new chat” parity, in four commits",
+    "text": "6.3 2026-09-23 — Dashboard “new chat” parity, in four commits\nWhat changed. The dashboard’s new-chat action was brought to parity with the chat command, in sequence: archive the session the way the chat side does (0138361), persist the rotation and fix mobile layout and cache headers (cade0bc), archive the live cached session rather than the stale on-disk copy (9d9747c), and confirm it to the user with a success toast (9d535f2).\nWhy. The mechanism existed and was wrong. Because the live conversation lives in memory and is only flushed to disk opportunistically, the rotation archived an old snapshot — every message since the last save was silently dropped from the archive — and never persisted the fresh session, so a reload resurrected the conversation that was supposed to be gone. Two archive files of identical size were the symptom that gave it away.\nLesson / correction. A rotation must archive what is actually in memory, not what happens to be on disk. When a component caches, the cache is the truth and the file is a lagging copy — code that reads the file to make a destructive decision is operating on stale data. And parity is behaviour plus confirmation: a feature that works but does not say it happened is not finished. Walk both products end to end; do not compare mechanisms.\nWhere it lives. sarathy/session/manager.py, the dashboard session view and its API handlers.",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Engineering Log</span>"
+    ]
+  },
+  {
+    "objectID": "engineering-log.html#log-concurrency",
+    "href": "engineering-log.html#log-concurrency",
+    "title": "6  Engineering Log",
+    "section": "6.4 2026-09-22 — Per-session concurrency replaces the global dispatch lock",
+    "text": "6.4 2026-09-22 — Per-session concurrency replaces the global dispatch lock\nWhat changed. A single dispatch lock was replaced with three layers: a global lock for runtime hot-reload and configuration mutation, a semaphore capping concurrent sessions, and a per-session lock registry that creates locks on demand and drops them when idle. Matching guards were added around memory writes, the scheduler’s job list, and the subagent task registry. Reference: 5929cc3.\nWhy. One slow turn blocked every other conversation — including side questions and background work. The assistant was effectively single-lane.\nLesson / correction. Removing a global lock does not remove the need for locking; it moves the lock onto the objects that are genuinely shared. Lock ordering has to be written down at the point of acquisition, and the tests have to cover it: parallelism across sessions, ordering within a session, registry cleanup, cancellation isolation, and the global cap. A lock registry that never shrinks is a slow leak.\nWhere it lives. sarathy/agent/loop.py, sarathy/session/memory.py, sarathy/cron/service.py, sarathy/agent/subagent.py, tests/test_session_concurrency.py.",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Engineering Log</span>"
+    ]
+  },
+  {
+    "objectID": "engineering-log.html#log-epoch",
+    "href": "engineering-log.html#log-epoch",
+    "title": "6  Engineering Log",
+    "section": "6.5 2026-09-22 — Session epochs make “new conversation” reset the cost ledger",
+    "text": "6.5 2026-09-22 — Session epochs make “new conversation” reset the cost ledger\nWhat changed. Usage accounting gained an epoch: every usage row records the epoch that was current at the time, a small table holds the authoritative current epoch per session, and starting a new conversation advances it. The compact usage footer now reports the cost of the current conversation rather than of all time. References: 33f455b, 3c107b1, 054a211.\nWhy. Cost was attributed to the session key, which lives for the whole life of a chat. Starting a new conversation did not and could not reset the number without deleting history.\nLesson / correction. Attribute to the conversation, key on the identity. Adding a dimension beat mutating history: the ledger stays append-only, and the authoritative epoch lives outside it so a crash between “advance” and “next turn” cannot desynchronise. Schema changes ship as numbered, idempotent migrations that re-check for existing columns.\nWhere it lives. sarathy/usage/store.py, sarathy/usage/footer.py, sarathy/agent/loop.py.",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Engineering Log</span>"
+    ]
+  },
+  {
+    "objectID": "engineering-log.html#log-cron-cap",
+    "href": "engineering-log.html#log-cron-cap",
+    "title": "6  Engineering Log",
+    "section": "6.6 2026-09-20 — Cron sessions rotate at the trim cap, and archives get retention",
+    "text": "6.6 2026-09-20 — Cron sessions rotate at the trim cap, and archives get retention\nWhat changed. Scheduled jobs now rotate their session between runs rather than never; the check runs on both the cached and the cold-load path; cron sessions are exempt from the save-time trim so their full history reaches the archive; and prune_archives() added an explicit retention policy that keeps anything still unverified. Reference: 67a3176.\nWhy. A cron session reuses one stable key and was being trimmed to the cap on every save, so the length could never reach the rotation threshold. The session was reused forever on a rolling window of stale context until a run’s prompt overflowed — and the run reported success while producing nothing.\nLesson / correction. A cap and a rotation threshold are different numbers; if the cap keeps the value below the threshold, the rotation is dead code. Verify that a limit can actually be reached before relying on the behaviour behind it. Rotation points must also respect the unit of work — a cron session may rotate between runs, never mid-run, because a mid-run rotation destroys the run’s own context. And any directory that grows without a reaper needs an explicit retention policy.\nWhere it lives. sarathy/session/manager.py, tests/test_session_rotation.py.",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Engineering Log</span>"
+    ]
+  },
+  {
+    "objectID": "engineering-log.html#log-seed",
+    "href": "engineering-log.html#log-seed",
+    "title": "6  Engineering Log",
+    "section": "6.7 Seeded from the history",
+    "text": "6.7 Seeded from the history\nThese five entries were written from the commit history on 2026-10-04, working backwards from the release that prompted this book. They are deliberately short and deliberately specific: the point of an entry is the lesson, and a lesson that needs three paragraphs is usually a chapter section instead. Later entries should be written at the moment the decision is made, while the reasoning is still fresh — that is the only time the “why” is fully available.",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Engineering Log</span>"
+    ]
+  },
+  {
+    "objectID": "engineering-log.html#log-related",
+    "href": "engineering-log.html#log-related",
+    "title": "6  Engineering Log",
+    "section": "6.8 Related reading",
+    "text": "6.8 Related reading\n\nChapter 3 — the patterns these entries exercise.\nChapter 4 — the long-form version of each lesson.\ndoc/README.md — the update workflow and the sanitization rules.\nAppendix — how a change gets verified before it gets logged.",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Engineering Log</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-testing-and-ops.html",
+    "href": "chapters/05-testing-and-ops.html",
+    "title": "Appendix A — Testing and Operations",
+    "section": "",
+    "text": "A.1 The test suite\nThis appendix describes the machinery that decides whether a change is real. It is an appendix because it is about process rather than architecture — but it is the part that makes everything in the other chapters trustworthy.\nTests live in tests/, one module per subsystem, written with unittest-style assertions and run under pytest with asyncio in automatic mode (pyproject.toml). There are 36 modules. The distribution says what the project actually worries about:\nRun them with:",
+    "crumbs": [
+      "Appendices",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>Testing and Operations</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-testing-and-ops.html#sec-tests-suite",
+    "href": "chapters/05-testing-and-ops.html#sec-tests-suite",
+    "title": "Appendix A — Testing and Operations",
+    "section": "",
+    "text": "Area\nRepresentative modules\n\n\n\n\nChannels\ntest_backend_channel.py, test_dashboard_channel.py, test_email_channel.py, test_dashboard_cli.py\n\n\nSessions\ntest_session_rotation.py, test_sessions_index.py, test_archival_flag.py, test_history_trimmer.py, test_session_concurrency.py, test_session_topic_signal.py\n\n\nAgent behaviour\ntest_steer_btw.py, test_task_cancel.py, test_tool_validation.py, test_skills_summary_compact.py, test_has_image_content.py\n\n\nProviders\ntest_providers_manager.py, test_provider_role_dispatch.py, test_provider_cache_usage.py, test_provider_streaming_usage.py\n\n\nUsage ledger\ntest_usage_store.py, test_usage_recording.py, test_usage_footer.py\n\n\nOperations\ntest_cron_service.py, test_cron_commands.py, test_commands.py, test_heartbeat_service.py, test_cli_input.py\n\n\n\n\npytest                       # everything\npytest tests/test_cron_service.py   # one module\nruff check sarathy/          # lint",
+    "crumbs": [
+      "Appendices",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>Testing and Operations</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-testing-and-ops.html#sec-tests-isolation",
+    "href": "chapters/05-testing-and-ops.html#sec-tests-isolation",
+    "title": "Appendix A — Testing and Operations",
+    "section": "A.2 Test isolation is not optional",
+    "text": "A.2 Test isolation is not optional\nThe single most important fixture in the suite is an autouse one that redirects the usage store to a per-test temporary database and resets the module-level singleton around every test. Without it, any test that runs the agent loop would append rows to the real telemetry ledger.\nThe store defends itself a second time: if it detects it is running under a test runner and no explicit path was provided, it diverts to a temporary database. Two independent nets exist because the cost of getting this wrong — a test suite that quietly corrupts production data — is much higher than the cost of the redundancy.\nThe same principle appears in the product: the backend channel’s jobs-database access is read-only, so a bug there cannot corrupt the ledger it reads.",
+    "crumbs": [
+      "Appendices",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>Testing and Operations</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-testing-and-ops.html#sec-tests-regression",
+    "href": "chapters/05-testing-and-ops.html#sec-tests-regression",
+    "title": "Appendix A — Testing and Operations",
+    "section": "A.3 What a regression test looks like here",
+    "text": "A.3 What a regression test looks like here\nTwo examples, because they show what “verify before close” produces.\nStale-cache rotation. The dashboard new-chat regression (9d9747c) did not stop at “it archives now”. It added a test for the specific shape of the bug: a session that is live in the cache with messages since the last save, rotated through the new-chat path, and asserted that the archive contains the cached messages rather than the on-disk snapshot.\nContract tests for an external interface. The backend channel tests build a real database with a real events table, construct the channel against it, and exercise the HTTP endpoint end to end — including the authorisation path, the envelope validation path, the high-watermark behaviour on first run, and the event-type filter. The envelope validation is a pure function, so it is tested directly as well.",
+    "crumbs": [
+      "Appendices",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>Testing and Operations</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-testing-and-ops.html#sec-tests-verify",
+    "href": "chapters/05-testing-and-ops.html#sec-tests-verify",
+    "title": "Appendix A — Testing and Operations",
+    "section": "A.4 Verify before close",
+    "text": "A.4 Verify before close\nThe rule, stated once and applied everywhere:\n\n\n\n\n\n\nflowchart LR\n  CODE[\"Write the change&lt;br/&gt;tests land with it\"] --&gt; T1[\"1 · Re-run the tests\"]\n  T1 --&gt;|fail| CODE\n  T1 --&gt;|green| LIVE[\"2 · Exercise the live thing&lt;br/&gt;call it, load it, send it\"]\n  LIVE --&gt; INSPECT[\"3 · Inspect the artifact\"]\n  INSPECT --&gt;|fix needed| CODE\n  INSPECT --&gt;|looks right| T2[\"4 · Re-run the tests again\"]\n  T2 --&gt; CLOSE[\"Close and log\"]\n  LIVE -.-&gt;|\"flaky?\"| FLAKE[\"Record as a defect.&lt;br/&gt;Retry until green is silence.\"]\n  style INSPECT fill:#eaf3ec,stroke:#5f8a6d\n  style FLAKE fill:#f7f0e6,stroke:#b08a3e\n\n\n\n\nFigure A.1: Verify before close. The loop only ends when the artifact has been looked at, and any fix discovered during verification sends you back through the tests.\n\n\n\n\n\n\nRe-run the tests. Green from an earlier run is not evidence.\nExercise the live thing. Call the endpoint. Load the page. Send the message.\nInspect the artifact. Read the output that will be handed over; do not infer it from the code that produced it.\nRe-run the tests again if you changed anything while verifying.\n\nAnd the corollary: a flaky test is a defect, not bad luck. A suite that has to be re-run to be believed is not green, it is noisy. Re-run once to confirm; if it fails again, record it as a defect and fix the ordering or the shared state. Retrying until it passes converts a real signal into silence.",
+    "crumbs": [
+      "Appendices",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>Testing and Operations</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-testing-and-ops.html#sec-ops-matrix",
+    "href": "chapters/05-testing-and-ops.html#sec-ops-matrix",
+    "title": "Appendix A — Testing and Operations",
+    "section": "A.5 Change taxonomy and the action each requires",
+    "text": "A.5 Change taxonomy and the action each requires\n\n\n\n\n\n\n\n\n\nChange kind\nExamples\nVerification\nRuntime action\n\n\n\n\nPure logic\nsession rotation policy, marker parsing, tool validation\nunit tests\nnone\n\n\nBehavioural\nconcurrency, routing, session archival stamping\nunit tests covering the specific bug shape\nnone\n\n\nInterface contract\nbackend envelope validation, config schema\ncontract tests against the real consumer shape\nnone\n\n\nConfiguration\nmodel, provider, temperature, reasoning effort\nread back the persisted config\nnone — hot-reloaded on next turn\n\n\nSkill content\nediting a SKILL.md\nthe file watcher log line\nnone — reloaded in place\n\n\nScheduler state\nediting the cron job file\nlist the jobs after the change\nrestart required\n\n\nGateway source\nanything under sarathy/\nfull suite plus lint\nredeploy script, then restart\n\n\n\nThe last two rows are the ones people get wrong, and they are wrong in opposite directions: editing scheduler state and waiting for it to take effect, and restarting the gateway for a configuration change that hot-reloads. The distinguishing question is simple: does any long-lived process hold this in memory? If yes, the change needs a restart. If no, it does not.",
+    "crumbs": [
+      "Appendices",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>Testing and Operations</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-testing-and-ops.html#sec-ops-restart",
+    "href": "chapters/05-testing-and-ops.html#sec-ops-restart",
+    "title": "Appendix A — Testing and Operations",
+    "section": "A.6 Restart procedure",
+    "text": "A.6 Restart procedure\nConfiguration-only:\nsarathy gateway restart\nsarathy gateway status\nsarathy gateway logs --follow\nSource: run the redeploy script. It reinstalls the package, writes a restart-request flag naming where the confirmation should go, restarts the daemon through its own CLI, and lets the new process consume the flag and send a boot notification reporting the version and provider status.\nThe flag is the important part of the design: a restart is asynchronous from the operator’s point of view, so the request is written to disk before the restart happens. That turns a silent restart into an observable one.\nNever kill the daemon by process-name pattern. A recorded incident: the pattern matched the shell command that was running the kill, so the session killed itself and recovery took roughly eight minutes. Restart through the CLI.",
+    "crumbs": [
+      "Appendices",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>Testing and Operations</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-testing-and-ops.html#sec-ops-version",
+    "href": "chapters/05-testing-and-ops.html#sec-ops-version",
+    "title": "Appendix A — Testing and Operations",
+    "section": "A.7 Deploy and version discipline",
+    "text": "A.7 Deploy and version discipline\n[ops] Two habits, both cheap:\n\nBump the version in the same commit as the behaviour change, never in a batch. The running process reports its own version at boot.\nKeep a deploy log of what was deployed and when. Combined with the boot notification’s version line, it answers “is the fix live?” without anyone having to remember.\n\nCommit messages carry the unit of work they belong to, which is what makes git log --grep useful and what the Engineering Log is written from.",
+    "crumbs": [
+      "Appendices",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>Testing and Operations</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-testing-and-ops.html#sec-ops-book",
+    "href": "chapters/05-testing-and-ops.html#sec-ops-book",
+    "title": "Appendix A — Testing and Operations",
+    "section": "A.8 The book is a build artifact too",
+    "text": "A.8 The book is a build artifact too\nThis book follows the same discipline as the code, which is why it can be trusted as documentation:\n\nOne command to rebuild. quarto render doc from the repository root, using only the local Quarto CLI. No other tool, no network, no package install.\nOne command to check. python3 -m unittest discover tests -k book verifies that every page exists, that every internal link resolves, that every page is well-formed, that the diagrams really are inline SVG in the output, and that no forbidden content has crept into either the sources or the rendered pages.\nA sanitization gate that cannot be skipped. The check runs over both the .qmd sources and the rendered .html, because a book can leak through either one — a private path in prose, or a personal name that arrived via a metadata field.\nThe output is committed-ready static HTML. Every asset is inlined; the pages make no network requests at all.\n\nThe rules for adding content are in doc/README.md. The short version: repo paths only, no credentials, no identifiers, no names — and the gate will tell you if you slip.",
+    "crumbs": [
+      "Appendices",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>Testing and Operations</span>"
+    ]
+  }
+]

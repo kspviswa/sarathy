@@ -250,6 +250,7 @@ class BackendChannel(BaseChannel):
             return web.json_response({"error": "source not allowed"}, status=403)
         msg = envelope_to_inbound(envelope)
         await self.bus.publish_inbound(msg)
+        await self._publish_trigger_ack(msg)
         return web.json_response({"ok": True, "session": msg.session_key_override})
 
     # ------------------------------------------------------------------ tailer
@@ -376,6 +377,7 @@ class BackendChannel(BaseChannel):
                         msg = self._tail_event_to_inbound(event)
                         if msg is not None:
                             await self.bus.publish_inbound(msg)
+                            await self._publish_trigger_ack(msg)
                 except Exception as e:
                     logger.warning("Backend tailer iteration failed: {}", e)
                 await asyncio.sleep(self._poll_interval)
@@ -383,6 +385,34 @@ class BackendChannel(BaseChannel):
             raise
 
     # ------------------------------------------------------------------ send
+
+    async def _publish_trigger_ack(self, msg: InboundMessage) -> None:
+        """Canned 'engaged, investigating' ack, fired in CODE on every trigger.
+
+        The instant a backend event wakes Sarathy (HTTP POST or tailer), send
+        a canned notification to the escalation target so Viswa knows the event
+        was seen and work has begun — WITHOUT waiting for (or depending on) the
+        agent's first reply. (Viswa 2026-10-05: this must never rely on the
+        LLM's judgment; encode it in the trigger path itself.)
+        """
+        escalate_to = (msg.metadata or {}).get("escalate_to")
+        if not escalate_to or ":" not in str(escalate_to):
+            escalate_to = f"telegram:{TG_LIVE_CHAT_ID}"
+        channel, _, chat_id = str(escalate_to).partition(":")
+        channel, chat_id = channel.strip(), chat_id.strip()
+        if not channel or not chat_id:
+            return
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=(
+                    f"🛠️ Backend event: {msg.content} — Sarathy engaged, "
+                    "investigating. Full report shortly."
+                ),
+                metadata={"_progress": False, "_tool_hint": False},
+            )
+        )
 
     async def send(self, msg: OutboundMessage) -> None:
         """Backend has no user-facing surface: log, and escalate if asked.

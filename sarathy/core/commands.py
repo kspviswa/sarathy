@@ -93,8 +93,16 @@ class CommandManager:
 
     def sync_from_skill_manager(self, skill_manager) -> None:
         """Sync commands from a SkillManager instance."""
-        # Clear existing skill commands (but keep built-in ones if we had them)
+        # Preserve built-in commands across skill syncs (register_builtin_command
+        # and skill-manager commands with skill_name="builtin"). A re-sync from a
+        # partial skill set must not wipe /new, /clear, /topic, etc.
+        builtins = {
+            name: cmd
+            for name, cmd in self._commands.items()
+            if cmd.skill_name == "builtin"
+        }
         self._commands.clear()
+        self._commands.update(builtins)
 
         # Get commands from skill manager
         for cmd in skill_manager.get_commands():

@@ -298,6 +298,38 @@ async def test_send_without_escalate_only_logs(tmp_path):
     assert ch.bus.outbound_size == 0
 
 
+def test_tailer_escalates_to_live_chat_by_default(tmp_path):
+    """Tailer events must carry an escalate_to so relays reach the live chat,
+    even when the event row has no session info (KB #395)."""
+    jobs_db = tmp_path / "jobs.db"
+    _make_jobs_db(jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch._init_watermark()
+    _insert_event(jobs_db, 9, "completed", "done")
+    events = ch._poll_new_events()
+    assert len(events) == 1
+    msg = ch._tail_event_to_inbound(events[0])
+    assert msg is not None
+    assert msg.metadata["escalate_to"] == "telegram:5878545507"
+    assert msg.metadata["source_session_id"] is None  # no session info on row
+    # And the escalation is routable through send() via the bus.
+    import asyncio as _aio
+
+    async def _route():
+        await ch.send(
+            OutboundMessage(
+                channel="backend", chat_id="9", content="job finished",
+                metadata={"escalate_to": msg.metadata["escalate_to"]},
+            )
+        )
+        out = await _aio.wait_for(ch.bus.consume_outbound(), timeout=2)
+        return out
+
+    out = _aio.run(_route())
+    assert out.channel == "telegram"
+    assert out.chat_id == "5878545507"
+
+
 # ---------------------------------------------------------------------------
 # config schema
 # ---------------------------------------------------------------------------

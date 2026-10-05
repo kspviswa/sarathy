@@ -28,6 +28,11 @@ from sarathy.config.schema import BackendConfig
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
+# Live Telegram session chat id — the ONLY id relays should ever target.
+# (AGENTS.md once showed 8281248569 as an example; that id is stale and
+# Telegram returns "Chat not found" for it. See KB #394/#395.)
+TG_LIVE_CHAT_ID = "5878545507"
+
 
 def default_jobs_db_path() -> Path:
     """Default location of the jobs DB (read-only for this channel)."""
@@ -331,14 +336,24 @@ class BackendChannel(BaseChannel):
             return None
         job_id = event["job_id"]
         sender_id = f"job-{job_id}"
+        # Escalation target: allow the event row to carry a session/chat to
+        # escalate into (source_session_id), else fall back to the LIVE session
+        # chat id so relays always reach the user. Never None.
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        source_session_id = payload.get("source_session_id")
+        escalate_to = payload.get("escalate_to")
+        if not escalate_to or ":" not in str(escalate_to):
+            escalate_to = f"telegram:{TG_LIVE_CHAT_ID}"
         envelope = {
             "event_type": event["event_type"],
             "source": sender_id,
             "job_id": job_id,
-            "source_session_id": None,
+            "source_session_id": source_session_id,
             "payload": {"message": event["message"], "extra": event["payload"]},
             "ts": event["ts"],
-            "escalate_to": None,
+            "escalate_to": escalate_to,
             "level": event.get("level"),
         }
         return InboundMessage(
@@ -384,5 +399,10 @@ class BackendChannel(BaseChannel):
         if not channel or not chat_id:
             return
         await self.bus.publish_outbound(
-            OutboundMessage(channel=channel, chat_id=chat_id, content=msg.content)
+            OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=msg.content,
+                metadata={"_progress": False, "_tool_hint": False},
+            )
         )

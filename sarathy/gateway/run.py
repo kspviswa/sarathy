@@ -42,8 +42,8 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
         max_session_messages=config.agents.defaults.max_session_messages,
     )
 
-    cron_store_path = get_data_dir() / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
+    cron_db_path = get_data_dir() / "cron" / "cron.db"
+    cron = CronService(cron_db_path)
 
     agent = AgentLoop(
         bus=bus,

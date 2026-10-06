@@ -19,6 +19,7 @@ from rich.table import Table
 from rich.text import Text
 
 from sarathy import __logo__, __version__
+from sarathy.config.loader import get_data_dir
 from sarathy.config.schema import Config
 
 app = typer.Typer(
@@ -442,8 +443,8 @@ def agent(
     bus = MessageBus()
 
     # Create cron service for tool usage (no callback needed for CLI unless running)
-    cron_store_path = get_data_dir() / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
+    cron_db_path = get_data_dir() / "cron" / "cron.db"
+    cron = CronService(cron_db_path)
 
     if logs:
         logger.enable("sarathy")
@@ -675,6 +676,18 @@ cron_app = typer.Typer(help="Manage scheduled tasks")
 app.add_typer(cron_app, name="cron")
 
 
+def _notify_cron_gateway() -> None:
+    """Best-effort wake of a running gateway's cron scheduler.
+
+    The change is already durable in cron.db; this just re-arms the gateway's
+    sleep-until-next timer so edits go live without a restart. Silent no-op
+    when the gateway is down (the next boot reads the DB fresh).
+    """
+    from sarathy.cron.control import notify_gateway
+
+    notify_gateway("reschedule")
+
+
 @cron_app.command("list")
 def cron_list(
     all: bool = typer.Option(False, "--all", "-a", help="Include disabled jobs"),
@@ -683,7 +696,7 @@ def cron_list(
     from sarathy.config.loader import get_data_dir
     from sarathy.cron.service import CronService
 
-    store_path = get_data_dir() / "cron" / "jobs.json"
+    store_path = get_data_dir() / "cron" / "cron.db"
     service = CronService(store_path)
 
     jobs = service.list_jobs(include_disabled=all)
@@ -777,7 +790,7 @@ def cron_add(
         console.print("[red]Error: Must specify --every, --cron, or --at[/red]")
         raise typer.Exit(1)
 
-    store_path = get_data_dir() / "cron" / "jobs.json"
+    store_path = get_data_dir() / "cron" / "cron.db"
     service = CronService(store_path)
 
     async def _run() -> None:
@@ -799,6 +812,7 @@ def cron_add(
 
     import asyncio
     asyncio.run(_run())
+    _notify_cron_gateway()
 
 
 @cron_app.command("remove")
@@ -809,7 +823,7 @@ def cron_remove(
     from sarathy.config.loader import get_data_dir
     from sarathy.cron.service import CronService
 
-    store_path = get_data_dir() / "cron" / "jobs.json"
+    store_path = get_data_dir() / "cron" / "cron.db"
     service = CronService(store_path)
 
     async def _run() -> None:
@@ -820,6 +834,7 @@ def cron_remove(
 
     import asyncio
     asyncio.run(_run())
+    _notify_cron_gateway()
 
 
 @cron_app.command("enable")
@@ -831,7 +846,7 @@ def cron_enable(
     from sarathy.config.loader import get_data_dir
     from sarathy.cron.service import CronService
 
-    store_path = get_data_dir() / "cron" / "jobs.json"
+    store_path = get_data_dir() / "cron" / "cron.db"
     service = CronService(store_path)
 
     async def _run() -> None:
@@ -844,6 +859,196 @@ def cron_enable(
 
     import asyncio
     asyncio.run(_run())
+    _notify_cron_gateway()
+
+
+@cron_app.command("update")
+def cron_update(
+    job_id: str = typer.Argument(..., help="Job ID to update"),
+    name: str = typer.Option(None, "--name", "-n", help="New job name"),
+    message: str = typer.Option(None, "--message", "-m", help="New message for agent"),
+    every: int = typer.Option(None, "--every", "-e", help="Run every N seconds"),
+    cron_expr: str = typer.Option(None, "--cron", "-c", help="Cron expression (e.g. '0 9 * * *')"),
+    tz: str | None = typer.Option(None, "--tz", help="IANA timezone for cron (e.g. 'America/Vancouver')"),
+    at: str = typer.Option(None, "--at", help="Run once at time (ISO format)"),
+    deliver: bool | None = typer.Option(None, "--deliver/--no-deliver", help="Deliver response to channel"),
+    to: str = typer.Option(None, "--to", help="Recipient for delivery"),
+    channel: str = typer.Option(None, "--channel", help="Channel for delivery (e.g. 'telegram', 'discord', 'email')"),
+    provider_role: str = typer.Option(None, "--provider-role", help="Provider role: 'local' or 'main' (empty = active)"),
+):
+    """Edit a job definition live (no gateway restart)."""
+    from sarathy.config.loader import get_data_dir
+    from sarathy.cron.service import CronService
+    from sarathy.cron.types import CronSchedule
+
+    if tz and not (cron_expr or every or at):
+        console.print("[red]Error: --tz can only be used with --cron[/red]")
+        raise typer.Exit(1)
+
+    schedule = None
+    if every:
+        schedule = CronSchedule(kind="every", every_ms=every * 1000)
+    elif cron_expr:
+        schedule = CronSchedule(kind="cron", expr=cron_expr, tz=tz)
+    elif at:
+        import datetime
+
+        dt = datetime.datetime.fromisoformat(at)
+        schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
+
+    store_path = get_data_dir() / "cron" / "cron.db"
+    service = CronService(store_path)
+
+    async def _run() -> None:
+        try:
+            job = await service.update_job(
+                job_id,
+                name=name,
+                message=message,
+                schedule=schedule,
+                deliver=deliver,
+                to=to,
+                channel=channel,
+                provider_role=provider_role,
+            )
+        except ValueError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from e
+
+        if job is None:
+            console.print(f"[red]Job {job_id} not found[/red]")
+            raise typer.Exit(1)
+        console.print(f"[green]✓[/green] Updated job '{job.name}' ({job.id})")
+
+    import asyncio
+    asyncio.run(_run())
+    _notify_cron_gateway()
+
+
+@cron_app.command("status")
+def cron_status():
+    """Show cron service status (DB-backed, live from the gateway)."""
+    from sarathy.config.loader import get_data_dir
+    from sarathy.cron.control import notify_gateway
+    from sarathy.cron.service import CronService
+
+    db_path = get_data_dir() / "cron" / "cron.db"
+    service = CronService(db_path)
+    status = service.status()
+
+    console.print(f"Cron DB: [cyan]{db_path}[/cyan]")
+    console.print(f"Jobs in DB: [bold]{status['jobs']}[/bold]")
+
+    resp = notify_gateway("status")
+    if resp and resp.get("ok"):
+        gs = resp.get("status", {})
+        console.print(
+            f"Gateway scheduler: [green]running[/green] ({gs.get('jobs')} jobs, "
+            f"next wake {gs.get('next_wake_at_ms')})"
+        )
+    else:
+        console.print("Gateway scheduler: [dim]not running[/dim]")
+
+
+@cron_app.command("migrate")
+def cron_migrate(
+    source: str = typer.Argument(..., help="Path to a legacy jobs.json backup file"),
+    keep: bool = typer.Option(False, "--keep", help="Do not archive the source file after migration"),
+):
+    """Migrate jobs from a legacy jobs.json file into the cron DB.
+
+    Defends against both the wrapped {"version":1,"jobs":[...]} format and the
+    bare-list form that caused the Oct 3 data loss. Idempotent: existing job
+    IDs are skipped. The source file is archived (renamed with a timestamp)
+    unless --keep is given.
+    """
+    migrated, skipped, archived = _migrate_jobs_json(Path(source), get_data_dir(), bool(keep))
+    console.print(f"[green]✓[/green] Migrated {migrated} jobs to [cyan]{get_data_dir() / 'cron' / 'cron.db'}[/cyan]"
+                  + (f" (skipped {skipped} existing)" if skipped else ""))
+    if archived:
+        console.print(f"  Archived source: [dim]{archived}[/dim]")
+    _notify_cron_gateway()
+
+
+def _migrate_jobs_json(source: Path, data_dir: Path, keep: bool = False) -> tuple[int, int, Path | None]:
+    """Core migration: parse a legacy jobs.json (wrapped dict OR bare list),
+    insert into the cron DB, and archive the source. Returns
+    (migrated_count, skipped_count, archived_path_or_None)."""
+    import json
+    import time as _time
+
+    from sarathy.cron.service import CronService
+    from sarathy.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
+
+    src = Path(source)
+    if not src.exists():
+        raise FileNotFoundError(f"Source file not found: {src}")
+
+    try:
+        data = json.loads(src.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {src}: {e}") from e
+
+    if isinstance(data, dict):
+        raw_jobs = data.get("jobs", [])
+    elif isinstance(data, list):
+        raw_jobs = data
+    else:
+        raise ValueError("Unrecognized jobs.json structure (expected dict or list)")
+
+    jobs: list[CronJob] = []
+    for j in raw_jobs:
+        try:
+            jobs.append(CronJob(
+                id=j["id"],
+                name=j["name"],
+                enabled=j.get("enabled", True),
+                schedule=CronSchedule(
+                    kind=j["schedule"]["kind"],
+                    at_ms=j["schedule"].get("atMs"),
+                    every_ms=j["schedule"].get("everyMs"),
+                    expr=j["schedule"].get("expr"),
+                    tz=j["schedule"].get("tz"),
+                ),
+                payload=CronPayload(
+                    kind=j["payload"].get("kind", "agent_turn"),
+                    message=j["payload"].get("message", ""),
+                    deliver=j["payload"].get("deliver", False),
+                    channel=j["payload"].get("channel"),
+                    to=j["payload"].get("to"),
+                    provider_role=j["payload"].get("providerRole", ""),
+                ),
+                state=CronJobState(
+                    next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
+                    last_run_at_ms=j.get("state", {}).get("lastRunAtMs"),
+                    last_status=j.get("state", {}).get("lastStatus"),
+                    last_error=j.get("state", {}).get("lastError"),
+                ),
+                created_at_ms=j.get("createdAtMs", 0),
+                updated_at_ms=j.get("updatedAtMs", 0),
+                delete_after_run=j.get("deleteAfterRun", False),
+            ))
+        except (KeyError, TypeError) as e:
+            console.print(f"[red]Skipping malformed job entry: {e}[/red]")
+
+    if not jobs:
+        raise ValueError("No valid jobs found in source file")
+
+    db_path = data_dir / "cron" / "cron.db"
+    service = CronService(db_path)
+    skipped = 0
+    for job in jobs:
+        if service.store.get_job(job.id) is not None:
+            skipped += 1
+            continue
+        service.store.add_job(job)
+
+    archived: Path | None = None
+    if not keep:
+        archived = src.with_name(f"{src.name}.migrated-{_time.strftime('%Y%m%dT%H%M%S')}")
+        src.rename(archived)
+
+    return len(jobs) - skipped, skipped, archived
 
 
 @cron_app.command("run")
@@ -894,7 +1099,7 @@ def cron_run(
         reasoning_effort=config.agents.defaults.reasoning_effort,
     )
 
-    store_path = get_data_dir() / "cron" / "jobs.json"
+    store_path = get_data_dir() / "cron" / "cron.db"
     service = CronService(store_path)
 
     result_holder = []

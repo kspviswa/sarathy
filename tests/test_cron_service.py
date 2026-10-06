@@ -6,7 +6,7 @@ from sarathy.cron.types import CronJob, CronSchedule
 
 @pytest.mark.asyncio
 async def test_add_job_rejects_unknown_timezone(tmp_path) -> None:
-    service = CronService(tmp_path / "cron" / "jobs.json")
+    service = CronService(tmp_path / "cron" / "cron.db")
 
     with pytest.raises(ValueError, match="unknown timezone 'America/Vancovuer'"):
         await service.add_job(
@@ -20,7 +20,7 @@ async def test_add_job_rejects_unknown_timezone(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_add_job_accepts_valid_timezone(tmp_path) -> None:
-    service = CronService(tmp_path / "cron" / "jobs.json")
+    service = CronService(tmp_path / "cron" / "cron.db")
 
     job = await service.add_job(
         name="tz ok",
@@ -34,7 +34,7 @@ async def test_add_job_accepts_valid_timezone(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_add_job_with_provider_role_persists(tmp_path) -> None:
-    service = CronService(tmp_path / "cron" / "jobs.json")
+    service = CronService(tmp_path / "cron" / "cron.db")
 
     job = await service.add_job(
         name="local job",
@@ -46,7 +46,7 @@ async def test_add_job_with_provider_role_persists(tmp_path) -> None:
     assert job.payload.provider_role == "local"
 
     # Reload from disk — role must survive serialization.
-    reloaded = CronService(tmp_path / "cron" / "jobs.json")
+    reloaded = CronService(tmp_path / "cron" / "cron.db")
     loaded = reloaded.list_jobs(include_disabled=True)
     assert len(loaded) == 1
     assert loaded[0].payload.provider_role == "local"
@@ -54,7 +54,7 @@ async def test_add_job_with_provider_role_persists(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_add_job_provider_role_defaults_empty(tmp_path) -> None:
-    service = CronService(tmp_path / "cron" / "jobs.json")
+    service = CronService(tmp_path / "cron" / "cron.db")
 
     job = await service.add_job(
         name="plain job",
@@ -69,7 +69,7 @@ async def test_add_job_provider_role_defaults_empty(tmp_path) -> None:
 async def test_on_job_error_invoked_when_job_execution_fails(tmp_path) -> None:
     """The on_job_error callback fires when a cron job raises, without masking
     the underlying job failure."""
-    service = CronService(tmp_path / "cron" / "jobs.json")
+    service = CronService(tmp_path / "cron" / "cron.db")
 
     async def boom(_job: CronJob) -> str:
         raise RuntimeError("kaboom")
@@ -102,7 +102,7 @@ async def test_on_job_error_invoked_when_job_execution_fails(tmp_path) -> None:
 async def test_on_job_error_failure_does_not_mask_job_error(tmp_path) -> None:
     """A failing on_job_error notifier must not raise out of _execute_job, and
     the job's error state must be preserved."""
-    service = CronService(tmp_path / "cron" / "jobs.json")
+    service = CronService(tmp_path / "cron" / "cron.db")
 
     async def boom(_job: CronJob) -> str:
         raise RuntimeError("job broke")

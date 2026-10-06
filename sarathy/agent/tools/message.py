@@ -24,15 +24,23 @@ class MessageTool(Tool):
         self._default_message_id = default_message_id
         self._channels_config = channels_config
         self._turn_sends: list[
-            tuple[str, str]
-        ] = []  # List of (channel, chat_id) tuples sent this turn
+            tuple[str, str, str]
+        ] = []  # List of (channel, chat_id, session_key) tuples sent this turn
         self._response_metadata: dict[str, Any] = {}
+        self._session_key: str | None = None
 
-    def set_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
+    def set_context(
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        session_key: str | None = None,
+    ) -> None:
         """Set the current message context."""
         self._default_channel = channel
         self._default_chat_id = chat_id
         self._default_message_id = message_id
+        self._session_key = session_key
 
     def set_response_metadata(self, metadata: dict[str, Any]) -> None:
         """Set metadata for response (verbose, stats, etc)."""
@@ -47,9 +55,19 @@ class MessageTool(Tool):
         self._turn_sends = []
         self._response_metadata = {}
 
-    def get_turn_sends(self) -> list[tuple[str, str]]:
-        """Return list of (channel, chat_id) tuples sent this turn."""
-        return self._turn_sends.copy()
+    def get_turn_sends(self, session_key: str | None = None) -> list[tuple[str, str]]:
+        """Return list of (channel, chat_id) tuples sent this turn.
+
+        When session_key is given, only sends from THAT session are returned.
+        The MessageTool instance is SHARED across concurrent dispatch tasks
+        (telegram turn + backend job turn run as parallel asyncio tasks), so
+        filtering by session prevents one turn's relay from being mistaken for
+        another turn's send — the root cause of suppressed replies (job 118/119
+        collision, 2026-10-05).
+        """
+        if session_key is None:
+            return [(c, i) for c, i, _ in self._turn_sends]
+        return [(c, i) for c, i, s in self._turn_sends if s == session_key]
 
     @property
     def name(self) -> str:
@@ -157,8 +175,9 @@ class MessageTool(Tool):
 
         try:
             await self._send_callback(msg)
-            # Track the actual send target
-            self._turn_sends.append((channel, chat_id))
+            # Track the actual send target (scoped to the current session so
+            # concurrent turns cannot pollute each other's suppression logic).
+            self._turn_sends.append((channel, chat_id, self._session_key))
             media_info = f" with {len(media)} attachments" if media else ""
             return f"Message sent to {channel}:{chat_id}{media_info}"
         except Exception as e:

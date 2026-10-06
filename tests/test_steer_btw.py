@@ -306,14 +306,14 @@ async def test_btw_message_tool_state_restored(tmp_path):
     assert mt is not None
     mt.start_turn()
     mt.set_context("telegram", "main-chat", "main-msg")
-    mt._turn_sends = [("email", "other")]
+    mt._turn_sends = [("email", "other", "test:c1")]
     mt._response_metadata = {"_verbose": True}
 
     saved = (
         mt._default_channel,
         mt._default_chat_id,
         mt._default_message_id,
-        list(mt.get_turn_sends()),
+        list(mt._turn_sends),  # raw (channel, chat_id, session) tuples
         dict(mt._response_metadata),
     )
 
@@ -321,7 +321,7 @@ async def test_btw_message_tool_state_restored(tmp_path):
 
     # MessageTool state was fully restored after the side turn.
     assert (mt._default_channel, mt._default_chat_id, mt._default_message_id) == saved[:3]
-    assert list(mt.get_turn_sends()) == saved[3]
+    assert list(mt._turn_sends) == saved[3]
     assert mt._response_metadata == saved[4]
 
     # The side turn's message-tool send went out, then the final.

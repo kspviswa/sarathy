@@ -419,8 +419,14 @@ class BackendChannel(BaseChannel):
 
         Escalation is routed via the bus's outbound dispatch (the channel
         manager routes by channel) — never sent directly from here.
+
+        Only FINAL responses escalate. Progress/thinking chatter stays in the
+        session stream — escalating it is how ONE backend wake became ~12
+        Telegram pings to Viswa (job 116, 2026-10-05).
         """
         logger.debug("Backend channel reply for {}: {}", msg.chat_id, msg.content[:200])
+        if msg.metadata.get("_progress") or msg.metadata.get("_thinking"):
+            return
         escalate_to = (msg.metadata or {}).get("escalate_to")
         if not escalate_to or ":" not in str(escalate_to):
             return

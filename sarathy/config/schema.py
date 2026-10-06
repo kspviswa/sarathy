@@ -97,7 +97,7 @@ class BackendConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # optional event-source allowlist
     jobs_db_path: str | None = None  # default ~/.sarathy/workspace/jobs/jobs.db
     tail_event_types: list[str] = Field(
-        default_factory=lambda: ["needs_input", "crash", "completed", "verified", "stalled"]
+        default_factory=lambda: ["needs_input", "crash", "stalled"]
     )
 
 

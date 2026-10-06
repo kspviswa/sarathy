@@ -229,7 +229,7 @@ async def test_refuse_start_without_token(tmp_path):
 def test_tailer_publishes_and_advances_watermark(tmp_path):
     jobs_db = tmp_path / "jobs.db"
     _make_jobs_db(jobs_db)
-    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db, tail_event_types=["completed"])
 
     # Pre-existing rows are NOT replayed on first init.
     _insert_event(jobs_db, 1, "completed", "old news")
@@ -305,7 +305,7 @@ def test_tailer_prefers_stamped_escalation_over_fallback(tmp_path):
     tailer must prefer that stamped escalate_to over the live-chat fallback."""
     jobs_db = tmp_path / "jobs.db"
     _make_jobs_db(jobs_db)
-    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db, tail_event_types=["completed"])
     ch._init_watermark()
     _insert_event(jobs_db, 10, "completed", "done",
                   payload={"pid": 123, "escalate_to": "telegram:9876543210",
@@ -321,7 +321,7 @@ def test_tailer_escalates_to_live_chat_by_default(tmp_path):
     even when the event row has no session info (KB #395)."""
     jobs_db = tmp_path / "jobs.db"
     _make_jobs_db(jobs_db)
-    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db, tail_event_types=["completed"])
     ch._init_watermark()
     _insert_event(jobs_db, 9, "completed", "done")
     events = ch._poll_new_events()
@@ -348,6 +348,27 @@ def test_tailer_escalates_to_live_chat_by_default(tmp_path):
     assert out.chat_id == "5878545507"
 
 
+def test_tailer_ignores_notification_only_events_by_default(tmp_path):
+    """completed/verified are notification-only: the monitor pings them. The
+    tailer must NOT wake the agent for them — that was the job 118 noise
+    (2 completed events → 2 wakes → 4 pings). Only actionable events
+    (needs_input, crash, stalled) wake the agent + fire the ack."""
+    jobs_db = tmp_path / "jobs.db"
+    _make_jobs_db(jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db)  # default tail types
+    ch._init_watermark()
+    _insert_event(jobs_db, 1, "completed", "done marker found")
+    _insert_event(jobs_db, 2, "completed", "job finished")
+    _insert_event(jobs_db, 3, "stalled", "no log growth")
+    events = ch._poll_new_events()
+    msgs = [ch._tail_event_to_inbound(e) for e in events]
+    # Only the stalled event wakes the agent; both completed events are dropped.
+    assert msgs[0] is None
+    assert msgs[1] is None
+    assert msgs[2] is not None
+    assert "stalled" in msgs[2].content
+
+
 # ---------------------------------------------------------------------------
 # config schema
 # ---------------------------------------------------------------------------
@@ -360,7 +381,7 @@ def test_backend_config_defaults_and_migration():
     assert cfg.channels.backend.port == 18791
     assert cfg.channels.backend.token == ""
     assert cfg.channels.backend.tail_event_types == [
-        "needs_input", "crash", "completed", "verified", "stalled",
+        "needs_input", "crash", "stalled",
     ]
     # Old configs without the backend key validate with defaults.
     legacy = Config.model_validate({"agents": {}, "channels": {"telegram": {}}, "tools": {}})
@@ -469,7 +490,7 @@ def test_trigger_ack_respects_stamped_escalate_to(tmp_path):
     """The ack targets the event's stamped escalation target, not the fallback."""
     jobs_db = tmp_path / "jobs.db"
     _make_jobs_db(jobs_db)
-    ch = _make_channel(tmp_path, jobs_db=jobs_db)
+    ch = _make_channel(tmp_path, jobs_db=jobs_db, tail_event_types=["completed"])
     ch._init_watermark()
     _insert_event(jobs_db, 10, "completed", "done",
                   payload={"pid": 123, "escalate_to": "telegram:9876543210"})
@@ -486,3 +507,42 @@ def test_trigger_ack_respects_stamped_escalate_to(tmp_path):
     out = asyncio.run(_run())
     assert out.channel == "telegram"
     assert out.chat_id == "9876543210"
+
+
+def test_send_does_not_escalate_progress_chatter(tmp_path):
+    """Progress/thinking messages must NOT reach the user — that was the
+    'one wake = 12 pings' bug (job 116, 2026-10-05). Only final responses
+    escalate; progress stays in the session stream."""
+    ch = _make_channel(tmp_path)
+
+    async def _run():
+        # Progress message must be swallowed (no outbound published).
+        await ch.send(OutboundMessage(
+            channel="backend", chat_id="116",
+            content="Process is alive...",
+            metadata={"escalate_to": "telegram:5878545507", "_progress": True},
+        ))
+        # Thinking message must also be swallowed.
+        await ch.send(OutboundMessage(
+            channel="backend", chat_id="116",
+            content="hmm...", metadata={"escalate_to": "telegram:5878545507", "_thinking": True},
+        ))
+        # Final response MUST escalate.
+        await ch.send(OutboundMessage(
+            channel="backend", chat_id="116",
+            content="Job 116 root-caused and relaunched, sir.",
+            metadata={"escalate_to": "telegram:5878545507", "_final": True},
+        ))
+        out = await asyncio.wait_for(ch.bus.consume_outbound(), timeout=2)
+        # Ensure no second outbound is waiting (progress/thinking were dropped).
+        try:
+            extra = await asyncio.wait_for(ch.bus.consume_outbound(), timeout=0.3)
+        except asyncio.TimeoutError:
+            extra = None
+        return out, extra
+
+    out, extra = asyncio.run(_run())
+    assert out.channel == "telegram"
+    assert out.chat_id == "5878545507"
+    assert "root-caused and relaunched" in out.content
+    assert extra is None

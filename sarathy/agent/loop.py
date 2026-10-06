@@ -290,11 +290,13 @@ class AgentLoop:
         finally:
             self._mcp_connecting = False
 
-    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
+    def _set_tool_context(
+        self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
+    ) -> None:
         """Update context for all tools that need routing info."""
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
-                message_tool.set_context(channel, chat_id, message_id)
+                message_tool.set_context(channel, chat_id, message_id, session_key)
 
         if spawn_tool := self.tools.get("spawn"):
             if isinstance(spawn_tool, SpawnTool):
@@ -925,7 +927,7 @@ class AgentLoop:
                     mt._default_channel,
                     mt._default_chat_id,
                     mt._default_message_id,
-                    mt.get_turn_sends(),
+                    list(mt._turn_sends),  # raw (channel, chat_id, session) tuples
                     mt._response_metadata,
                 )
                 mt.start_turn()
@@ -1180,7 +1182,7 @@ class AgentLoop:
             logger.info("Processing system message from {}", msg.sender_id)
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
-            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
+            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"), key)
             history = session.get_history(max_messages=self.memory_window)
             messages = self.context.build_messages(
                 history=history,
@@ -1273,7 +1275,7 @@ class AgentLoop:
                         content=f"sarathy v{__version__}",
                     )
 
-        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
+        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"), key)
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
@@ -1430,10 +1432,15 @@ class AgentLoop:
         metadata["_verbose"] = verbose_flag
 
         # Only suppress final reply if message tool sent to SAME target
-        # Different targets = send to both (e.g., email + telegram)
+        # within THIS session's turn. The MessageTool is shared across
+        # concurrent dispatch tasks (telegram + backend job turns run as
+        # parallel asyncio tasks), so without session scoping one turn's
+        # relay would suppress another turn's reply — the job 118/119
+        # collision that ate Viswa's reply (2026-10-05).
+        # Different targets / different sessions = send to both.
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
-                sent_targets = message_tool.get_turn_sends()
+                sent_targets = message_tool.get_turn_sends(session_key=key)
                 logger.info("Message tool sent to: {}", sent_targets)
                 if (msg.channel, msg.chat_id) in sent_targets:
                     logger.info(

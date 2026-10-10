@@ -1,19 +1,29 @@
 """Tests for dashboard usage API endpoint."""
 
-import asyncio
-import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 
-from sarathy.channels.dashboard.server import DashboardChannel
-from sarathy.channels.dashboard.auth import DeviceRegistry
 from sarathy.bus.queue import MessageBus
+from sarathy.channels.dashboard.auth import DeviceRegistry
+from sarathy.channels.dashboard.server import DashboardChannel
+
+
+def _today() -> str:
+    """UTC date string for today.
+
+    The usage summary is windowed ("last N days"), so tests must record events
+    inside the current window. A hardcoded calendar date silently rots: once it
+    falls outside the window the summary returns the empty shape and the test
+    fails for a reason unrelated to the code under test. Deriving the date from
+    the clock keeps these assertions meaningful forever.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 class TestUsageSummaryAPI(AioHTTPTestCase):
@@ -97,7 +107,7 @@ class TestUsageSummaryAPI(AioHTTPTestCase):
         store = get_usage_store()
         store.record(
             {
-                "ts": "2026-09-21T03:41:00Z",
+                "ts": f"{_today()}T03:41:00Z",
                 "session_key": "test:1",
                 "channel": "telegram",
                 "model": "model-a",
@@ -137,12 +147,12 @@ class TestUsageSummaryAPI(AioHTTPTestCase):
 
         # Zero-filled full window (7-day daily window, inclusive ends -> 8 buckets)
         assert len(data["timeseries"]) == 8
-        sep21 = next(b for b in data["timeseries"] if b["ts"] == "2026-09-21T00:00:00Z")
+        sep21 = next(b for b in data["timeseries"] if b["ts"] == f"{_today()}T00:00:00Z")
         assert sep21["prompt_tokens"] == 1000
         assert sep21["cached_tokens"] == 300
-        assert sum(1 for b in data["timeseries"] if b["ts"] != "2026-09-21T00:00:00Z") == 7
+        assert sum(1 for b in data["timeseries"] if b["ts"] != f"{_today()}T00:00:00Z") == 7
         assert all(
-            b["prompt_tokens"] == 0 for b in data["timeseries"] if b["ts"] != "2026-09-21T00:00:00Z"
+            b["prompt_tokens"] == 0 for b in data["timeseries"] if b["ts"] != f"{_today()}T00:00:00Z"
         )
 
     @unittest_run_loop
@@ -183,11 +193,11 @@ class TestUsageSummaryAPI(AioHTTPTestCase):
 
         store = get_usage_store()
         store.record(
-            {"ts": "2026-09-21T03:41:00Z", "model": "model-a", "provider": "openrouter",
+            {"ts": f"{_today()}T03:41:00Z", "model": "model-a", "provider": "openrouter",
              "prompt_tokens": 1000, "cached_tokens": 300, "completion_tokens": 200, "total_tokens": 1200}
         )
         store.record(
-            {"ts": "2026-09-21T03:42:00Z", "model": "model-b", "provider": "local",
+            {"ts": f"{_today()}T03:42:00Z", "model": "model-b", "provider": "local",
              "prompt_tokens": 500, "cached_tokens": 100, "completion_tokens": 100, "total_tokens": 600}
         )
 

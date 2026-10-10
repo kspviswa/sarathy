@@ -10,6 +10,24 @@ vi.mock("@/lib/api", () => ({
     logout: vi.fn().mockResolvedValue({ ok: true }),
     uploadMedia: vi.fn(),
     sessionNew: vi.fn().mockResolvedValue({ ok: true }),
+    sendChatFull: vi.fn().mockResolvedValue({ ok: true }),
+    sessionFooter: vi.fn().mockResolvedValue({
+      sessionKey: "dashboard:console",
+      tokens: 0,
+      tokensPerSec: 0,
+      cost: null,
+      topic: null,
+      contextUsedTokens: null,
+      contextLength: null,
+      contextPct: null,
+      model: null,
+      provider: null,
+      messageCount: 0,
+    }),
+    commands: vi.fn().mockResolvedValue({ commands: [], count: 0 }),
+    sessions: vi.fn().mockResolvedValue({ sessions: [] }),
+    pushKey: vi.fn().mockResolvedValue({ publicKey: "test", available: false }),
+    pushSubscribe: vi.fn().mockResolvedValue({ ok: true, count: 0 }),
   },
   getToken: vi.fn(() => "test-token"),
   setToken: vi.fn(),
@@ -24,6 +42,7 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/lib/theme", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useTheme: () => ({ theme: "dark", resolved: "dark", setTheme: vi.fn() }),
 }));
 
 vi.mock("@/lib/ws", () => ({
@@ -256,7 +275,8 @@ describe("Composer newline behaviour (Enter = newline)", () => {
     fireEvent.change(textarea, { target: { value: "hello" } });
     fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(onSend).toHaveBeenCalledWith("hello", undefined, null, undefined);
+    // Quotes are a trailing optional arg; absent when nothing was quoted.
+    expect(onSend).toHaveBeenCalledWith("hello", undefined, null, undefined, undefined);
   });
 
 it("Cmd+Enter sends the message", () => {

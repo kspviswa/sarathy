@@ -380,6 +380,42 @@ class UsageStore:
         except Exception:
             return None
 
+    def session_last_event(self, session_key: str, epoch: int = 0) -> dict[str, Any] | None:
+        """Return the most recent usage event for a session, or None.
+
+        Powers the dashboard's per-turn footer (tokens / tokens-per-sec), which
+        mirrors what ``format_usage_footer`` renders for Telegram from the same
+        underlying rows. Never raises — telemetry must not break a UI render.
+        """
+        try:
+            with self._get_conn() as conn:
+                row = conn.execute(
+                    """
+                    SELECT ts, model, provider, prompt_tokens, cached_tokens,
+                           completion_tokens, total_tokens, duration_ms, cost
+                    FROM usage_events
+                    WHERE session_key = ? AND epoch = ?
+                    ORDER BY ts DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (session_key, epoch),
+                ).fetchone()
+                if row is None:
+                    return None
+                event = {k: row[k] for k in row.keys()}
+                total = int(event.get("total_tokens") or 0)
+                duration_ms = event.get("duration_ms")
+                # Same derivation as AgentLoop's tokens_per_sec, so the dashboard
+                # and Telegram report the same number for the same turn.
+                event["tokens_per_sec"] = (
+                    total / (float(duration_ms) / 1000.0)
+                    if total > 0 and duration_ms and float(duration_ms) > 0
+                    else 0.0
+                )
+                return event
+        except Exception:
+            return None
+
     def reset_session_epoch(self, session_key: str) -> int:
         """Advance the session epoch to the next value, persist it, and return it.
 

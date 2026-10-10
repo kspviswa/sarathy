@@ -1,3 +1,5 @@
+import type { Quote } from "./quotes";
+import type { SlashCommand } from "./palette";
 import type {
   ConfigResponse,
   JobDetailResponse,
@@ -9,6 +11,7 @@ import type {
   RoleStatusResponse,
   RuntimeSetResponse,
   SessionDetail,
+  SessionFooter,
   SessionInfo,
   StatusResponse,
   UsageSummary,
@@ -73,6 +76,27 @@ export const api = {
 
   sendChat: (content: string) =>
     request<{ ok: boolean }>("/api/chat", { method: "POST", body: JSON.stringify({ content }) }),
+
+  /**
+   * Send a message, optionally with attachments, a reply target and
+   * quote-and-ask selections. Quotes are wrapped server-side into a context
+   * block above the user text so they persist in the transcript.
+   */
+  sendChatFull: (args: {
+    content: string;
+    media?: string[];
+    replyTo?: string | null;
+    quotes?: Quote[];
+  }) =>
+    request<{ ok: boolean }>("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        content: args.content,
+        ...(args.media?.length ? { media: args.media } : {}),
+        reply_to: args.replyTo ?? null,
+        ...(args.quotes?.length ? { quotes: args.quotes } : {}),
+      }),
+    }),
 
   sendChatWithMedia: (content: string, media: string[], replyTo?: string | null) =>
     request<{ ok: boolean }>("/api/chat", {
@@ -176,4 +200,28 @@ export const api = {
   jobs: () => request<JobsListResponse>("/api/jobs"),
 
   job: (id: number) => request<JobDetailResponse>(`/api/jobs/${id}`),
+
+  /** Builtin slash commands, sourced from the backend registry. */
+  commands: () => request<{ commands: SlashCommand[]; count: number }>("/api/commands"),
+
+  /** Footer parity data (tokens, tps, cost, topic, context, model). */
+  sessionFooter: (key?: string) =>
+    request<SessionFooter>(
+      `/api/session/footer${key ? `?key=${encodeURIComponent(key)}` : ""}`,
+    ),
+
+  /** Public VAPID key. Safe to expose; the private key never leaves the server. */
+  pushKey: () => request<{ publicKey: string; available: boolean }>("/api/push/key"),
+
+  pushSubscribe: (subscription: unknown) =>
+    request<{ ok: boolean; count: number }>("/api/push/subscribe", {
+      method: "POST",
+      body: JSON.stringify({ subscription }),
+    }),
+
+  pushSend: (title: string, body: string) =>
+    request<{ ok: boolean; delivered: number; failed: number; pruned: number }>(
+      "/api/push/send",
+      { method: "POST", body: JSON.stringify({ title, body }) },
+    ),
 };

@@ -89,8 +89,21 @@ class ContextBuilder:
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
 
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        channel: str | None = None,
+    ) -> str:
+        """Build the system prompt from identity, bootstrap files, memory, and skills.
+
+        ``channel`` selects channel-specific prompt additions. Only channels in
+        ``UI_BLOCK_CHANNELS`` (currently just ``dashboard``) get the typed
+        UI-block schema appended; every other channel — telegram included —
+        gets a byte-identical prompt to the channel-agnostic path, at zero token
+        cost. The import is deliberately lazy: ``sarathy.channels.dashboard``
+        pulls in aiohttp, which must not become an import-time dependency of the
+        agent core.
+        """
         parts = [self._get_identity()]
 
         bootstrap = self._load_bootstrap_files()
@@ -122,6 +135,11 @@ To use a skill, read its SKILL.md via read_file: {self.workspace}/skills/{{skill
             )
 
         parts.append(self._get_topic_signal_block())
+
+        from sarathy.channels.dashboard.uiblocks import ui_block_prompt, wants_ui_blocks
+
+        if wants_ui_blocks(channel):
+            parts.append(ui_block_prompt())
 
         return "\n\n---\n\n".join(parts)
 
@@ -242,7 +260,7 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             }
 
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            {"role": "system", "content": self.build_system_prompt(skill_names, channel=channel)},
             *history,
             user_message,
         ]

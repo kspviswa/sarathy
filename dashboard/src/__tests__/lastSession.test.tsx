@@ -18,6 +18,23 @@ vi.mock("@/lib/api", () => ({
     putConfig: vi.fn().mockResolvedValue({ ok: true, restartRequired: false }),
     providers: vi.fn().mockResolvedValue({ providers: [], active: "" }),
     status: vi.fn().mockResolvedValue({ version: "0.6.0", gateway: { running: true } }),
+    sendChatFull: vi.fn().mockResolvedValue({ ok: true }),
+    sessionFooter: vi.fn().mockResolvedValue({
+      sessionKey: "dashboard:console",
+      tokens: 0,
+      tokensPerSec: 0,
+      cost: null,
+      topic: null,
+      contextUsedTokens: null,
+      contextLength: null,
+      contextPct: null,
+      model: null,
+      provider: null,
+      messageCount: 0,
+    }),
+    commands: vi.fn().mockResolvedValue({ commands: [], count: 0 }),
+    pushKey: vi.fn().mockResolvedValue({ publicKey: "test", available: false }),
+    pushSubscribe: vi.fn().mockResolvedValue({ ok: true, count: 0 }),
   },
   getToken: vi.fn(() => "test-token"),
   setToken: vi.fn(),
@@ -32,6 +49,7 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/lib/theme", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useTheme: () => ({ theme: "dark", resolved: "dark", setTheme: vi.fn() }),
 }));
 
 vi.mock("@/lib/ws", () => ({
@@ -164,7 +182,9 @@ describe("Last session load — desktop App", () => {
     render(<DesktopApp />);
 
     await waitFor(() => expect(api.sessions).toHaveBeenCalled());
-    expect(await screen.findByText(/Say hello to Sarathy/)).toBeInTheDocument();
+    // Empty state is now the greeting view with mascot + suggestion chips.
+    expect(await screen.findByTestId("greeting-state")).toBeInTheDocument();
+    expect(screen.getByTestId("suggestion-chips")).toBeInTheDocument();
     expect(screen.queryByText("hello prior")).not.toBeInTheDocument();
   });
 

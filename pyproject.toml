@@ -1,6 +1,6 @@
 [project]
 name = "sarathy"
-version = "0.15.5"
+version = "0.16.0"
 description = "Sarathy : My Personal _claw style_ Assistant"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -41,6 +41,7 @@ dependencies = [
     "firecrawl>=2.0.0,<3.0.0",
     "markdown>=3.7.0,<4.0.0",
     "aiohttp>=3.9.0,<4.0.0",
+    "pywebpush>=2.0.0,<3.0.0",
 ]
 
 [project.optional-dependencies]

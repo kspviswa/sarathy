@@ -27,6 +27,10 @@ export interface SessionInfo {
   topic?: string | null;
   channel?: string;
   topic_user_set?: boolean;
+  /** First user message, trimmed — powers the archive browser's list rows. */
+  preview?: string | null;
+  /** Number of messages in the session. */
+  messageCount?: number;
 }
 
 export interface SessionDetail {
@@ -162,6 +166,11 @@ export interface Job {
   updated_at: string;
   closed_at: string | null;
   event_count: number;
+  /**
+   * True when the job claims to be running but has had no heartbeat for
+   * JOB_STALE_MINUTES. The UI shows STALLED rather than claiming "running".
+   */
+  stalled?: boolean;
   last_event: {
     ts: string;
     event_type: string;
@@ -179,4 +188,24 @@ export interface JobDetailResponse {
   events: JobEvent[];
   spec_text: string | null;
   result_text: string | null;
+}
+/**
+ * Footer parity data (spec section D).
+ *
+ * Mirrors what `format_usage_footer` renders for Telegram (tokens, tokens/sec,
+ * cost) and adds topic + context usage, which the dashboard shows natively.
+ * Every field is nullable: telemetry failures degrade one field, never the strip.
+ */
+export interface SessionFooter {
+  sessionKey: string;
+  tokens: number;
+  tokensPerSec: number;
+  cost: number | null;
+  topic: string | null;
+  contextUsedTokens: number | null;
+  contextLength: number | null;
+  contextPct: number | null;
+  model: string | null;
+  provider: string | null;
+  messageCount: number;
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import React from "react";
+import React, { useEffect } from "react";
 
 vi.mock("@/lib/api", () => ({
   api: {
@@ -21,6 +21,8 @@ vi.mock("@/lib/api", () => ({
     pushKey: vi.fn().mockResolvedValue({ publicKey: "test", available: false }),
     pushSubscribe: vi.fn().mockResolvedValue({ ok: true, count: 0 }),
     pushUnsubscribe: vi.fn().mockResolvedValue({ ok: true, count: 0 }),
+    commands: vi.fn().mockResolvedValue({ commands: [] }),
+    sessionFooter: vi.fn().mockResolvedValue(null),
   },
   getToken: vi.fn(() => "test-token"),
   setToken: vi.fn(),
@@ -60,6 +62,22 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 import MobileApp from "@/mobile/App";
 import { api } from "@/lib/api";
+
+// Injectable history: lets tests feed messages directly into the mobile chat.
+vi.mock("@/lib/useLastSession", () => ({
+  useLastSession: (_authed: boolean, setMessages: (m: unknown[]) => void) => {
+    // Feed history in an effect (never during render — setState during render
+    // would loop forever).
+    useEffect(() => {
+      if (mockHistory) setMessages(mockHistory);
+    }, []);
+    return false;
+  },
+  resetLastSession: vi.fn(),
+  DASHBOARD_SESSION_KEY: "dashboard:console",
+}));
+
+let mockHistory: unknown[] | null = null;
 
 describe("Mobile app — bottom tab bar", () => {
   beforeEach(() => {
@@ -157,5 +175,63 @@ describe("Mobile app — bottom tab bar", () => {
       await Promise.resolve();
     });
     expect(await screen.findByText("ping")).toBeInTheDocument();
+  });
+
+  describe("mobile ↔ desktop chat parity (v0.16.x)", () => {
+    beforeEach(() => {
+      mockHistory = null;
+    });
+
+    it("renders openUI blocks as interactive widgets, not raw code (parity with desktop ChatView)", async () => {
+      mockHistory = [
+        {
+          role: "assistant",
+          content:
+            '```\nroot = Root([heading, now], "Weather")\nheading = Heading("Current conditions", 2)\nnow = KeyValues([row1])\nrow1 = {label: "Temp", value: "3.6 °C"}\n```',
+        },
+      ];
+      render(<MobileApp />);
+      const block = await screen.findByTestId("ui-block");
+      expect(block).toBeInTheDocument();
+      expect(within(block).getByText("Weather")).toBeInTheDocument();
+      expect(within(block).getByText("Current conditions")).toBeInTheDocument();
+      // The raw openui-lang source must not leak as a code block.
+      expect(screen.queryByText(/root = Root\(/)).not.toBeInTheDocument();
+    });
+
+    it("shows the commands trigger and opens the palette", async () => {
+      render(<MobileApp />);
+      const trigger = await screen.findByTestId("mobile-commands-trigger");
+      expect(trigger).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(trigger);
+        await Promise.resolve();
+      });
+      expect(screen.getByTestId("command-palette")).toBeInTheDocument();
+      expect(screen.getByLabelText("Search commands")).toBeInTheDocument();
+    });
+
+    it("renders the live usage footer under the composer", async () => {
+      mockHistory = [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "hello" },
+      ];
+      vi.mocked(api.sessionFooter).mockResolvedValue({
+        tokens: 1234,
+        tokensPerSec: 12.3,
+        cost: 0.0012,
+        contextPct: 12,
+        contextUsedTokens: 1200,
+        contextLength: 10000,
+        messageCount: 2,
+        model: "test-model",
+        provider: "test-provider",
+        topic: null,
+      } as never);
+      render(<MobileApp />);
+      const footer = await screen.findByTestId("usage-footer");
+      expect(footer).toBeInTheDocument();
+      expect(within(footer).getByTestId("footer-model")).toHaveTextContent("test-model");
+    });
   });
 });

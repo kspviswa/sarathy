@@ -1022,7 +1022,9 @@ class DashboardChannel(BaseChannel):
             return web.json_response({"error": "session not found"}, status=404)
         messages = []
         for m in session.messages:
-            raw_content = m.get("content", "")
+            # Assistant tool-call records carry content=None (the message tool
+            # turn writes one); tolerate it instead of 500ing the history load.
+            raw_content = m.get("content") or ""
             quotes, body = split_quotes(raw_content)
             entry = {
                 "role": m.get("role", ""),

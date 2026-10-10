@@ -1048,6 +1048,16 @@ class DashboardChannel(BaseChannel):
         if not key:
             return web.json_response({"error": "missing key"}, status=400)
         self.session_manager._create_new_session(key)
+        # Advance the usage epoch so the fresh session starts a new cost
+        # bucket — otherwise the footer keeps reading the PREVIOUS session's
+        # last usage event (Telegram's /new does the same in agent/loop.py).
+        try:
+            from sarathy.usage.store import get_usage_store
+
+            new_epoch = get_usage_store().reset_session_epoch(key)
+            logger.debug("Advanced session epoch for {} to {}", key, new_epoch)
+        except Exception as e:
+            logger.debug("Failed to advance session epoch for {}: {}", key, e)
         return web.json_response({"ok": True})
 
     async def _api_session_delete(self, request: web.Request) -> web.Response:

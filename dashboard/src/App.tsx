@@ -16,9 +16,8 @@ import { toast } from "sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DEFAULT_SUGGESTIONS } from "@/components/GreetingState";
 import { Logo } from "@/components/logo";
-import { NotificationCenter } from "@/components/NotificationCenter";
+import { NotificationBell } from "@/components/NotificationBell";
 import { PresenceIndicator } from "@/components/Presence";
-import { PushToggle } from "@/components/PushToggle";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
@@ -33,6 +32,7 @@ import {
 import { ThemeProvider } from "@/lib/theme";
 import type { SessionInfo } from "@/lib/types";
 import { DASHBOARD_SESSION_KEY, resetLastSession, useLastSession } from "@/lib/useLastSession";
+import { useNotificationPref } from "@/lib/useNotificationPref";
 import { useNotifications } from "@/lib/useNotifications";
 import { cn } from "@/lib/utils";
 import { DashboardSocket } from "@/lib/ws";
@@ -77,7 +77,6 @@ function AppInner() {
   const [reaction, setReaction] = useState<ReactionState>("done");
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [unread, setUnread] = useState<Partial<Record<Section, number>>>({});
-  const [notifPanelOpen, setNotifPanelOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
@@ -145,6 +144,9 @@ function AppInner() {
     },
     onMarkAllRead: () => setUnread({}),
   });
+
+  const { enabled: notificationsEnabled, setEnabled: setNotificationsEnabled } =
+    useNotificationPref();
 
   useEffect(() => {
     if (!getToken()) {
@@ -395,14 +397,6 @@ function AppInner() {
     [handleSend, selectSection],
   );
 
-  const openTranscript = useCallback(
-    (key: string) => {
-      setTranscriptKey(key);
-      selectSection("sessions");
-    },
-    [selectSection],
-  );
-
   const recentTopics = useMemo(
     () =>
       sessions
@@ -496,32 +490,8 @@ function AppInner() {
           ))}
         </nav>
 
-        {/* Recent conversations — shallow list, click to open transcript. */}
-        <div className="mt-4 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-          <h2 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Recent conversations
-          </h2>
-          {sessions.length === 0 ? (
-            <p className="px-2 py-2 text-xs text-muted-foreground">No conversations yet.</p>
-          ) : (
-            <ul className="space-y-0.5">
-              {sessions.slice(0, 30).map((s) => (
-                <li key={s.key}>
-                  <button
-                    onClick={() => openTranscript(s.key)}
-                    className={cn(
-                      "w-full truncate rounded-lg px-2 py-1.5 text-left text-sm hover:bg-accent",
-                      transcriptKey === s.key && "bg-accent font-medium",
-                    )}
-                    data-testid="rail-session"
-                  >
-                    {s.topic || s.preview || s.key}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        {/* Recent conversations were removed (spec §B): the rail is logo,
+            Search, and section nav. Sessions live in the Sessions tab now. */}
       </aside>
 
       {/* ---------------------------------------------------------------- main */}
@@ -549,11 +519,11 @@ function AppInner() {
           <div className="flex-1" />
 
           <PresenceIndicator state={reaction} />
-          <NotificationCenter
+          <NotificationBell
+            enabled={notificationsEnabled ?? false}
+            onEnabledChange={setNotificationsEnabled}
             notifications={notifications}
             unreadIds={unreadIds}
-            open={notifPanelOpen}
-            onOpenChange={setNotifPanelOpen}
             onMarkAllRead={markAllRead}
             onMarkRead={markRead}
             onNavigate={(tab) => {
@@ -561,7 +531,6 @@ function AppInner() {
               if (target) selectSection(target);
             }}
           />
-          <PushToggle />
           <ThemeToggle />
 
           <div className="hidden items-center gap-2 md:flex">

@@ -12,6 +12,8 @@ from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 from sarathy.bus.queue import MessageBus
 from sarathy.channels.dashboard.auth import DeviceRegistry
 from sarathy.channels.dashboard.server import DashboardChannel
+from sarathy.config.schema import Config
+from sarathy.session.manager import SessionManager
 
 
 def _today() -> str:
@@ -222,6 +224,114 @@ class TestUsageSummaryAPI(AioHTTPTestCase):
         # Request with invalid token
         resp = await self.client.request("GET", "/api/usage/summary", headers={"Authorization": "Bearer invalid"})
         assert resp.status == 401
+
+
+class TestSessionFooterEpoch(AioHTTPTestCase):
+    """After POST /api/session/new the footer must read a FRESH usage bucket.
+
+    The dashboard's new-chat flow must advance the usage epoch exactly like
+    Telegram's /new, so the status strip does not keep reporting the previous
+    session's tokens/tps/cost.
+    """
+
+    async def get_application(self):
+        config = MagicMock()
+        config.host = "127.0.0.1"
+        config.port = 8080
+        config.streaming = False
+        config.pairing_keys = ["test-key-123"]
+        config.allow_from = None
+
+        self.temp_dir = tempfile.mkdtemp()
+        config_path = Path(self.temp_dir) / "config.json"
+        devices_path = Path(self.temp_dir) / "devices.json"
+        workspace = Path(self.temp_dir) / "workspace"
+
+        cfg = Config()
+        cfg.channels.dashboard.enabled = True
+        cfg.channels.dashboard.pairing_keys = ["test-key-123"]
+        cfg.agents.defaults.workspace = str(workspace)
+        self.session_manager = SessionManager(cfg, workspace=workspace)
+        self.session_manager.get_or_create("dashboard:console")
+
+        with patch("sarathy.channels.dashboard.server.DashboardChannel._load_full_config") as mock_load:
+            mock_config = MagicMock()
+            mock_config.get_provider_name.return_value = "test-provider"
+            mock_config.agents.defaults.model = "test-model"
+            mock_config.workspace_path = str(workspace)
+            mock_config.channels.telegram = MagicMock(enabled=False)
+            mock_config.channels.discord = MagicMock(enabled=False)
+            mock_config.channels.email = MagicMock(enabled=False)
+            mock_config.channels.dashboard = MagicMock(enabled=True, host="127.0.0.1", port=8080, streaming=False)
+            mock_load.return_value = mock_config
+
+            self.registry = DeviceRegistry(devices_path)
+            self.test_token, _ = self.registry.register("test-key-123", "Test Device")
+
+            bus = MagicMock(spec=MessageBus)
+            self.channel = DashboardChannel(
+                config=config,
+                bus=bus,
+                session_manager=self.session_manager,
+                config_path=config_path,
+                devices_path=devices_path,
+                runtime=None,
+            )
+            self.channel._running = False
+            return self.channel._build_app()
+
+    @unittest_run_loop
+    async def test_session_new_resets_footer_to_fresh_bucket(self):
+        """A new-chat advances the epoch: footer shows tokens=0, cost=None, tps=0."""
+        from sarathy.usage.store import get_usage_store
+
+        key = "dashboard:console"
+        store = get_usage_store()
+        # Seed a stale usage event for the PREVIOUS session epoch.
+        store.record(
+            {
+                "ts": f"{_today()}T03:41:00Z",
+                "session_key": key,
+                "channel": "dashboard",
+                "model": "test-model",
+                "provider": "test-provider",
+                "prompt_tokens": 1000,
+                "completion_tokens": 200,
+                "total_tokens": 1200,
+                "duration_ms": 500,
+                "cost": 0.1192,
+            }
+        )
+
+        # Sanity: before /new the footer reports the stale telemetry.
+        resp = await self.client.request(
+            "GET", f"/api/session/footer?key={key}", headers=self._auth_headers()
+        )
+        assert resp.status == 200
+        before = await resp.json()
+        assert before["tokens"] == 1200
+
+        resp = await self.client.request(
+            "POST", "/api/session/new", json={"key": key}, headers=self._auth_headers()
+        )
+        assert resp.status == 200
+
+        resp = await self.client.request(
+            "GET", f"/api/session/footer?key={key}", headers=self._auth_headers()
+        )
+        assert resp.status == 200
+        after = await resp.json()
+        assert after["tokens"] == 0
+        assert after["tokensPerSec"] == 0
+        assert after["cost"] is None
+        assert after["messageCount"] == 0
+
+        # The reset advanced to a new epoch rather than deleting the old row.
+        assert store.get_session_epoch(key) == 1
+        assert store.session_cost(key, 0) == 0.1192
+
+    def _auth_headers(self):
+        return {"Authorization": f"Bearer {self.test_token}"}
 
 
 if __name__ == "__main__":

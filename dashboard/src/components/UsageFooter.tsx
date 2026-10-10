@@ -76,6 +76,27 @@ export function UsageFooter({
 
   if (!data) return null;
 
+  // Fresh session: the usage bucket and context estimate are meaningless until
+  // the first real turn lands (the context line otherwise reports only the
+  // system-prompt baseline). Show nothing but the model/provider line.
+  if (data.messageCount === 0) {
+    if (!data.model) return null;
+    return (
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground",
+          className,
+        )}
+        data-testid="usage-footer"
+      >
+        <span className="ml-auto truncate font-medium text-foreground/80" data-testid="footer-model">
+          {data.model}
+          {data.provider ? ` · ${data.provider}` : ""}
+        </span>
+      </div>
+    );
+  }
+
   const contextPct = data.contextPct;
   // Warn before the window is genuinely tight, not at some arbitrary midpoint.
   const contextTone =

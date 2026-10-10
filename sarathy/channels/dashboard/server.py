@@ -1020,12 +1020,21 @@ class DashboardChannel(BaseChannel):
         session = self.session_manager.read_session(key)
         if session is None:
             return web.json_response({"error": "session not found"}, status=404)
+
+        # Strip the session-topic machine marker on read. Transcripts persisted
+        # before the marker was stripped at save-time still carry it, and it
+        # must never reach a client — it leaked into the mobile history view
+        # (KB #456). Stripping here covers legacy data and every client.
+        from sarathy.agent.loop import strip_topic_marker
+
         messages = []
         for m in session.messages:
             # Assistant tool-call records carry content=None (the message tool
             # turn writes one); tolerate it instead of 500ing the history load.
             raw_content = m.get("content") or ""
             quotes, body = split_quotes(raw_content)
+            if m.get("role") == "assistant":
+                body, _ = strip_topic_marker(body)
             entry = {
                 "role": m.get("role", ""),
                 "content": body,

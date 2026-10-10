@@ -219,6 +219,13 @@ export const api = {
       body: JSON.stringify({ subscription }),
     }),
 
+  /** Drop one stored push subscription by endpoint (best-effort). */
+  pushUnsubscribe: (endpoint: string) =>
+    request<{ ok: boolean; count?: number }>("/api/push/unsubscribe", {
+      method: "POST",
+      body: JSON.stringify({ endpoint }),
+    }),
+
   pushSend: (title: string, body: string) =>
     request<{ ok: boolean; delivered: number; failed: number; pruned: number }>(
       "/api/push/send",

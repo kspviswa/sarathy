@@ -1,13 +1,22 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildMonthMatrix,
   channelLabel,
+  dateFromKey,
+  dateKeyFromDate,
   filterSessionsByDate,
+  formatDateKey,
   formatSessionDate,
+  groupByChannel,
   groupSessions,
+  monthLabel,
   sessionChannel,
   sessionDateKey,
   sessionDateOptions,
+  sessionDayKeys,
+  sessionsOnDate,
   sessionTitle,
+  shiftMonth,
 } from "@/lib/sessions";
 import type { SessionInfo } from "@/lib/types";
 
@@ -104,5 +113,62 @@ describe("date filter", () => {
       ["cron:nightly", "dashboard:console", "telegram:1"].sort(),
     );
     expect(filterSessionsByDate(SESSIONS, "all")).toHaveLength(SESSIONS.length);
+  });
+});
+
+describe("calendar helpers (spec §C)", () => {
+  it("dateKeyFromDate / dateFromKey / formatDateKey round-trip local dates", () => {
+    const d = new Date(2026, 6, 7); // local 7 July 2026
+    expect(dateKeyFromDate(d)).toBe("2026-07-07");
+    expect(formatDateKey("2026-07-07")).toBe("7 July 2026");
+    expect(dateFromKey("2026-07-07")?.getFullYear()).toBe(2026);
+    expect(dateFromKey("nope")).toBeNull();
+  });
+
+  it("shiftMonth rolls over the year", () => {
+    expect(shiftMonth({ year: 2026, month: 0 }, -1)).toEqual({ year: 2025, month: 11 });
+    expect(shiftMonth({ year: 2026, month: 11 }, 1)).toEqual({ year: 2027, month: 0 });
+  });
+
+  it("monthLabel renders the full name", () => {
+    expect(monthLabel({ year: 2026, month: 9 })).toBe("October 2026");
+  });
+
+  it("buildMonthMatrix is Sunday-first, padded to whole weeks", () => {
+    // July 2026 starts on a Wednesday (1st = Wed), has 31 days.
+    const weeks = buildMonthMatrix({ year: 2026, month: 6 });
+    expect(weeks.length).toBe(5);
+    const flat = weeks.flat();
+    // leading pad of 3 (Sun,Mon,Tue), then day 1,2,3 as first data cells
+    expect(flat[0]).toBeNull();
+    expect(flat[1]).toBeNull();
+    expect(flat[2]).toBeNull();
+    expect(flat[3]?.getDate()).toBe(1);
+    expect(flat.length % 7).toBe(0);
+  });
+});
+
+describe("day/channel grouping (spec §C)", () => {
+  it("sessionDayKeys collects distinct local days", () => {
+    expect(sessionDayKeys(SESSIONS).has("2026-07-07")).toBe(true);
+    expect(sessionDayKeys(SESSIONS).has("2026-07-08")).toBe(true);
+    expect(sessionDayKeys(SESSIONS).has("1970-01-01")).toBe(false);
+  });
+
+  it("sessionsOnDate narrows to one local day", () => {
+    const onDay = sessionsOnDate(SESSIONS, "2026-07-07");
+    expect(onDay.map((s) => s.key).sort()).toEqual(
+      ["cron:nightly", "dashboard:console", "telegram:1"].sort(),
+    );
+  });
+
+  it("groupByChannel buckets with counts and keeps newest first", () => {
+    const groups = groupByChannel(
+      sessionsOnDate(SESSIONS, "2026-07-07"),
+    );
+    expect(groups.map((g) => g.channel)).toEqual(["cron", "dashboard", "telegram"]);
+    const telegram = groups.find((g) => g.channel === "telegram")!;
+    expect(telegram.sessions.map((s) => s.key)).toEqual(["telegram:1"]);
+    expect(groups.find((g) => g.channel === "cron")!.sessions[0].key).toBe("cron:nightly");
   });
 });

@@ -1,17 +1,22 @@
-import { Clock, Loader2, MessageSquareText } from "lucide-react";
+import { ArrowLeft, Clock, Loader2, MessageSquareText } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
+import { SessionCalendar } from "@/components/SessionCalendar";
+import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
+import { channelIcon } from "@/lib/channelIcons";
 import {
-  filterSessionsByDate,
-  groupSessions,
-  sessionDateOptions,
+  formatDateKey,
+  groupByChannel,
+  sessionDayKeys,
   sessionTitle,
+  sessionsOnDate,
+  type MonthCursor,
 } from "@/lib/sessions";
 import type { SessionDetail, SessionInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -24,6 +29,16 @@ function sessionTime(s: SessionInfo): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function thisMonth(): MonthCursor {
+  const now = new Date();
+  return { year: now.getFullYear(), month: now.getMonth() };
+}
+
+/**
+ * Sessions drill-down (spec §C): month calendar → (day) per-channel counts →
+ * (channel) session list → (session) transcript. The left column walks the
+ * first three levels; the transcript renders on the right when a session opens.
+ */
 export function SessionsView({
   sessions: providedSessions,
   initialKey = null,
@@ -38,7 +53,9 @@ export function SessionsView({
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [loadingList, setLoadingList] = useState(providedSessions === undefined);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [dateFilter, setDateFilter] = useState<string | "all">("all");
+  const [cursor, setCursor] = useState<MonthCursor>(thisMonth);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
 
   useEffect(() => {
     if (providedSessions !== undefined) {
@@ -53,10 +70,22 @@ export function SessionsView({
       .finally(() => setLoadingList(false));
   }, [providedSessions]);
 
-  const dateOptions = useMemo(() => sessionDateOptions(sessions), [sessions]);
-  const groups = useMemo(
-    () => groupSessions(filterSessionsByDate(sessions, dateFilter)),
-    [sessions, dateFilter],
+  const markedDays = useMemo(() => sessionDayKeys(sessions), [sessions]);
+  const todayKey = useMemo(() => {
+    const now = new Date();
+    const m = `${now.getMonth() + 1}`.padStart(2, "0");
+    const day = `${now.getDate()}`.padStart(2, "0");
+    return `${now.getFullYear()}-${m}-${day}`;
+  }, []);
+
+  const daySessions = useMemo(
+    () => (selectedDay ? sessionsOnDate(sessions, selectedDay) : []),
+    [sessions, selectedDay],
+  );
+  const dayChannels = useMemo(() => groupByChannel(daySessions), [daySessions]);
+  const channelSessions = useMemo(
+    () => (selectedChannel ? dayChannels.find((c) => c.channel === selectedChannel)?.sessions ?? [] : []),
+    [dayChannels, selectedChannel],
   );
 
   async function open(key: string) {
@@ -72,101 +101,121 @@ export function SessionsView({
     }
   }
 
-  // Transcript requested by the shell (rail "recent conversations" click)
-  // opens in this view rather than in a drawer.
+  // Transcript requested by the shell (deep link) opens on mount.
   useEffect(() => {
     if (!initialKey) return;
     void open(initialKey);
   }, [initialKey]);
 
+  function resetToList() {
+    setSelectedDay(null);
+    setSelectedChannel(null);
+  }
+
   return (
     <div
-      className="grid h-full gap-3 p-4 lg:grid-cols-[minmax(0,300px)_1fr]"
+      className="grid h-full gap-3 p-4 lg:grid-cols-[minmax(0,340px)_1fr]"
       data-testid="sessions-view"
     >
       <Card className="min-h-0 overflow-hidden">
         <ScrollArea className="h-full">
-          <div className="p-2">
+          <div className="p-3">
             {loadingList ? (
               <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
                 Loading…
               </div>
             ) : sessions.length === 0 ? (
-              <p className="p-3 text-sm text-muted-foreground">No sessions yet</p>
+              <p className="p-3 text-sm text-muted-foreground" data-testid="sessions-empty">
+                No sessions yet
+              </p>
+            ) : !selectedDay ? (
+              <SessionCalendar
+                cursor={cursor}
+                markedDays={markedDays}
+                todayKey={todayKey}
+                selectedDay={selectedDay}
+                onSelectDay={(k) => {
+                  setSelectedDay(k);
+                  setSelectedChannel(null);
+                }}
+                onMonthChange={setCursor}
+              />
+            ) : !selectedChannel ? (
+              <div data-testid="sessions-day-view">
+                <button
+                  onClick={resetToList}
+                  className="mb-2 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                  data-testid="sessions-back-calendar"
+                >
+                  <ArrowLeft className="size-3.5" />
+                  Calendar
+                </button>
+                <p className="px-1 pb-2 text-sm font-semibold">{formatDateKey(selectedDay)}</p>
+                <ul className="space-y-1">
+                  {dayChannels.map((g) => {
+                    const Icon = channelIcon(g.channel);
+                    return (
+                      <li key={g.channel}>
+                        <button
+                          onClick={() => setSelectedChannel(g.channel)}
+                          data-testid="day-channel"
+                          data-channel={g.channel}
+                          className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-accent"
+                        >
+                          <span className="flex size-8 items-center justify-center rounded-md bg-muted">
+                            <Icon className="size-4" />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                            {g.label}
+                          </span>
+                          <Badge variant="secondary" data-testid="channel-count">
+                            {g.sessions.length}
+                          </Badge>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             ) : (
-              <>
-                <div className="px-1 pb-2">
-                  <label
-                    htmlFor="session-date-filter"
-                    className="pb-1 text-xs text-muted-foreground"
-                  >
-                    Filter by date
-                  </label>
-                  <select
-                    id="session-date-filter"
-                    value={dateFilter}
-                    onChange={(e) => setDateFilter(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-                  >
-                    <option value="all">All dates</option>
-                    {dateOptions.map((o) => (
-                      <option key={o.dateKey} value={o.dateKey}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {groups.length === 0 ? (
-                  <p className="p-3 text-sm text-muted-foreground">
-                    No sessions for this date
-                  </p>
-                ) : (
-                  groups.map((g) => (
-                    <div key={g.channel} className="pb-2">
-                      <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        {g.label}
-                      </p>
-                      {g.dates.map((d) => (
-                        <div key={d.dateKey} className="pb-1">
-                          <p className="px-2 pb-0.5 text-xs text-muted-foreground">
-                            {d.label}
-                          </p>
-                          <ul className="space-y-0.5">
-                            {d.sessions.map((s) => (
-                              <li key={s.key}>
-                                <button
-                                  onClick={() => void open(s.key)}
-                                  className={cn(
-                                    "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
-                                    active === s.key
-                                      ? "bg-primary text-primary-foreground"
-                                      : "hover:bg-accent hover:text-accent-foreground",
-                                  )}
-                                >
-                                  <MessageSquareText className="size-4 shrink-0" />
-                                  <span className="min-w-0 flex-1">
-                                    <span className="block truncate">
-                                      {sessionTitle(s)}
-                                      {s.topic_user_set ? " 🔒" : null}
-                                    </span>
-                                    <span className="block truncate font-mono text-[11px] opacity-60">
-                                      {s.topic?.trim() ? s.key : sessionTime(s)}
-                                      {s.topic?.trim() && sessionTime(s)
-                                        ? ` · ${sessionTime(s)}`
-                                        : null}
-                                    </span>
-                                  </span>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      ))}
-                    </div>
-                  ))
-                )}
-              </>
+              <div data-testid="sessions-channel-view">
+                <button
+                  onClick={() => setSelectedChannel(null)}
+                  className="mb-2 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                  data-testid="sessions-back-day"
+                >
+                  <ArrowLeft className="size-3.5" />
+                  {formatDateKey(selectedDay)}
+                </button>
+                <ul className="space-y-0.5">
+                  {channelSessions.map((s) => (
+                    <li key={s.key}>
+                      <button
+                        onClick={() => void open(s.key)}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors",
+                          active === s.key
+                            ? "bg-primary text-primary-foreground"
+                            : "hover:bg-accent hover:text-accent-foreground",
+                        )}
+                      >
+                        <MessageSquareText className="size-4 shrink-0" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate">
+                            {sessionTitle(s)}
+                            {s.topic_user_set ? " 🔒" : null}
+                          </span>
+                          <span className="block truncate font-mono text-[11px] opacity-60">
+                            {s.topic?.trim() ? s.key : sessionTime(s)}
+                            {s.topic?.trim() && sessionTime(s) ? ` · ${sessionTime(s)}` : null}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
         </ScrollArea>

@@ -8,6 +8,8 @@
  * this feature exists to fix.
  */
 
+import { api } from "@/lib/api";
+
 export type PushSupport =
   | "granted"
   | "denied"
@@ -161,11 +163,7 @@ export async function unsubscribeFromPush(): Promise<boolean> {
     if (!subscription) return false;
     const endpoint = subscription.endpoint;
     await subscription.unsubscribe();
-    await fetch("/api/push/unsubscribe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ endpoint }),
-    }).catch(() => null);
+    await api.pushUnsubscribe(endpoint).catch(() => null);
     return true;
   } catch {
     return false;

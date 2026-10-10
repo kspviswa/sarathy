@@ -21,6 +21,103 @@ function asDate(iso?: string | null): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** Local `yyyy-mm-dd` key for a concrete Date. */
+export function dateKeyFromDate(d: Date): string {
+  const m = `${d.getMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getDate()}`.padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/** Parse a `yyyy-mm-dd` key back to a local Date (`null` when malformed). */
+export function dateFromKey(key: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+  if (!match) return null;
+  const [, y, m, d] = match;
+  const date = new Date(Number(y), Number(m) - 1, Number(d));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Human label for a `yyyy-mm-dd` key, e.g. `7 July 2026`. */
+export function formatDateKey(key: string): string {
+  const d = dateFromKey(key);
+  if (!d) return "Unknown date";
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+export interface MonthCursor {
+  year: number;
+  /** 0-based month index (JS Date convention). */
+  month: number;
+}
+
+/** `October 2026` label for a month cursor. */
+export function monthLabel(cursor: MonthCursor): string {
+  return `${MONTHS[cursor.month]} ${cursor.year}`;
+}
+
+/** Move a month cursor by `delta` months, rolling the year over as needed. */
+export function shiftMonth(cursor: MonthCursor, delta: number): MonthCursor {
+  const d = new Date(cursor.year, cursor.month + delta, 1);
+  return { year: d.getFullYear(), month: d.getMonth() };
+}
+
+/**
+ * Sunday-first week grid for the given month. Each cell is a local Date, with
+ * leading/trailing `null`s padding the partial first/last weeks.
+ */
+export function buildMonthMatrix(cursor: MonthCursor): (Date | null)[][] {
+  const first = new Date(cursor.year, cursor.month, 1);
+  const daysInMonth = new Date(cursor.year, cursor.month + 1, 0).getDate();
+  const lead = first.getDay();
+  const cells: (Date | null)[] = [];
+  for (let i = 0; i < lead; i += 1) cells.push(null);
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push(new Date(cursor.year, cursor.month, day));
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+  const weeks: (Date | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return weeks;
+}
+
+/** Set of `yyyy-mm-dd` keys that have at least one session (for calendar markers). */
+export function sessionDayKeys(sessions: SessionInfo[]): Set<string> {
+  const keys = new Set<string>();
+  for (const s of sessions) keys.add(sessionDateKey(preferredTimestamp(s)));
+  return keys;
+}
+
+/** Sessions whose local day matches `dateKey`. */
+export function sessionsOnDate(sessions: SessionInfo[], dateKey: string): SessionInfo[] {
+  return sessions.filter((s) => sessionDateKey(preferredTimestamp(s)) === dateKey);
+}
+
+export interface ChannelCount {
+  channel: string;
+  label: string;
+  sessions: SessionInfo[];
+}
+
+/** Group sessions by channel (alphabetical), each carrying its full list. */
+export function groupByChannel(sessions: SessionInfo[]): ChannelCount[] {
+  const byChannel = new Map<string, SessionInfo[]>();
+  for (const s of sessions) {
+    const channel = sessionChannel(s);
+    const list = byChannel.get(channel);
+    if (list) list.push(s);
+    else byChannel.set(channel, [s]);
+  }
+  return [...byChannel.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([channel, list]) => ({
+      channel,
+      label: channelLabel(channel),
+      sessions: [...list].sort((a, b) =>
+        (preferredTimestamp(b) ?? "").localeCompare(preferredTimestamp(a) ?? ""),
+      ),
+    }));
+}
+
 /** Short-form date, e.g. `7 July 2026` (no leading zero). */
 export function formatSessionDate(iso?: string | null): string {
   const d = asDate(iso);

@@ -1,6 +1,5 @@
 import {
   Activity,
-  Bell,
   Briefcase,
   FileCode2,
   Gauge,
@@ -10,11 +9,12 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Logo } from "@/components/logo";
+import { NotificationBell } from "@/components/NotificationBell";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import { ThemeProvider } from "@/lib/theme";
 import { useLastSession, resetLastSession, DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
+import { useNotificationPref } from "@/lib/useNotificationPref";
 import { useNotifications } from "@/lib/useNotifications";
 import { DashboardSocket } from "@/lib/ws";
 import type { ChatMessage as ChatMessageT } from "@/views/ChatView";
@@ -83,7 +83,7 @@ function MobileAppInner() {
 
   const loadingHistory = useLastSession(authed === true, setMessages);
 
-  const { unreadCount, markAllRead } = useNotifications(socket, {
+  const { notifications, unreadIds, markAllRead, markRead } = useNotifications(socket, {
     navigateTo: (tabId) => {
       const dest = TABS.find((t) => t.id === tabId);
       if (!dest) return;
@@ -92,6 +92,9 @@ function MobileAppInner() {
     },
     onMarkAllRead: () => setUnread({}),
   });
+
+  const { enabled: notificationsEnabled, setEnabled: setNotificationsEnabled } =
+    useNotificationPref();
 
   useEffect(() => {
     if (!getToken()) {
@@ -278,19 +281,20 @@ function MobileAppInner() {
           <span className="font-bold tracking-tight">Sarathy</span>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          {unreadCount > 0 && (
-            <button
-              onClick={markAllRead}
-              aria-label={`${unreadCount} unread notifications, mark all read`}
-              data-testid="mobile-notifications-badge"
-              className="flex items-center gap-1.5 rounded-full text-primary"
-            >
-              <Bell className="size-4" />
-              <Badge variant="destructive" className="h-4 min-w-4 px-1 text-[10px]">
-                {unreadCount}
-              </Badge>
-            </button>
-          )}
+          <NotificationBell
+            enabled={notificationsEnabled ?? false}
+            onEnabledChange={setNotificationsEnabled}
+            notifications={notifications}
+            unreadIds={unreadIds}
+            onMarkAllRead={markAllRead}
+            onMarkRead={markRead}
+            onNavigate={(tabId) => {
+              const dest = TABS.find((t) => t.id === tabId);
+              if (!dest) return;
+              setTab(dest.id);
+              setUnread((prev) => ({ ...prev, [dest.id]: 0 }));
+            }}
+          />
           <span>Mobile</span>
         </div>
       </header>

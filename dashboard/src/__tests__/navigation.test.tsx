@@ -29,6 +29,7 @@ vi.mock("@/lib/api", () => ({
     sessions: vi.fn().mockResolvedValue({ sessions: [] }),
     pushKey: vi.fn().mockResolvedValue({ publicKey: "test", available: false }),
     pushSubscribe: vi.fn().mockResolvedValue({ ok: true, count: 0 }),
+    pushUnsubscribe: vi.fn().mockResolvedValue({ ok: true, count: 0 }),
     workspaceTree: vi.fn().mockResolvedValue({ root: "/ws", tree: [] }),
     jobs: vi.fn().mockResolvedValue({ jobs: [] }),
     job: vi.fn().mockResolvedValue({ job: null, events: [], spec_text: null, result_text: null }),
@@ -182,7 +183,7 @@ describe("Section navigation — tabs, not drawers", () => {
     expect(screen.getByTestId("session-badge")).toHaveTextContent("dashboard:console");
   });
 
-  it("a recent-conversation click opens the transcript in the sessions section", async () => {
+  it("no longer lists Recent conversations in the rail (spec §B)", async () => {
     vi.mocked(api.sessions).mockResolvedValue({
       sessions: [
         {
@@ -193,23 +194,80 @@ describe("Section navigation — tabs, not drawers", () => {
         },
       ],
     });
+
+    await renderApp();
+
+    expect(screen.queryByText("Recent conversations")).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId("rail-session")).toHaveLength(0);
+
+    // The conversations are reachable through the Sessions tab instead.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("nav-sessions"));
+    });
+    expect(screen.getByTestId("sessions-view")).toBeInTheDocument();
+  });
+
+  it("drills into a session through the calendar, day channels, and list", async () => {
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${`${now.getMonth() + 1}`.padStart(2, "0")}-${`${now.getDate()}`.padStart(2, "0")}`;
+    const iso = now.toISOString();
+
+    vi.mocked(api.sessions).mockResolvedValue({
+      sessions: [
+        { key: "telegram:1", channel: "telegram", topic: "alpha", messageCount: 2, updated_at: iso },
+        { key: "telegram:2", channel: "telegram", topic: "beta", messageCount: 3, updated_at: iso },
+        { key: "discord:9", channel: "discord", topic: "gamma", messageCount: 1, updated_at: iso },
+      ],
+    });
     vi.mocked(api.session).mockResolvedValue({
-      key: "telegram:123",
-      createdAt: "2026-08-28T00:00:00Z",
+      key: "telegram:1",
+      createdAt: iso,
       messages: [{ role: "user", content: "ping" }],
     } as never);
 
     await renderApp();
-    const item = await screen.findByTestId("rail-session");
     await act(async () => {
-      fireEvent.click(item);
+      fireEvent.click(screen.getByTestId("nav-sessions"));
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("sessions-view")).toBeInTheDocument();
-    expect(screen.queryByTestId("transcript-drawer")).not.toBeInTheDocument();
+    // Level 1: calendar with a marker on today.
+    expect(screen.getByTestId("session-calendar")).toBeInTheDocument();
+    expect(screen.getByTestId(`calendar-marker-${todayKey}`)).toBeInTheDocument();
+    const day = screen.getByTestId(`calendar-day-${todayKey}`);
+    expect(day).toBeEnabled();
+
+    // Level 2: per-channel session counts for that day.
+    await act(async () => {
+      fireEvent.click(day);
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("sessions-day-view")).toBeInTheDocument();
+    const telegramRow = screen
+      .getAllByTestId("day-channel")
+      .find((el) => el.getAttribute("data-channel") === "telegram")!;
+    const discordRow = screen
+      .getAllByTestId("day-channel")
+      .find((el) => el.getAttribute("data-channel") === "discord")!;
+    expect(
+      within(telegramRow.closest("li")!).getByTestId("channel-count"),
+    ).toHaveTextContent("2");
+    expect(within(discordRow.closest("li")!).getByTestId("channel-count")).toHaveTextContent("1");
+
+    // Level 3: the channel's session list.
+    await act(async () => {
+      fireEvent.click(telegramRow);
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("sessions-channel-view")).toBeInTheDocument();
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+
+    // Level 4: transcript.
+    await act(async () => {
+      fireEvent.click(screen.getByText("alpha"));
+      await Promise.resolve();
+    });
     expect(await screen.findByText("ping")).toBeInTheDocument();
-    expect(screen.getByTestId("session-badge")).toHaveTextContent("telegram:123");
   });
 });
 
@@ -294,20 +352,47 @@ describe("Composer — drag to resize, no expand toggle", () => {
 /* ------------------------------------------------- §F notification sidebar */
 
 describe("Notification sidebar", () => {
-  it("shows a bell with an unread badge and opens a right-side panel", async () => {
+  beforeEach(() => {
+    // Single-bell control (spec §D): start with notifications already on.
+    localStorage.setItem("sarathy_notifications_enabled", "true");
+  });
+
+  it("shows exactly one bell with an unread badge and opens a right-side panel", async () => {
     await renderApp();
-    const bell = screen.getByTestId("notifications-bell");
-    expect(bell).toBeInTheDocument();
+    const bells = screen.getAllByTestId("notifications-bell");
+    expect(bells).toHaveLength(1);
+    expect(bells[0]).toHaveAttribute("data-enabled", "true");
     expect(screen.queryByTestId("notifications-badge")).not.toBeInTheDocument();
 
     emitNotification({ title: "Backup done", body: "All good", tab: "status", timestamp: new Date().toISOString() });
     expect(screen.getByTestId("notifications-badge")).toHaveTextContent("1");
 
-    fireEvent.click(bell);
+    fireEvent.click(screen.getByTestId("notifications-bell"));
     const panel = screen.getByTestId("notifications-panel");
     expect(panel).toBeInTheDocument();
     expect(within(panel).getByText("Backup done")).toBeInTheDocument();
     expect(within(panel).getByText("All good")).toBeInTheDocument();
+    // The drawer houses the on/off switch.
+    expect(within(panel).getByTestId("notifications-switch")).toBeInTheDocument();
+  });
+
+  it("is a single toggle: turning notifications off swaps to bell-off (spec §D)", async () => {
+    await renderApp();
+    const bell = screen.getByTestId("notifications-bell");
+    expect(bell).toHaveAttribute("data-enabled", "true");
+
+    emitNotification({ title: "Ping", timestamp: new Date().toISOString() });
+    expect(screen.getByTestId("notifications-badge")).toBeInTheDocument();
+
+    fireEvent.click(bell);
+    const panel = screen.getByTestId("notifications-panel");
+    fireEvent.click(within(panel).getByTestId("notifications-switch"));
+
+    // Off: no panel, no badge, bell-off, and the pref is persisted.
+    expect(screen.queryByTestId("notifications-panel")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("notifications-badge")).not.toBeInTheDocument();
+    expect(screen.getByTestId("notifications-bell")).toHaveAttribute("data-enabled", "false");
+    expect(localStorage.getItem("sarathy_notifications_enabled")).toBe("false");
   });
 
   it("shows an empty state before any notification arrives", async () => {
@@ -490,6 +575,33 @@ describe("UsageFooter — live numbers", () => {
     expect(screen.getByTestId("footer-tokens")).toHaveTextContent("4.3k tkn");
     expect(screen.getByTestId("footer-tps")).toHaveTextContent("88.5 tps");
     expect(screen.getByTestId("footer-cost")).toHaveTextContent("$0.1234");
+    expect(screen.getByTestId("footer-model")).toHaveTextContent("qwen3 · ollama");
+  });
+
+  it("renders no telemetry for a fresh session (messageCount === 0)", async () => {
+    vi.mocked(api.sessionFooter).mockResolvedValue({
+      sessionKey: "dashboard:console",
+      tokens: 0,
+      tokensPerSec: 0,
+      cost: null,
+      topic: null,
+      contextUsedTokens: null,
+      contextLength: null,
+      contextPct: null,
+      model: "qwen3",
+      provider: "ollama",
+      messageCount: 0,
+    });
+    render(<ChatView messages={[]} streaming={false} onSend={vi.fn()} onStop={vi.fn()} onNewChat={vi.fn()} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("footer-tokens")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("footer-tps")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("footer-cost")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("footer-context")).not.toBeInTheDocument();
+    // Only the model/provider line may remain.
     expect(screen.getByTestId("footer-model")).toHaveTextContent("qwen3 · ollama");
   });
 });

@@ -26,6 +26,7 @@ from sarathy.bus.queue import MessageBus
 from sarathy.channels.base import BaseChannel
 from sarathy.config.schema import BackendConfig
 from sarathy.core.notify import (
+    DASHBOARD_CHANNEL,
     TG_LIVE_CHAT_ID,
     normalize_targets,
     notify_targets_to_json,
@@ -61,6 +62,24 @@ def resolve_escalate_targets(
     if targets:
         return targets
     return [("telegram", TG_LIVE_CHAT_ID)] if fallback_to_live else []
+
+
+def escalation_metadata(channel: str, *, title: str | None = None) -> dict[str, Any]:
+    """Metadata for one escalated copy of a backend reply.
+
+    Telegram targets get a plain chat message, exactly as before. The dashboard
+    surface gets ``notify: True`` so ``DashboardChannel.send()`` renders an
+    in-app notification (bell badge + notification center) instead of dumping
+    the relay output into the chat transcript — the same escalation the user
+    would get on Telegram, in the form their surface understands.
+    """
+    metadata: dict[str, Any] = {"_progress": False, "_tool_hint": False}
+    if channel == DASHBOARD_CHANNEL:
+        metadata["notify"] = True
+        metadata["tab"] = "jobs"
+        if title:
+            metadata["notify_title"] = title
+    return metadata
 
 
 def escalate_meta(escalate_to: Any) -> str | list[dict[str, str]]:
@@ -448,7 +467,7 @@ class BackendChannel(BaseChannel):
                     channel=channel,
                     chat_id=chat_id,
                     content=content,
-                    metadata={"_progress": False, "_tool_hint": False},
+                    metadata=escalation_metadata(channel, title="Sarathy engaged"),
                 )
             )
 
@@ -475,6 +494,6 @@ class BackendChannel(BaseChannel):
                     channel=channel,
                     chat_id=chat_id,
                     content=msg.content,
-                    metadata={"_progress": False, "_tool_hint": False},
+                    metadata=escalation_metadata(channel, title="Sarathy update"),
                 )
             )

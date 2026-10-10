@@ -219,6 +219,25 @@ def split_quotes(content: str) -> tuple[list[dict[str, str]], str]:
     return quotes, body.strip()
 
 
+# Notifications render a two-line body at most; a runaway relay reply must not
+# push megabytes down the socket for every connected tab.
+_NOTIFY_BODY_LIMIT = 400
+
+
+def notification_parts(content: str, metadata: dict) -> tuple[str, str]:
+    """Split an escalated backend message into ``(title, body)``.
+
+    The title is short (the notification center header line) and comes from
+    ``notify_title`` when the sender set one; the body carries the actual
+    content so nothing is lost, capped so a long relay reply stays renderable.
+    """
+    body = (content or "").strip()
+    if len(body) > _NOTIFY_BODY_LIMIT:
+        body = body[: _NOTIFY_BODY_LIMIT - 1].rstrip() + "…"
+    title = str(metadata.get("notify_title") or "Sarathy").strip() or "Sarathy"
+    return title, body
+
+
 class DashboardChannel(BaseChannel):
     """HTTP + WebSocket channel for the sarathy dashboard."""
 
@@ -298,8 +317,20 @@ class DashboardChannel(BaseChannel):
         logger.info("Dashboard channel stopped")
 
     async def send(self, msg: OutboundMessage) -> None:
-        """Broadcast an outbound message to all connected dashboard clients."""
+        """Broadcast an outbound message to all connected dashboard clients.
+
+        A message flagged ``metadata.notify`` (backend/job escalations) is
+        delivered as an in-app ``notification`` frame — bell badge + notification
+        center — instead of a chat bubble, so a relay Viswa also gets on
+        Telegram lands in the dashboard's own surface rather than polluting the
+        transcript. Everything else keeps the exact ``message`` frame contract.
+        """
         if not self._ws_clients:
+            return
+        metadata = msg.metadata or {}
+        if metadata.get("notify"):
+            title, body = notification_parts(msg.content, metadata)
+            await self.send_notification(title, body, tab=metadata.get("tab"))
             return
         payload = json.dumps(
             {
@@ -309,7 +340,7 @@ class DashboardChannel(BaseChannel):
                 "content": msg.content,
                 "media": msg.media,
                 "replyTo": msg.reply_to,
-                "metadata": msg.metadata or {},
+                "metadata": metadata,
             },
             ensure_ascii=False,
         )

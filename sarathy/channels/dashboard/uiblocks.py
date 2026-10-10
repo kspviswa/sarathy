@@ -1,44 +1,52 @@
-"""Compact typed UI-block schema for the dashboard channel's system prompt.
+"""Dashboard UI-block schema for the dashboard channel's system prompt.
 
-This module is the single source of truth for which UI components the model may
-emit on the dashboard channel. The frontend mirrors this catalog in
-``dashboard/src/lib/uiBlocks.tsx`` (the openUI adapter); ``UI_BLOCK_COMPONENTS``
-is asserted against the adapter's allowlist by the test suite so the two can
-never drift apart silently.
+Single source of truth: the official openUI component library
+(``@openuidev/react-ui``'s ``openuiLibrary``, 80+ components). The prompt text
+served here is GENERATED from that library by
+``dashboard/scripts/gen-openui-prompt.mjs`` (run ``npm run gen:openui-prompt``)
+and committed as ``openui_prompt.txt``. The frontend renders through the very
+same library (``dashboard/src/lib/uiBlocks.tsx`` imports ``openuiLibrary``), so
+the model can never be told about a component the UI cannot render — there is
+only one list.
 
-Design rules (deliberate, do not relax without updating the adapter):
+Design rules:
 
-- **Curated allowlist only.** No generic/raw-HTML component, no forms, no
-  ``Mutation``/``Action``/``Query``. The dashboard is a read-mostly chat
-  surface, so the catalog is small and side-effect free.
-- **Positional arguments only.** OpenUI Lang maps positional args to named
-  props by schema key order. Optional props may only be omitted from the end.
-- **No raw HTML.** Every component renders through a hand-written React
-  component in the adapter. Model output is never injected as HTML.
-- **URLs are sanitised adapter-side** (``sanitizeUrl``): http/https only.
+- **Generated, not hand-written.** Do not edit ``openui_prompt.txt`` by hand;
+  regenerate it from the library. Editing it here would restore the drift the
+  old two-list design suffered from.
+- **Inline mode.** The prompt is the library's ``inlineMode`` variant: prose
+  plus an OPTIONAL fenced ``openui-lang`` block. Prose outside the fence
+  renders as markdown; the fenced block renders as a typed UI card.
+- **Dashboard channel only.** Every other channel (telegram, discord, email,
+  backend, cli) keeps the classic text-first prompt and pays zero token cost.
+- **Client-side safety.** URLs are sanitised adapter-side (``sanitizeUrl``):
+  http/https only. Model output is never injected as HTML.
 
-The block is appended to the system prompt for the ``dashboard`` channel ONLY.
-Every other channel (telegram, discord, email, backend, cli) keeps the classic
-text-first prompt and pays zero token cost for this.
+If ``openui_prompt.txt`` is missing (e.g. a checkout without the generated
+artifact), :func:`ui_block_prompt` degrades to a short notice rather than
+crashing the agent.
 """
 
 from __future__ import annotations
+
+import re
+from functools import lru_cache
+from pathlib import Path
 
 # Channel names that receive the UI-block schema. Keep this an explicit
 # allowlist rather than a deny-list: a new channel must opt in deliberately.
 UI_BLOCK_CHANNELS = frozenset({"dashboard"})
 
-# Component names in the curated catalog. Mirrored by the frontend adapter's
-# allowlist; asserted in tests/test_dashboard_uiblocks.py.
-UI_BLOCK_COMPONENTS: tuple[str, ...] = (
-    "Root",
-    "Heading",
-    "Text",
-    "KeyValues",
-    "Steps",
-    "Callout",
-    "LinkList",
-    "CodeBlock",
+# The sentinel the prompt leads with. Tests across the suite use this string to
+# assert the schema is attached to the dashboard channel and ONLY that one.
+UI_BLOCK_HEADER = "## Dashboard UI Blocks (dashboard channel only)"
+
+_PROMPT_PATH = Path(__file__).with_name("openui_prompt.txt")
+
+_FALLBACK_PROMPT = (
+    "You may attach a typed UI block to a reply, fenced with ```openui-lang. "
+    "Prose outside the fence renders as markdown. Emit a block only when the "
+    "structured form is genuinely clearer than prose."
 )
 
 
@@ -53,51 +61,47 @@ def wants_ui_blocks(channel: str | None) -> bool:
     return channel.strip().lower() in UI_BLOCK_CHANNELS
 
 
+@lru_cache(maxsize=1)
+def _prompt_body() -> str:
+    """The generated library prompt, or a terse fallback if it is absent."""
+    try:
+        body = _PROMPT_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return _FALLBACK_PROMPT
+    return body or _FALLBACK_PROMPT
+
+
 def ui_block_prompt() -> str:
-    """Return the compact UI-block schema block for the system prompt.
+    """Return the UI-block schema block for the system prompt.
 
-    Deliberately terse: this is appended to a cached system prefix, so every
-    token is paid on every turn. ``generateSystemPrompt`` on the frontend
-    produces the same component signatures; this is the canonical hand-written
-    source of truth for what the model is told.
+    Leads with :data:`UI_BLOCK_HEADER` (the channel sentinel) followed by the
+    library-generated catalog. This is appended to a cached system prefix, so
+    every token is paid on every turn — which is exactly why the catalog is
+    generated from the library rather than duplicated.
     """
-    return """## Dashboard UI Blocks (opt-in, dashboard channel only)
+    return f"{UI_BLOCK_HEADER}\n\n{_prompt_body()}"
 
-You may attach a typed UI block to a reply. Prose outside the fence renders as
-normal markdown. Emit the fence ONLY when the structured form is genuinely
-clearer than prose; a normal conversational reply needs no fence.
 
-Syntax (openui-lang): one `identifier = Expression` per line, `root` first.
+@lru_cache(maxsize=1)
+def ui_block_components() -> tuple[str, ...]:
+    """Component names advertised in the generated prompt.
 
-```
-root = Root([items], "Optional title")
-items = KeyValues([row1, row2])
-row1 = {label: "Latency", value: "42 ms"}
-```
+    Parsed from the prompt's ``## Component Signatures`` section so this list
+    can never disagree with what the model is actually shown.
+    """
+    body = _prompt_body()
+    section = re.split(r"^## ", body, flags=re.M)
+    signatures = ""
+    for part in section:
+        if part.startswith("Component Signatures"):
+            signatures = part
+            break
+    names = re.findall(r"^\s*([A-Z][A-Za-z0-9]*)\(([^)]*)\)", signatures, flags=re.M)
+    return tuple(dict.fromkeys(name for name, _ in names))
 
-Rules:
-- Arguments are POSITIONAL, never `name: value`. Order is fixed per signature.
-- Every defined name except `root` must be referenced by `root`.
-- Optional arguments may only be omitted from the END of a call.
-- Strings use double quotes; escape inner quotes with a backslash.
-- Prefer hoisting: define `root` first, leaves last.
 
-Available components:
-
-Root(children: any[], title?: string) — Top-level container for the whole block.
-Heading(text: string, level?: 1|2|3) — A section heading.
-Text(text: string, muted?: boolean) — A paragraph of plain text (not markdown).
-KeyValues(items: {label: string, value: string}[]) — Label/value pairs, rendered
-  as a compact table. Good for metrics, config, comparisons.
-Steps(items: {title: string, detail?: string}[]) — An ordered list of steps.
-  Good for procedures and plans.
-Callout(text: string, tone?: "info"|"warning"|"success"|"danger") — A single
-  highlighted aside. Use sparingly for warnings and confirmations.
-LinkList(items: {label: string, href: string}[]) — Links. Only http:// and
-  https:// hrefs render; anything else is dropped by the client.
-CodeBlock(code: string, language?: string) — Preformatted code.
-
-Never invent a component name. If none of the above fit, reply in prose."""
+# Back-compat module constant. Prefer :func:`ui_block_components`.
+UI_BLOCK_COMPONENTS: tuple[str, ...] = ui_block_components()
 
 
 def ui_block_fence_language() -> str:

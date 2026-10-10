@@ -27,6 +27,7 @@ import { CodeBlock } from "@/components/CodeBlock";
 import { GreetingState, DEFAULT_SUGGESTIONS, type Suggestion } from "@/components/GreetingState";
 import { PresenceIndicator, ReactionChip } from "@/components/Presence";
 import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
+import { ThinkingSection } from "@/components/ThinkingSection";
 import { SlashAutocomplete } from "@/components/CommandPalette";
 import { UsageFooter } from "@/components/UsageFooter";
 import { Button } from "@/components/ui/button";
@@ -44,7 +45,7 @@ import {
 } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
 import type { ReactionState } from "@/lib/reactions";
-import { parseUI, UIBlock, extractProse } from "@/lib/uiBlocks";
+import { UIBlock, extractProse, hasOpenUIBlock } from "@/lib/uiBlocks";
 import { cn } from "@/lib/utils";
 
 export interface ChatMessage {
@@ -218,17 +219,22 @@ function MessageBody({
   content,
   streaming,
   onOpenFile,
+  onSend,
 }: {
   content: string;
   streaming?: boolean;
   onOpenFile?: (path: string) => void;
+  onSend?: (message: string) => void;
 }) {
-  const parsed = useMemo(() => parseUI(content), [content]);
-  const prose = useMemo(() => extractProse(content), [content]);
+  // Gate on a cheap fence check so the heavy openUI renderer stays unloaded for
+  // ordinary text replies. When a block IS present, prose (fences stripped) is
+  // shown alongside it; otherwise the whole body renders as markdown.
+  const hasUI = useMemo(() => hasOpenUIBlock(content), [content]);
+  const chunks = useMemo(() => (hasUI ? extractProse(content) : [content]), [content, hasUI]);
 
   const markdown = useMemo(
     () =>
-      prose.map((chunk, i) => (
+      chunks.map((chunk, i) => (
         <ReactMarkdown
           key={i}
           remarkPlugins={[remarkGfm]}
@@ -253,14 +259,14 @@ function MessageBody({
           {chunk}
         </ReactMarkdown>
       )),
-    [prose, onOpenFile],
+    [chunks, onOpenFile],
   );
 
-  if (parsed.kind === "ui") {
+  if (hasUI) {
     return (
       <div className="md">
         {markdown}
-        <UIBlock result={parsed.result} />
+        <UIBlock source={content} isStreaming={streaming} onSend={onSend} />
         {streaming && <span className="streaming-caret" />}
       </div>
     );
@@ -865,6 +871,7 @@ export function ChatView({
               onOpenFile={onOpenFile}
               onRegenerate={m.role === "assistant" && !streaming ? onRegenerate : undefined}
               onReply={() => setReplyToMsg(m)}
+              onSend={(text) => void onSend(text)}
             />
           ))}
 
@@ -892,12 +899,14 @@ function MessageRow({
   onOpenFile,
   onRegenerate,
   onReply,
+  onSend,
 }: {
   message: ChatMessage;
   streaming: boolean;
   onOpenFile?: (path: string) => void;
   onRegenerate?: () => void;
   onReply?: () => void;
+  onSend?: (message: string) => void;
 }) {
   const isUser = message.role === "user";
   const hasContent = (message.content?.length ?? 0) > 0;
@@ -949,19 +958,12 @@ function MessageRow({
         )}
 
         {showThinking && (
-          <div className="mb-1.5 space-y-1">
-            <details className="rounded-lg border border-border bg-muted/30 px-2.5 py-1.5 text-xs">
-              <summary className="cursor-pointer select-none font-medium text-muted-foreground">
-                {live ? "Thinking…" : "Thought process"}
-              </summary>
-              <div className="mt-1.5 space-y-1 whitespace-pre-wrap text-muted-foreground">
-                {message.toolHints && message.toolHints.length > 0 && (
-                  <div className="text-[11px]">🔧 {message.toolHints.join(" · ")}</div>
-                )}
-                {message.thinkingContent}
-              </div>
-            </details>
-          </div>
+          <ThinkingSection
+            toolHints={message.toolHints || []}
+            thinkingContent={message.thinkingContent || ""}
+            done={!live}
+            onOpenFile={onOpenFile}
+          />
         )}
 
         {message.replyTo && message.replyToContent && (
@@ -985,7 +987,7 @@ function MessageRow({
         {isUser ? (
           <div className="whitespace-pre-wrap break-words">{cleanContent}</div>
         ) : hasContent ? (
-          <MessageBody content={cleanContent} streaming={message.progress} onOpenFile={onOpenFile} />
+          <MessageBody content={cleanContent} streaming={message.progress} onOpenFile={onOpenFile} onSend={onSend} />
         ) : live ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />

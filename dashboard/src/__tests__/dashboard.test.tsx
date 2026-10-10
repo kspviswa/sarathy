@@ -129,7 +129,7 @@ describe("ThinkingSection — thinking indicator stops + shows elapsed time", ()
       />,
     );
     expect(screen.getByText("Thinking")).toBeInTheDocument();
-    const spinner = document.querySelector(".animate-pulse");
+    const spinner = document.querySelector(".animate-spin");
     expect(spinner).toBeInTheDocument();
   });
 

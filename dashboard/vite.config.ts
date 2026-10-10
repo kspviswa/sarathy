@@ -35,6 +35,18 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"],
+        // The openUI runtime is a LAZY chunk (only fetched when a reply contains
+        // a UI block). Precaching it would download it on every install and
+        // defeat the split, so keep it out of the precache manifest and cache it
+        // on first use instead.
+        globIgnores: ["**/openuiRenderer-*.js", "**/openuiRenderer-*.css"],
+        runtimeCaching: [
+          {
+            urlPattern: /\/assets\/openuiRenderer-.*\.(js|css)$/,
+            handler: "StaleWhileRevalidate",
+            options: { cacheName: "openui-runtime" },
+          },
+        ],
         navigateFallback: "index.html",
         navigateFallbackDenylist: [/^\/api\//, /^\/ws/, /^\/mobile/, /^\/mobile\.html/],
         // Web Push handler — lives in public/push-sw.js and is imported into the

@@ -48,32 +48,34 @@ export function ThinkingSection({
   if (!hasContent) return null;
 
   return (
-    <div className="my-2 rounded-lg border border-border/50 bg-muted/30">
+    <div className="mt-1 border-t border-border/40">
       <button
+        type="button"
         onClick={() => setInternalOpen(!internalOpen)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/50"
+        aria-expanded={isOpen}
+        className="flex w-full items-center gap-1.5 py-2 text-left text-xs text-muted-foreground/80 transition-colors active:text-muted-foreground"
       >
         <ChevronRight
-          className={cn("size-3.5 shrink-0 transition-transform", isOpen && "rotate-90")}
+          className={cn("size-3 shrink-0 transition-transform duration-200", isOpen && "rotate-90")}
         />
         {done ? (
-          <Check className="size-3.5 shrink-0 text-green-500" />
+          <Check className="size-3 shrink-0 text-green-500" />
         ) : (
-          <Loader2 className="size-3.5 shrink-0 animate-pulse text-primary/70" />
+          <Loader2 className="size-3 shrink-0 animate-spin text-primary/60" />
         )}
         <span className="font-medium">
           {done ? `Thought for ${formatElapsed(elapsed)}` : "Thinking"}
         </span>
         {toolHints.length > 0 && (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+          <span className="ml-auto text-muted-foreground/50">
             {toolHints.length} tool call{toolHints.length !== 1 ? "s" : ""}
           </span>
         )}
       </button>
       {isOpen && (
-        <div className="border-t border-border/50 px-3 py-2.5 text-xs">
+        <div className="space-y-2 pb-2.5">
           {thinkingContent && (
-            <div className="mb-2 text-muted-foreground/80">
+            <div className="text-xs leading-relaxed text-muted-foreground/80">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -83,7 +85,7 @@ export function ThinkingSection({
                       return <CodeBlock className={className} onOpenFile={onOpenFile}>{String(children)}</CodeBlock>;
                     }
                     return (
-                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[12px]" {...props}>
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]" {...props}>
                         {children}
                       </code>
                     );
@@ -97,9 +99,9 @@ export function ThinkingSection({
           {toolHints.length > 0 && (
             <div className="space-y-1">
               {toolHints.map((hint, i) => (
-                <div key={i} className="flex items-center gap-1.5 text-muted-foreground/70">
-                  <Wrench className="size-3 shrink-0" />
-                  <span className="font-mono text-[11px]">{hint}</span>
+                <div key={i} className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground/60">
+                  <Wrench className="size-3 shrink-0 opacity-70" />
+                  <span className="truncate">{hint}</span>
                 </div>
               ))}
             </div>

@@ -21,7 +21,7 @@ import { ThinkingSection } from "@/components/ThinkingSection";
 import { UsageFooter } from "@/components/UsageFooter";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { extractProse, parseUI, UIBlock } from "@/lib/uiBlocks";
+import { extractProse, hasOpenUIBlock, UIBlock } from "@/lib/uiBlocks";
 import type { SlashCommand } from "@/lib/palette";
 import type { ChatMessage } from "@/views/ChatView";
 import { DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
@@ -296,6 +296,7 @@ export function ChatView({
               message={m}
               onOpenFile={onOpenFile}
               onRegenerate={m.role === "assistant" && !streaming ? onRegenerate : undefined}
+              onSend={(text) => void onSend(text, undefined)}
             />
           ))}
         </div>
@@ -433,10 +434,12 @@ function MobileMessage({
   message,
   onOpenFile,
   onRegenerate,
+  onSend,
 }: {
   message: ChatMessage;
   onOpenFile?: (path: string) => void;
   onRegenerate?: () => void;
+  onSend?: (message: string) => void;
 }) {
   const isUser = message.role === "user";
   const cleanContent = useMemo(() => {
@@ -501,7 +504,7 @@ function MobileMessage({
             thinking…
           </div>
         ) : cleanContent ? (
-          <AssistantBody content={cleanContent} onOpenFile={onOpenFile} streaming={message.progress} />
+          <AssistantBody content={cleanContent} onOpenFile={onOpenFile} streaming={message.progress} onSend={onSend} />
         ) : message.progress ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
@@ -532,17 +535,19 @@ function AssistantBody({
   content,
   streaming,
   onOpenFile,
+  onSend,
 }: {
   content: string;
   streaming?: boolean;
   onOpenFile?: (path: string) => void;
+  onSend?: (message: string) => void;
 }) {
-  const parsed = useMemo(() => parseUI(content), [content]);
-  const prose = useMemo(() => extractProse(content), [content]);
+  const hasUI = useMemo(() => hasOpenUIBlock(content), [content]);
+  const chunks = useMemo(() => (hasUI ? extractProse(content) : [content]), [content, hasUI]);
 
   const markdown = useMemo(
     () =>
-      prose.map((chunk, i) => (
+      chunks.map((chunk, i) => (
         <ReactMarkdown
           key={i}
           remarkPlugins={[remarkGfm]}
@@ -567,14 +572,14 @@ function AssistantBody({
           {chunk}
         </ReactMarkdown>
       )),
-    [prose, onOpenFile],
+    [chunks, onOpenFile],
   );
 
-  if (parsed.kind === "ui") {
+  if (hasUI) {
     return (
       <div className="md">
         {markdown}
-        <UIBlock result={parsed.result} />
+        <UIBlock source={content} isStreaming={streaming} onSend={onSend} />
         {streaming && <span className="streaming-caret" />}
       </div>
     );

@@ -260,8 +260,12 @@ describe("Mobile app — bottom tab bar", () => {
     it("grows the composer textarea with content, bounded by min/max (no empty-state collapse)", async () => {
       render(<MobileApp />);
       const ta = (await screen.findByPlaceholderText(/Message Sarathy/)) as HTMLTextAreaElement;
-      // Empty: exactly the desktop default composer height (96px).
-      expect(parseInt(ta.style.height, 10)).toBeGreaterThanOrEqual(96);
+      // Empty: the two-row composer's resting height (spec 126 §F). It dropped
+      // from the desktop-matching 96px because the textarea now owns its own
+      // full-width row with the actions beneath it, and 96px would have eaten a
+      // third of a 360×640 viewport before anything was typed. Still roomy —
+      // roughly two lines — so it is NOT a collapsed single-line box.
+      expect(parseInt(ta.style.height, 10)).toBeGreaterThanOrEqual(64);
       // Multi-line: grows with content, capped at 200px. jsdom reports
       // jsdom reports scrollHeight 0, so stub it to simulate 10 lines of real layout.
       Object.defineProperty(ta, "scrollHeight", { configurable: true, value: 210 });
@@ -270,12 +274,46 @@ describe("Mobile app — bottom tab bar", () => {
       });
       expect(parseInt(ta.style.height, 10)).toBe(200);
       expect(parseInt(ta.style.height, 10)).toBeLessThanOrEqual(200);
-      // Clearing returns to the desktop-default height, not a collapsed sub-min box.
+      // Clearing returns to the resting height, not a collapsed sub-min box.
       Object.defineProperty(ta, "scrollHeight", { configurable: true, value: 48 });
       await act(async () => {
         fireEvent.change(ta, { target: { value: "" } });
       });
-      expect(parseInt(ta.style.height, 10)).toBeGreaterThanOrEqual(96);
+      expect(parseInt(ta.style.height, 10)).toBeGreaterThanOrEqual(64);
+    });
+
+    it("gives the textarea its own full-width row, controls on a second row", async () => {
+      // Spec 126 §F: attach + mic + textarea + send used to share ONE
+      // `flex items-end gap-2` row, squeezing the input to a sliver between
+      // three 44px controls at 360px. The textarea is now full width and the
+      // three actions sit on a row of their own.
+      render(<MobileApp />);
+      const input = await screen.findByTestId("mobile-composer-input");
+      const mic = await screen.findByTestId("mobile-mic");
+      const send = await screen.findByTestId("mobile-send");
+
+      expect(input.className).toContain("w-full");
+      // The textarea is NOT a flex sibling of the controls any more.
+      expect(input.className).not.toContain("flex-1");
+
+      const rowOf = (el: HTMLElement) => el.closest('[data-testid="mobile-composer-actions"]');
+      expect(rowOf(mic)).not.toBeNull();
+      expect(rowOf(send)).toBe(rowOf(mic));
+      // …and the textarea is not in that same row.
+      expect(rowOf(input)).toBeNull();
+    });
+
+    it("keeps every composer control at a 44px touch target", async () => {
+      render(<MobileApp />);
+      const mic = await screen.findByTestId("mobile-mic");
+      const send = await screen.findByTestId("mobile-send");
+      for (const el of [mic, send]) {
+        expect(el.className).toContain("size-11"); // 44px
+        expect(el.className).toContain("shrink-0");
+      }
+      const attach = await screen.findByLabelText("Attach file");
+      expect(attach.className).toContain("size-11");
+      expect(attach.className).toContain("shrink-0");
     });
 
     it("keeps the composer footer compact — no standalone shortcuts line (parity with desktop)", async () => {

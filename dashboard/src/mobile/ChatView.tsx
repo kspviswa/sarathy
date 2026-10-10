@@ -21,7 +21,8 @@ import { ThinkingSection } from "@/components/ThinkingSection";
 import { UsageFooter } from "@/components/UsageFooter";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { stripRuntimeContext } from "@/lib/messageText";
+import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
+import { SAFE_REHYPE_PLUGINS, SafeLink } from "@/lib/markdown";
 import { extractProse, hasOpenUIBlock, UIBlock } from "@/lib/uiBlocks";
 import type { SlashCommand } from "@/lib/palette";
 import type { ChatMessage } from "@/views/ChatView";
@@ -142,12 +143,12 @@ export function ChatView({
     }
   }, [messages, streaming]);
 
-  // Auto-grow with content — parity with the desktop composer: same default
-  // height (96px = COMPOSER_DEFAULT_HEIGHT in views/ChatView.tsx) so the box
-  // starts as roomy as desktop, and grows with typing up to a phone-sane cap.
-  // The base Textarea carries min-h-[60px]; `!min-h-24` (96px, important)
-  // overrides it so the empty composer matches the desktop default.
-  const COMPOSER_MIN = 96;
+  // Auto-grow with content (spec 126 §F). The textarea now owns a full-width
+  // row, so its resting height drops from 96px to 64px: on a 360×640 phone the
+  // two-row composer plus this taller box would eat a third of the viewport
+  // before a single message is sent. It still starts roomy enough to read a
+  // couple of lines and grows with typing up to the same 200px cap.
+  const COMPOSER_MIN = 64;
   const COMPOSER_MAX = 200;
   useEffect(() => {
     const el = textareaRef.current;
@@ -353,24 +354,17 @@ export function ChatView({
               textareaRef.current?.focus();
             }}
           />
-          <div className="flex items-end gap-2">
-            <label
-              htmlFor="attach-file-input"
-              className="inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-accent"
-              aria-label="Attach file"
-              role="button"
-            >
-              <Paperclip className="size-5" />
-            </label>
-            <Button
-              variant={isRecording ? "destructive" : "ghost"}
-              size="icon"
-              className="size-11 shrink-0"
-              onClick={isRecording ? stopRecording : startRecording}
-              aria-label={isRecording ? "Stop recording" : "Record voice"}
-            >
-              {isRecording ? <Square className="size-5" /> : <Mic className="size-5" />}
-            </Button>
+          {/* Two-row composer (spec 126 §F).
+              Previously attach + mic + textarea + send shared ONE
+              `flex items-end gap-2` row, so on a 360px phone the textarea was
+              squeezed into the ~180px left over by three 44px controls — too
+              narrow to read what you were typing. The textarea now owns a
+              full-width row and the actions sit beneath it, which is also the
+              arrangement phone keyboards expect (input above, controls below).
+
+              Desktop and iPad are untouched: they render ChatView from
+              views/, never this component. */}
+          <div className="flex flex-col gap-1.5">
             <Textarea
               ref={textareaRef}
               value={input}
@@ -404,19 +398,43 @@ export function ChatView({
                 }
               }}
               placeholder="Message Sarathy…"
-              className="!min-h-24 max-h-[200px] flex-1 resize-none overflow-y-auto text-base"
+              className="w-full !min-h-16 max-h-[200px] resize-none overflow-y-auto text-base"
               rows={1}
               aria-label="Message input"
+              data-testid="mobile-composer-input"
             />
-            <Button
-              size="icon"
-              className="size-11 shrink-0"
-              onClick={() => void send()}
-              disabled={!input.trim() && !mediaPaths.length}
-              aria-label="Send"
-            >
-              <Send className="size-5" />
-            </Button>
+            <div className="flex items-center justify-between gap-2" data-testid="mobile-composer-actions">
+              <div className="flex items-center gap-1">
+                <label
+                  htmlFor="attach-file-input"
+                  className="inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  aria-label="Attach file"
+                  role="button"
+                >
+                  <Paperclip className="size-5" />
+                </label>
+                <Button
+                  variant={isRecording ? "destructive" : "ghost"}
+                  size="icon"
+                  className="size-11 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+                  onClick={isRecording ? stopRecording : startRecording}
+                  aria-label={isRecording ? "Stop recording" : "Record voice"}
+                  data-testid="mobile-mic"
+                >
+                  {isRecording ? <Square className="size-5" /> : <Mic className="size-5" />}
+                </Button>
+              </div>
+              <Button
+                size="icon"
+                className="size-11 shrink-0 rounded-full"
+                onClick={() => void send()}
+                disabled={!input.trim() && !mediaPaths.length}
+                aria-label="Send"
+                data-testid="mobile-send"
+              >
+                <Send className="size-5" />
+              </Button>
+            </div>
           </div>
         </div>
         <UsageFooter
@@ -443,23 +461,17 @@ function MobileMessage({
   onSend?: (message: string) => void;
 }) {
   const isUser = message.role === "user";
-  const cleanContent = useMemo(() => {
-    if (!message.content) return "";
-    return stripRuntimeContext(message.content)
-      .split("\n")
-      .filter((line) => !/^\[(image|voice|audio|file): .+\]$/.test(line.trim()))
-      .join("\n")
-      .trim();
-  }, [message.content]);
+  // Shared render-layer cleanup (spec 126 §B).
+  const cleanContent = useMemo(
+    () => cleanRenderedContent(message.content),
+    [message.content],
+  );
 
+  // Reads the RAW content: the machine lines holding these paths are exactly
+  // what cleanRenderedContent strips.
   const displayMedia = useMemo(() => {
     if (message.media?.length) return message.media;
-    const paths: string[] = [];
-    for (const line of message.content.split("\n")) {
-      const m = line.trim().match(/^\[(image|voice|audio|file): (.+)\]$/);
-      if (m) paths.push(m[2]);
-    }
-    return paths;
+    return extractMediaPaths(message.content);
   }, [message.media, message.content]);
 
   const showThinking =
@@ -552,7 +564,9 @@ function AssistantBody({
         <ReactMarkdown
           key={i}
           remarkPlugins={[remarkGfm]}
+          rehypePlugins={SAFE_REHYPE_PLUGINS}
           components={{
+            a: SafeLink,
             code: ({ children, className, ...props }) => {
               const isBlock = className?.startsWith("language-");
               if (isBlock) {

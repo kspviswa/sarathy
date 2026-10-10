@@ -10,6 +10,8 @@ import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
 import { channelIcon } from "@/lib/channelIcons";
+import { cleanRenderedContent } from "@/lib/messageText";
+import { SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 import {
   formatDateKey,
   groupByChannel,
@@ -256,10 +258,18 @@ export function SessionsView({
                   >
                     {m.role === "assistant" ? (
                       <div className="md">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={SAFE_REHYPE_PLUGINS}>
+                          {cleanRenderedContent(m.content)}
+                        </ReactMarkdown>
                       </div>
                     ) : (
-                      <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                      /* Same render-layer cleanup the chat bubble uses
+                         (spec 126 §B) — the session viewer used to print the
+                         raw stored turn, leaking the [Runtime Context …]
+                         preamble and [image: /path] machine lines. */
+                      <div className="whitespace-pre-wrap break-words">
+                        {cleanRenderedContent(m.content)}
+                      </div>
                     )}
                   </div>
                 ))}

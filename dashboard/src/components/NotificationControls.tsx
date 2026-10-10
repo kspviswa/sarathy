@@ -36,6 +36,7 @@ export function NotificationControls({
   onMarkAllRead,
   onMarkRead,
   onNavigate,
+  onReply,
   className,
 }: {
   enabled: boolean | null;
@@ -45,6 +46,8 @@ export function NotificationControls({
   onMarkAllRead: () => void;
   onMarkRead: (id: string) => void;
   onNavigate: (tab: string) => void;
+  /** Start a new chat seeded with this notification as prior context. */
+  onReply?: (notification: AppNotification) => void;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -124,6 +127,7 @@ export function NotificationControls({
           onMarkAllRead={onMarkAllRead}
           onMarkRead={onMarkRead}
           onNavigate={onNavigate}
+          onReply={onReply}
           notificationsEnabled={isOn}
           onNotificationsEnabledChange={(checked) => {
             if (checked) void enable();

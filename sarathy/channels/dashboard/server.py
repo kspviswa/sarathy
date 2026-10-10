@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -223,6 +224,11 @@ def split_quotes(content: str) -> tuple[list[dict[str, str]], str]:
 # push megabytes down the socket for every connected tab.
 _NOTIFY_BODY_LIMIT = 400
 
+# Notification frames raised while no browser is connected are held until one
+# shows up (spec §A). Bounded so a gateway left running headless cannot grow the
+# backlog without limit; only the most recent frames are worth delivering.
+_NOTIFY_BACKLOG = 32
+
 
 def notification_parts(content: str, metadata: dict) -> tuple[str, str]:
     """Split an escalated backend message into ``(title, body)``.
@@ -263,6 +269,10 @@ class DashboardChannel(BaseChannel):
         self._site: web.TCPSite | None = None
         self._ws_clients: set[web.WebSocketResponse] = set()
         self._login_failures: dict[str, list[float]] = {}
+        # Notification frames raised while nobody is connected (spec §A). The
+        # restart/redeploy boot ping fires ~0.1s after channels.start_all(),
+        # long before any browser reconnects, so it must survive the gap.
+        self._pending_notify: deque[str] = deque(maxlen=_NOTIFY_BACKLOG)
 
     # ------------------------------------------------------------------ start/stop
 
@@ -319,18 +329,23 @@ class DashboardChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> None:
         """Broadcast an outbound message to all connected dashboard clients.
 
-        A message flagged ``metadata.notify`` (backend/job escalations) is
-        delivered as an in-app ``notification`` frame — bell badge + notification
-        center — instead of a chat bubble, so a relay Viswa also gets on
-        Telegram lands in the dashboard's own surface rather than polluting the
-        transcript. Everything else keeps the exact ``message`` frame contract.
+        A message flagged ``metadata.notify`` (backend/job escalations, the
+        restart boot ping) is delivered as an in-app ``notification`` frame —
+        bell badge + notification center — instead of a chat bubble, so a relay
+        Viswa also gets on Telegram lands in the dashboard's own surface rather
+        than polluting the transcript. Everything else keeps the exact
+        ``message`` frame contract.
+
+        Notification-bound frames are buffered when nobody is listening and
+        replayed on the next connect (spec §A); ordinary chat frames still drop
+        when offline, matching the pre-existing behavior.
         """
-        if not self._ws_clients:
-            return
         metadata = msg.metadata or {}
         if metadata.get("notify"):
             title, body = notification_parts(msg.content, metadata)
             await self.send_notification(title, body, tab=metadata.get("tab"))
+            return
+        if not self._ws_clients:
             return
         payload = json.dumps(
             {
@@ -344,6 +359,10 @@ class DashboardChannel(BaseChannel):
             },
             ensure_ascii=False,
         )
+        await self._broadcast(payload)
+
+    async def _broadcast(self, payload: str) -> None:
+        """Write a pre-serialized frame to every live client, pruning dead ones."""
         for ws in list(self._ws_clients):
             try:
                 await ws.send_str(payload)
@@ -359,9 +378,12 @@ class DashboardChannel(BaseChannel):
         ``{type: "notification", payload: {title, body, timestamp, tab}}`` frame
         and surface it as a toast / unread badge. Does not disturb the
         ``_progress`` / ``_thinking`` / ``_tool_hint`` / ``_final`` contract.
+
+        When no client is connected the serialized frame is parked in
+        ``_pending_notify`` and replayed by the next socket to complete its
+        handshake. That gap is exactly where the restart/redeploy boot ping
+        lands, so without this it was discarded before the browser came back.
         """
-        if not self._ws_clients:
-            return
         payload = json.dumps(
             {
                 "type": "notification",
@@ -374,11 +396,25 @@ class DashboardChannel(BaseChannel):
             },
             ensure_ascii=False,
         )
-        for ws in list(self._ws_clients):
+        if not self._ws_clients:
+            self._pending_notify.append(payload)
+            return
+        await self._broadcast(payload)
+
+    async def _flush_pending_notify(self, ws: web.WebSocketResponse) -> None:
+        """Deliver the offline notification backlog to the first client back.
+
+        The buffer is drained before any await so a second socket connecting in
+        the same tick cannot replay the same frames.
+        """
+        while self._pending_notify:
+            payload = self._pending_notify.popleft()
             try:
                 await ws.send_str(payload)
             except Exception:
+                self._pending_notify.appendleft(payload)
                 self._ws_clients.discard(ws)
+                return
 
     def is_allowed(self, sender_id: str) -> bool:
         # Access control happens at the HTTP layer (pairing key + token).
@@ -1525,7 +1561,11 @@ class DashboardChannel(BaseChannel):
             epoch = store.get_session_epoch(key)
             event = store.session_last_event(key, epoch)
             if event:
-                payload["tokens"] = int(event.get("total_tokens") or 0)
+                # Completion tokens, not prompt+completion: this is the same
+                # numerator AgentLoop hands `format_usage_footer` for Telegram,
+                # so both surfaces label the same number (spec §E). The prompt
+                # side is already surfaced separately as the ctx% line.
+                payload["tokens"] = int(event.get("completion_tokens") or 0)
                 payload["tokensPerSec"] = round(float(event.get("tokens_per_sec") or 0.0), 1)
             payload["cost"] = store.session_cost(key, epoch)
         except Exception:
@@ -1640,6 +1680,7 @@ class DashboardChannel(BaseChannel):
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
         self._ws_clients.add(ws)
+        await self._flush_pending_notify(ws)
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:

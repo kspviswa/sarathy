@@ -34,6 +34,7 @@ import type { SessionInfo } from "@/lib/types";
 import { DASHBOARD_SESSION_KEY, resetLastSession, useLastSession } from "@/lib/useLastSession";
 import { useNotificationPref } from "@/lib/useNotificationPref";
 import { useNotifications } from "@/lib/useNotifications";
+import type { AppNotification } from "@/lib/useNotifications";
 import { cn } from "@/lib/utils";
 import { DashboardSocket } from "@/lib/ws";
 import { ChatView, type ChatMessage } from "@/views/ChatView";
@@ -73,6 +74,14 @@ function AppInner() {
   const [section, setSection] = useState<Section>("chat");
   const [transcriptKey, setTranscriptKey] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  /**
+   * Notification text handed to the composer by "Reply" (spec 126 §D). The
+   * nonce changes per Reply so the same notification twice re-seeds the composer.
+   */
+  const [followUpSeed, setFollowUpSeed] = useState<{
+    text: string;
+    nonce: number;
+  } | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [reaction, setReaction] = useState<ReactionState>("done");
   const [openFile, setOpenFile] = useState<string | null>(null);
@@ -370,6 +379,48 @@ function AppInner() {
     }
   }, [refreshSessions]);
 
+  /**
+   * "Reply" on a notification (spec 126 §D).
+   *
+   * Starts a NEW session so the follow-up is a clean conversation rather than a
+   * fork of whatever the console was doing, then hands the notification to the
+   * composer as a quote chip — the existing quote-and-ask channel, which
+   * already travels with the next message as `quotes`. The notification is
+   * therefore genuine prior context the model can read, not just text sitting
+   * in an input the user still has to send.
+   *
+   * Nothing is sent on the user's behalf: the chip is placed and the composer
+   * focused, so they write the actual question.
+   */
+  const handleNotificationReply = useCallback(
+    async (n: AppNotification) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      try {
+        await api.sessionNew(DASHBOARD_SESSION_KEY);
+        resetLastSession();
+        setMessages([]);
+        setStreaming(false);
+        setReaction("done");
+        setOpenFile(null);
+        setTranscriptKey(null);
+        refreshSessions();
+        setFollowUpSeed({
+          text: [n.title, n.body].filter(Boolean).join("\n"),
+          nonce: Date.now(),
+        });
+        selectSection("chat");
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Failed to start a new session",
+        );
+      } finally {
+        busyRef.current = false;
+      }
+    },
+    [refreshSessions, selectSection],
+  );
+
   const handleStop = useCallback(async () => {
     await api.stopChat();
     setStreaming(false);
@@ -543,6 +594,7 @@ function AppInner() {
               const target = toSection(tab);
               if (target) selectSection(target);
             }}
+            onReply={(n) => void handleNotificationReply(n)}
           />
           <ThemeToggle />
 
@@ -600,6 +652,7 @@ function AppInner() {
                     : DEFAULT_SUGGESTIONS
                 }
                 messagesRef={messagesRef}
+                followUpSeed={followUpSeed}
               />
             </>
           )}

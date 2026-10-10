@@ -350,3 +350,170 @@ describe("NotificationCenter panel (no dimming scrim)", () => {
     expect(screen.getByTestId("notifications-empty")).toHaveTextContent("No notifications yet");
   });
 });
+
+/**
+ * Spec 126 §D — notification items show the FULL message and offer a follow-up.
+ *
+ * They used to `truncate` the title and `line-clamp-2` the body, so a long job
+ * ping was cut off with no way to read the rest of it.
+ */
+describe("NotificationCenter full message + Reply (spec 126 §D)", () => {
+  afterEach(cleanup);
+
+  const LONG_TITLE =
+    "Job 126 [feature] — completed · all backend suites green, frontend build clean";
+  const LONG_BODY = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+
+  function renderPanel(over: Record<string, unknown> = {}) {
+    const n: AppNotification = {
+      id: "1",
+      title: LONG_TITLE,
+      body: LONG_BODY,
+      tab: "jobs",
+      timestamp: "2026-10-10T00:00:00.000Z",
+    };
+    return render(
+      <NotificationCenter
+        notifications={[n]}
+        unreadIds={["1"]}
+        open
+        onOpenChange={vi.fn()}
+        onMarkAllRead={vi.fn()}
+        onMarkRead={vi.fn()}
+        onNavigate={vi.fn()}
+        {...over}
+      />,
+    );
+  }
+
+  it("does not truncate the title", () => {
+    renderPanel();
+    const title = screen.getByTestId("notifications-title");
+    expect(title.className).not.toContain("truncate");
+    expect(title.className).toContain("break-words");
+  });
+
+  it("does not clamp the body to two lines", () => {
+    renderPanel();
+    const body = screen.getByTestId("notifications-body");
+    expect(body.className).not.toContain("line-clamp-2");
+    expect(body.className).not.toContain("line-clamp");
+    expect(body.className).not.toContain("truncate");
+  });
+
+  it("renders every line of a long body, not just the first two", () => {
+    renderPanel();
+    const body = screen.getByTestId("notifications-body");
+    for (let i = 1; i <= 12; i++) {
+      expect(body.textContent).toContain(`line ${i}`);
+    }
+  });
+
+  it("renders the full title text, not an ellipsized fragment", () => {
+    renderPanel();
+    expect(screen.getByTestId("notifications-title").textContent).toBe(LONG_TITLE);
+  });
+
+  it("scrolls within the panel rather than clipping", () => {
+    renderPanel();
+    const list = screen.getByTestId("notifications-panel").querySelector(".overflow-y-auto");
+    expect(list).not.toBeNull();
+  });
+
+  it("renders a job ping's bold header and working deep link, not literal tags", () => {
+    renderPanel({
+      notifications: [
+        {
+          id: "2",
+          title: "Job 126 · completed",
+          body:
+            "<b>Job 126 [feature]</b> — completed\nAll tests green.\n\n" +
+            '<a href="https://skandpriya.com/dashboard/#/jobs/126">Open in dashboard</a>',
+          tab: "jobs",
+          timestamp: "2026-10-10T00:00:00.000Z",
+        } satisfies AppNotification,
+      ],
+      unreadIds: ["2"],
+    });
+    const body = screen.getByTestId("notifications-body");
+    // Bold rendered as an element, not escaped source.
+    expect(body.querySelector("b")).not.toBeNull();
+    expect(body.textContent).not.toContain("<b>");
+    // Link rendered as a real anchor with its href intact.
+    const link = body.querySelector("a");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("https://skandpriya.com/dashboard/#/jobs/126");
+    expect(link?.textContent).toBe("Open in dashboard");
+  });
+
+  it("strips scripts from a notification body", () => {
+    renderPanel({
+      notifications: [
+        {
+          id: "3",
+          title: "t",
+          body: '<script>alert(1)</script>ok<a href="javascript:alert(1)">x</a>',
+          timestamp: "2026-10-10T00:00:00.000Z",
+        } satisfies AppNotification,
+      ],
+      unreadIds: ["3"],
+    });
+    const body = screen.getByTestId("notifications-body");
+    expect(body.querySelector("script")).toBeNull();
+    expect(body.innerHTML).not.toContain("javascript:");
+  });
+
+  it("offers a Reply action per item when onReply is provided", () => {
+    const onReply = vi.fn();
+    renderPanel({ onReply });
+    const reply = screen.getByTestId("notifications-reply");
+    expect(reply).toHaveTextContent("Reply");
+
+    fireEvent.click(reply);
+    expect(onReply).toHaveBeenCalledTimes(1);
+    // It hands over the notification itself, so the caller can seed a session.
+    expect(onReply.mock.calls[0][0]).toMatchObject({
+      title: LONG_TITLE,
+      body: LONG_BODY,
+      tab: "jobs",
+    });
+  });
+
+  it("omits Reply when no handler is wired", () => {
+    renderPanel();
+    expect(screen.queryByTestId("notifications-reply")).toBeNull();
+  });
+
+  it("Reply does NOT mark read or navigate — it seeds a new session instead", () => {
+    const onMarkRead = vi.fn();
+    const onNavigate = vi.fn();
+    const onOpenChange = vi.fn();
+    renderPanel({ onReply: vi.fn(), onMarkRead, onNavigate, onOpenChange });
+
+    fireEvent.click(screen.getByTestId("notifications-reply"));
+
+    expect(onMarkRead).not.toHaveBeenCalled();
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("tapping the body keeps the pre-existing mark-read + navigate behavior", () => {
+    const onMarkRead = vi.fn();
+    const onNavigate = vi.fn();
+    const onOpenChange = vi.fn();
+    renderPanel({ onReply: vi.fn(), onMarkRead, onNavigate, onOpenChange });
+
+    fireEvent.click(screen.getByTestId("notifications-item"));
+
+    expect(onMarkRead).toHaveBeenCalledWith("1");
+    expect(onNavigate).toHaveBeenCalledWith("jobs");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps the macOS look — no dim scrim reintroduced", () => {
+    renderPanel({ onReply: vi.fn() });
+    expect(screen.queryByTestId("notifications-scrim")).toBeNull();
+    const dismiss = screen.getByTestId("notifications-dismiss");
+    expect(dismiss.className).not.toMatch(/bg-|backdrop-blur|opacity-/);
+  });
+});

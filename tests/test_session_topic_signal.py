@@ -51,6 +51,37 @@ def test_strip_only_matches_trailing_marker():
     assert cleaned == content
 
 
+def test_strip_does_not_span_earlier_literal_marker():
+    # KB #457: a literal example marker earlier in the reply must NOT make the
+    # strip run from it all the way to the trailing marker (which truncated the
+    # whole reply). Only the genuine trailing marker is removed.
+    content = (
+        'The machine line looks like <topic>{"set": "x"}</topic> in prose.\n'
+        "More visible text follows.\n\n"
+        '<topic>{"set": "real topic"}</topic>'
+    )
+    cleaned, raw = strip_topic_marker(content)
+    assert raw == '{"set": "real topic"}'
+    assert cleaned == (
+        'The machine line looks like <topic>{"set": "x"}</topic> in prose.\n'
+        "More visible text follows."
+    )
+
+
+def test_strip_handles_backticked_example_marker():
+    # The exact 2026-10-10 truncation shape: an inline code example marker.
+    content = (
+        'ReactMarkdown renders `<topic>{"set": "x"}</topic>` literally.\n\n'
+        "The rest of the answer survives.\n\n"
+        '<topic>{"set": "topic marker leak"}</topic>'
+    )
+    cleaned, raw = strip_topic_marker(content)
+    assert raw == '{"set": "topic marker leak"}'
+    assert cleaned.endswith("The rest of the answer survives.")
+    assert '`<topic>{"set": "x"}</topic>`' in cleaned
+
+
+
 # ---------------------------------------------------------------------------
 # rules
 # ---------------------------------------------------------------------------
@@ -254,6 +285,26 @@ async def test_topic_command_set_show_lock_and_clear(tmp_path):
     meta2 = sm.get_or_create("test:c1").metadata
     assert "topic" not in meta2
     assert meta2.get("topic_user_set") is False
+
+
+@pytest.mark.asyncio
+async def test_save_turn_strips_marker_from_persisted_history(tmp_path):
+    # KB #456: the marker must never land on disk. The outbound copy is stripped
+    # by _apply_topic_marker, but _save_turn persisted the RAW assistant message
+    # (marker included), which then leaked into the dashboard/mobile history view.
+    sm = SessionManager(Config(), workspace=tmp_path / "sessions")
+    loop, _ = _make_loop(tmp_path, sm, FakeProvider(LLMResponse(content="x")))
+    session = sm.get_or_create("test:c1")
+
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": 'Answer here.\n<topic>{"set": "leaked"}</topic>'},
+    ]
+    loop._save_turn(session, msgs, 0)
+
+    assistant = [m for m in session.messages if m.get("role") == "assistant"]
+    assert assistant and assistant[-1]["content"] == "Answer here."
+    assert all("<topic>" not in (m.get("content") or "") for m in session.messages)
 
 
 def test_system_prompt_contains_topic_signal(tmp_path):

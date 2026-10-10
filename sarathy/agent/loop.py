@@ -52,7 +52,15 @@ HISTORY_BUDGET_RATIO = 0.6
 # Session-topic piggyback signal: the main LLM ends every final user-facing
 # response with exactly one trailing `<topic>{...}</topic>` machine line.
 # End-anchored; tolerates trailing whitespace/newlines after the marker.
-TOPIC_MARKER_RE = re.compile(r"[ \t]*<topic>(.*?)</topic>[ \t]*\s*$", re.DOTALL)
+#
+# The inner group is *tempered* (`(?:(?!</?topic>).)*`) so the match can never
+# span across a marker boundary. Without this, a stray literal marker earlier
+# in the reply (e.g. a quoted example) made the DOTALL `.*?` run from the FIRST
+# `<topic>` to the trailing `</topic>`, truncating everything in between — see
+# KB #457. Now only a genuine trailing marker is stripped.
+TOPIC_MARKER_RE = re.compile(
+    r"[ \t]*<topic>((?:(?!</?topic>).)*)</topic>[ \t]*\s*$", re.DOTALL
+)
 # Prompt asks for <= 6 words; hard-cap defensively at 8.
 TOPIC_MAX_WORDS = 8
 
@@ -2141,6 +2149,14 @@ Remaining: ~{remaining:,} tokens
                     logger.debug("Skipping empty assistant message in _save_turn")
                     continue
             entry = {k: v for k, v in m.items() if k != "reasoning_content"}
+            # Strip the trailing session-topic marker before persisting so it
+            # never leaks into stored history (and thus into the dashboard /
+            # mobile history view). The outbound copy is already stripped by
+            # _apply_topic_marker; this keeps the on-disk transcript clean too.
+            if entry.get("role") == "assistant" and isinstance(
+                entry.get("content"), str
+            ):
+                entry["content"], _ = strip_topic_marker(entry["content"])
             if entry.get("role") == "tool" and isinstance(entry.get("content"), str):
                 content = entry["content"]
                 if len(content) > self._TOOL_RESULT_MAX_CHARS:

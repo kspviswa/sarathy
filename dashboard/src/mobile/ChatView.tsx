@@ -16,10 +16,15 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CodeBlock } from "@/components/CodeBlock";
+import { SlashAutocomplete } from "@/components/CommandPalette";
 import { ThinkingSection } from "@/components/ThinkingSection";
+import { UsageFooter } from "@/components/UsageFooter";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { extractProse, parseUI, UIBlock } from "@/lib/uiBlocks";
+import type { SlashCommand } from "@/lib/palette";
 import type { ChatMessage } from "@/views/ChatView";
+import { DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 
 interface PendingMedia {
   id: string;
@@ -93,6 +98,8 @@ export function ChatView({
   onNewChat,
   onOpenFile,
   onRegenerate,
+  commands = [],
+  sessionKey = DASHBOARD_SESSION_KEY,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -102,10 +109,13 @@ export function ChatView({
   onNewChat: () => void;
   onOpenFile?: (path: string) => void;
   onRegenerate?: () => void;
+  commands?: SlashCommand[];
+  sessionKey?: string;
 }) {
   const [input, setInput] = useState("");
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -222,6 +232,8 @@ export function ChatView({
     [pendingMedia],
   );
 
+  const showSlashMenu = /^\/[^\s]*$/.test(input.trim()) && input.trimStart().startsWith("/");
+
   async function send() {
     const content = input.trim();
     if (!content && !mediaPaths.length) return;
@@ -320,40 +332,73 @@ export function ChatView({
             ))}
           </div>
         )}
-        <div className="flex items-end gap-2">
-          <label
-            htmlFor="attach-file-input"
-            className="inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-accent"
-            aria-label="Attach file"
-            role="button"
-          >
-            <Paperclip className="size-5" />
-          </label>
-          <Button
-            variant={isRecording ? "destructive" : "ghost"}
-            size="icon"
-            className="size-11 shrink-0"
-            onClick={isRecording ? stopRecording : startRecording}
-            aria-label={isRecording ? "Stop recording" : "Record voice"}
-          >
-            {isRecording ? <Square className="size-5" /> : <Mic className="size-5" />}
-          </Button>
-          <Textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                void send();
-              }
+        <div className="relative">
+          <SlashAutocomplete
+            input={input}
+            commands={commands}
+            activeIndex={slashIndex}
+            onPick={(cmd) => {
+              setInput(`/${cmd.name} `);
+              setSlashIndex(0);
+              textareaRef.current?.focus();
             }}
-            placeholder="Message Sarathy…"
-            className="min-h-12 max-h-32 flex-1 resize-none overflow-y-auto text-base"
-            rows={1}
-            aria-label="Message input"
           />
-<Button
+          <div className="flex items-end gap-2">
+            <label
+              htmlFor="attach-file-input"
+              className="inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-accent"
+              aria-label="Attach file"
+              role="button"
+            >
+              <Paperclip className="size-5" />
+            </label>
+            <Button
+              variant={isRecording ? "destructive" : "ghost"}
+              size="icon"
+              className="size-11 shrink-0"
+              onClick={isRecording ? stopRecording : startRecording}
+              aria-label={isRecording ? "Stop recording" : "Record voice"}
+            >
+              {isRecording ? <Square className="size-5" /> : <Mic className="size-5" />}
+            </Button>
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                if (showSlashMenu) setSlashIndex(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  void send();
+                  return;
+                }
+                if (showSlashMenu) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setSlashIndex((i) => i + 1);
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setSlashIndex((i) => Math.max(0, i - 1));
+                    return;
+                  }
+                  if (e.key === "Tab") {
+                    e.preventDefault();
+                    const match = commands.find((c) => input.trim() === `/${c.name}`);
+                    if (match) setInput(`/${match.name} `);
+                    return;
+                  }
+                }
+              }}
+              placeholder="Message Sarathy…  ·  / for commands"
+              className="min-h-12 max-h-32 flex-1 resize-none overflow-y-auto text-base"
+              rows={1}
+              aria-label="Message input"
+            />
+            <Button
               size="icon"
               className="size-11 shrink-0"
               onClick={() => void send()}
@@ -362,9 +407,16 @@ export function ChatView({
             >
               <Send className="size-5" />
             </Button>
+          </div>
         </div>
+        <UsageFooter
+          sessionKey={sessionKey}
+          streaming={streaming}
+          revision={messages.length}
+          className="mt-1.5"
+        />
         <p className="mt-1 px-1 text-center text-[11px] text-muted-foreground">
-          Enter = newline · Ctrl+Enter = send
+          Enter = newline · Ctrl+Enter = send · / = commands
         </p>
       </div>
     </div>
@@ -443,31 +495,7 @@ function MobileMessage({
             thinking…
           </div>
         ) : cleanContent ? (
-          <div className="md">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code: ({ children, className, ...props }) => {
-                  const isBlock = className?.startsWith("language-");
-                  if (isBlock) {
-                    return (
-                      <CodeBlock className={className} onOpenFile={onOpenFile}>
-                        {String(children)}
-                      </CodeBlock>
-                    );
-                  }
-                  return (
-                    <code className={className} {...props}>
-                      {children}
-                    </code>
-                  );
-                },
-              }}
-            >
-              {cleanContent}
-            </ReactMarkdown>
-            {message.progress && <span className="streaming-caret" />}
-          </div>
+          <AssistantBody content={cleanContent} onOpenFile={onOpenFile} streaming={message.progress} />
         ) : message.progress ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
@@ -483,6 +511,73 @@ function MobileMessage({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Assistant body — parity with the desktop ChatView (v0.16.x openUI adapter).
+ *
+ * A well-formed ```openui-lang block renders as interactive widgets; anything
+ * else (including every pure-text reply) falls back to markdown exactly as
+ * before. Without this, mobile showed the raw UI-block source as code.
+ */
+function AssistantBody({
+  content,
+  streaming,
+  onOpenFile,
+}: {
+  content: string;
+  streaming?: boolean;
+  onOpenFile?: (path: string) => void;
+}) {
+  const parsed = useMemo(() => parseUI(content), [content]);
+  const prose = useMemo(() => extractProse(content), [content]);
+
+  const markdown = useMemo(
+    () =>
+      prose.map((chunk, i) => (
+        <ReactMarkdown
+          key={i}
+          remarkPlugins={[remarkGfm]}
+          components={{
+            code: ({ children, className, ...props }) => {
+              const isBlock = className?.startsWith("language-");
+              if (isBlock) {
+                return (
+                  <CodeBlock className={className} onOpenFile={onOpenFile}>
+                    {String(children)}
+                  </CodeBlock>
+                );
+              }
+              return (
+                <code className={className} {...props}>
+                  {children}
+                </code>
+              );
+            },
+          }}
+        >
+          {chunk}
+        </ReactMarkdown>
+      )),
+    [prose, onOpenFile],
+  );
+
+  if (parsed.kind === "ui") {
+    return (
+      <div className="md">
+        {markdown}
+        <UIBlock result={parsed.result} />
+        {streaming && <span className="streaming-caret" />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="md">
+      {markdown}
+      {streaming && <span className="streaming-caret" />}
     </div>
   );
 }

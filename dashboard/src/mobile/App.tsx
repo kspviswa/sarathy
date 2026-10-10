@@ -1,6 +1,7 @@
 import {
   Activity,
   Briefcase,
+  Command as CommandIcon,
   FileCode2,
   Gauge,
   MessageSquareText,
@@ -9,9 +10,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { CommandPalette } from "@/components/CommandPalette";
 import { Logo } from "@/components/logo";
 import { NotificationBell } from "@/components/NotificationBell";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
+import type { SlashCommand } from "@/lib/palette";
 import { ThemeProvider } from "@/lib/theme";
 import { useLastSession, resetLastSession, DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 import { useNotificationPref } from "@/lib/useNotificationPref";
@@ -45,6 +48,8 @@ function MobileAppInner() {
   const [streaming, setStreaming] = useState(false);
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [unread, setUnread] = useState<Partial<Record<Tab, number>>>({});
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [socket, setSocket] = useState<DashboardSocket | null>(null);
   const socketRef = useRef<DashboardSocket | null>(null);
   const lastUserMessageRef = useRef<string>("");
@@ -80,6 +85,22 @@ function MobileAppInner() {
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
+
+  // Commands for the palette + `/` autocomplete, sourced from the backend
+  // (parity with the desktop App: the registry is the single source of truth).
+  const refreshCommands = useCallback(() => {
+    // Defensive: degrade to an empty list if the endpoint is missing.
+    if (typeof api.commands !== "function") return;
+    api
+      .commands()
+      .then((res) => setCommands(res.commands ?? []))
+      .catch(() => setCommands([]));
+  }, []);
+
+  useEffect(() => {
+    if (authed !== true) return;
+    refreshCommands();
+  }, [authed, refreshCommands]);
 
   const loadingHistory = useLastSession(authed === true, setMessages);
 
@@ -281,6 +302,16 @@ function MobileAppInner() {
           <span className="font-bold tracking-tight">Sarathy</span>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <button
+            onClick={() => setPaletteOpen(true)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 transition-colors hover:bg-accent hover:text-foreground"
+            aria-label="Commands"
+            title="Commands"
+            data-testid="mobile-commands-trigger"
+          >
+            <CommandIcon className="size-4" />
+            <span>Commands</span>
+          </button>
           <NotificationBell
             enabled={notificationsEnabled ?? false}
             onEnabledChange={setNotificationsEnabled}
@@ -310,6 +341,8 @@ function MobileAppInner() {
             onNewChat={handleNewChat}
             onOpenFile={handleOpenFile}
             onRegenerate={handleRegenerate}
+            commands={commands}
+            sessionKey={DASHBOARD_SESSION_KEY}
           />
         )}
         {tab === "files" && <FilesView initialFile={openFile} />}
@@ -348,6 +381,15 @@ function MobileAppInner() {
           </button>
         ))}
       </nav>
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onRun={(command) => {
+          setTab("chat");
+          void handleSend(command);
+        }}
+      />
     </div>
   );
 }

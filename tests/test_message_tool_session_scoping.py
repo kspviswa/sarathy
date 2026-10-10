@@ -10,6 +10,7 @@ as a false duplicate — the job 118/119 collision that ate Viswa's reply
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from sarathy.agent.tools.message import MessageTool
 from sarathy.bus.events import OutboundMessage
@@ -69,3 +70,42 @@ def test_unscoped_get_turn_sends_still_returns_everything() -> None:
     # Raw storage keeps the session key; the view exposes (channel, chat_id).
     assert tool._turn_sends == [("telegram", "5878545507", "backend:job-119")]
     assert tool.get_turn_sends() == [("telegram", "5878545507")]
+
+
+def test_dashboard_turn_description_warns_against_cross_channel_duplication() -> None:
+    """Dashboard turns: the reply is auto-delivered to the dashboard, so the
+    message tool must tell the model NOT to send its answer to Telegram —
+    the 2026-10-10 duplicate (dashboard question -> reply in TG + dashboard)."""
+    tool = _make_tool()
+    tool.start_turn()
+    tool.set_context("dashboard", "console", session_key="dashboard:console")
+
+    desc = tool.description
+    assert "delivered there automatically" in desc
+    assert "Do NOT use this tool to send your answer to another channel" in desc
+
+
+def test_telegram_turn_description_is_unchanged() -> None:
+    """Non-dashboard channels keep the classic description (no extra guard)."""
+    tool = _make_tool()
+    tool.start_turn()
+    tool.set_context("telegram", "5878545507", session_key="telegram:5878545507")
+
+    assert "delivered there automatically" not in tool.description
+
+
+def test_dashboard_appears_in_enabled_channels_when_configured() -> None:
+    """Viswa's catch (2026-10-10): the enabled-channel list omitted dashboard,
+    so on a dashboard turn the tool advertised only telegram — the model then
+    'sent' the dashboard answer to Telegram, duplicating it. Dashboard MUST be
+    listed so the model knows the reply is already going there."""
+    config = SimpleNamespace(
+        telegram=SimpleNamespace(enabled=True),
+        discord=SimpleNamespace(enabled=False),
+        email=SimpleNamespace(enabled=False),
+        dashboard=SimpleNamespace(enabled=True),
+    )
+    tool = MessageTool(channels_config=config)
+    desc = tool.description
+    assert "dashboard" in desc
+    assert "telegram" in desc

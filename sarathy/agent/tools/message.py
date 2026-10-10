@@ -85,6 +85,8 @@ class MessageTool(Tool):
             channels.append("discord")
         if getattr(getattr(config, "email", None), "enabled", False):
             channels.append("email")
+        if getattr(getattr(config, "dashboard", None), "enabled", False):
+            channels.append("dashboard")
         return channels
 
     @property
@@ -92,8 +94,19 @@ class MessageTool(Tool):
         enabled_channels = self._get_enabled_channels()
         if enabled_channels:
             channel_list = ", ".join(enabled_channels)
-            return f"Send a message to the user. Use this when you want to communicate something. Available channels: {channel_list}"
-        return "Send a message to the user. Use this when you want to communicate something."
+            desc = f"Send a message to the user. Use this when you want to communicate something. Available channels: {channel_list}"
+        else:
+            desc = "Send a message to the user. Use this when you want to communicate something."
+        # Dashboard turns: the reply is delivered to the dashboard automatically.
+        # Without this guard the model reaches for the message tool to "send" its
+        # answer to Telegram, duplicating the same reply on both surfaces.
+        if self._default_channel == "dashboard":
+            desc += (
+                " You are currently replying on the dashboard — your answer is delivered "
+                "there automatically. Do NOT use this tool to send your answer to another "
+                "channel unless the user explicitly asks you to."
+            )
+        return desc
 
     @property
     def parameters(self) -> dict[str, Any]:

@@ -349,19 +349,61 @@ describe("Composer — drag to resize, no expand toggle", () => {
   });
 });
 
+/* ------------------------------------------------- §C rail safe area + branding */
+
+describe("Left rail branding", () => {
+  it("is safe-area aware and pins the mascot + title to the bottom", async () => {
+    await renderApp();
+    const rail = screen.getByTestId("left-rail");
+
+    // C1: the rail starts below the notch/status-bar inset.
+    expect(rail.className).toContain("safe-top");
+    expect(rail.className).toContain("safe-bottom");
+    // C3: still a flexible column, so it adapts to short viewports.
+    expect(rail.className).toContain("flex-col");
+
+    // C2: branding lives in ONE place, at the bottom, below the nav.
+    const branding = screen.getByTestId("rail-branding");
+    expect(rail.contains(branding)).toBe(true);
+    expect(branding.className).toContain("mt-auto");
+    expect(branding.className).toContain("hidden");
+    expect(branding.className).toContain("md:flex");
+
+    const nav = screen.getByTestId("section-nav");
+    const status = screen.getByTestId("nav-status");
+    expect(
+      status.compareDocumentPosition(branding) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(nav.compareDocumentPosition(branding) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // A BIGGER mascot than the old 26px header logo, with the title beside it.
+    const logo = within(branding).getByTestId("logo");
+    expect(Number(logo.getAttribute("data-size"))).toBeGreaterThanOrEqual(40);
+    expect(within(branding).getByText("Sarathy")).toBeInTheDocument();
+
+    // The old top branding row is gone: the rail now has exactly one logo.
+    expect(within(rail).getAllByTestId("logo")).toHaveLength(1);
+  });
+});
+
 /* ------------------------------------------------- §F notification sidebar */
 
 describe("Notification sidebar", () => {
   beforeEach(() => {
-    // Single-bell control (spec §D): start with notifications already on.
+    // Split toggle + bell control (spec 125 §B1): start with notifications on
+    // so the bell (which only renders when enabled) is present.
     localStorage.setItem("sarathy_notifications_enabled", "true");
   });
 
-  it("shows exactly one bell with an unread badge and opens a right-side panel", async () => {
+  it("shows the toggle first and one enabled bell with an unread badge", async () => {
     await renderApp();
-    const bells = screen.getAllByTestId("notifications-bell");
+    // Toggle first, bell second, inside one controls group (spec 125 §B1).
+    const controls = screen.getByTestId("notification-controls");
+    expect(controls).toHaveAttribute("data-enabled", "true");
+    const toggle = within(controls).getByTestId("notifications-toggle");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    const bells = within(controls).getAllByTestId("notifications-bell");
     expect(bells).toHaveLength(1);
-    expect(bells[0]).toHaveAttribute("data-enabled", "true");
     expect(screen.queryByTestId("notifications-badge")).not.toBeInTheDocument();
 
     emitNotification({ title: "Backup done", body: "All good", tab: "status", timestamp: new Date().toISOString() });
@@ -372,26 +414,33 @@ describe("Notification sidebar", () => {
     expect(panel).toBeInTheDocument();
     expect(within(panel).getByText("Backup done")).toBeInTheDocument();
     expect(within(panel).getByText("All good")).toBeInTheDocument();
-    // The drawer houses the on/off switch.
+    // The panel keeps a secondary enable/disable affordance.
     expect(within(panel).getByTestId("notifications-switch")).toBeInTheDocument();
   });
 
-  it("is a single toggle: turning notifications off swaps to bell-off (spec §D)", async () => {
+  it("hides the bell entirely when the top-bar toggle turns notifications off", async () => {
     await renderApp();
-    const bell = screen.getByTestId("notifications-bell");
-    expect(bell).toHaveAttribute("data-enabled", "true");
+    expect(screen.getByTestId("notifications-bell")).toBeInTheDocument();
 
     emitNotification({ title: "Ping", timestamp: new Date().toISOString() });
     expect(screen.getByTestId("notifications-badge")).toBeInTheDocument();
 
-    fireEvent.click(bell);
-    const panel = screen.getByTestId("notifications-panel");
-    fireEvent.click(within(panel).getByTestId("notifications-switch"));
+    fireEvent.click(screen.getByTestId("notifications-toggle"));
 
-    // Off: no panel, no badge, bell-off, and the pref is persisted.
-    expect(screen.queryByTestId("notifications-panel")).not.toBeInTheDocument();
+    // Off: no bell at all (not a bell-off icon), no badge, pref persisted.
+    expect(screen.queryByTestId("notifications-bell")).not.toBeInTheDocument();
     expect(screen.queryByTestId("notifications-badge")).not.toBeInTheDocument();
-    expect(screen.getByTestId("notifications-bell")).toHaveAttribute("data-enabled", "false");
+    expect(screen.getByTestId("notifications-toggle")).toHaveAttribute("aria-checked", "false");
+    expect(localStorage.getItem("sarathy_notifications_enabled")).toBe("false");
+  });
+
+  it("the panel switch also disables notifications and closes the panel", async () => {
+    await renderApp();
+    fireEvent.click(screen.getByTestId("notifications-bell"));
+    fireEvent.click(within(screen.getByTestId("notifications-panel")).getByTestId("notifications-switch"));
+
+    expect(screen.queryByTestId("notifications-panel")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("notifications-bell")).not.toBeInTheDocument();
     expect(localStorage.getItem("sarathy_notifications_enabled")).toBe("false");
   });
 

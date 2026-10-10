@@ -1,5 +1,6 @@
 import { BellRing, CheckCheck, X } from "lucide-react";
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -8,13 +9,23 @@ import type { AppNotification } from "@/lib/useNotifications";
 import { cn } from "@/lib/utils";
 
 /**
- * Right-side notification drawer (spec §D).
+ * macOS-Notification-Center-style side panel (spec 125 §B2).
  *
- * The bell lives in `NotificationBell` (single-bell control); this component is
- * only the viewing surface. When `onNotificationsEnabledChange` is provided the
- * header renders an on/off switch so notifications can be disabled from inside
- * the drawer (which also turns off the feed/badge and best-effort unsubscribes
- * push).
+ * The old drawer dimmed and blurred the entire app behind it, which made the
+ * panel feel like a modal and Viswa read it as an ugly overlap. This one slides
+ * in from the right, full height, with a left border + drop shadow and a
+ * slightly translucent panel background — the app behind stays fully lit.
+ *
+ * The click-catcher below is transparent on purpose: it only exists so a click
+ * outside closes the panel. It carries NO background, so nothing dims.
+ *
+ * The header keeps a secondary enable/disable switch; the primary toggle lives
+ * in the top bar beside the bell (`NotificationControls`).
+ *
+ * It renders through a portal on <body>: the panel is `position: fixed`, and
+ * the top bar that hosts the bell has a `backdrop-filter`, which makes it a
+ * containing block for fixed descendants — without the portal the panel would
+ * be clipped to the header instead of running the full height of the viewport.
  */
 export function NotificationCenter({
   notifications,
@@ -54,15 +65,20 @@ export function NotificationCenter({
 
   if (!open) return null;
 
-  return (
-    <div
-      className="fixed inset-0 z-40 flex justify-end bg-background/40 backdrop-blur-[2px]"
-      onClick={() => onOpenChange(false)}
-      data-testid="notifications-scrim"
-    >
+  return createPortal(
+    <>
+      {/* Transparent click-catcher: closes the panel, dims nothing. */}
+      <div
+        className="fixed inset-0 z-40"
+        onClick={() => onOpenChange(false)}
+        aria-hidden="true"
+        data-testid="notifications-dismiss"
+      />
       <aside
-        className={cn("flex h-full w-full max-w-sm flex-col border-l border-border bg-background shadow-2xl", className)}
-        onClick={(e) => e.stopPropagation()}
+        className={cn(
+          "safe-top safe-bottom fixed inset-y-0 right-0 z-50 flex w-full max-w-sm animate-[notify-slide-in_180ms_ease-out] flex-col border-l border-border bg-background/95 shadow-[0_0_40px_-8px_rgb(0_0_0/0.35)] backdrop-blur-md supports-[backdrop-filter]:bg-background/80",
+          className,
+        )}
         role="dialog"
         aria-label="Notifications"
         data-testid="notifications-panel"
@@ -174,6 +190,7 @@ export function NotificationCenter({
           )}
         </div>
       </aside>
-    </div>
+    </>,
+    document.body,
   );
 }

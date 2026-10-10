@@ -13,7 +13,7 @@ import { toast } from "sonner";
 
 import { CommandPalette } from "@/components/CommandPalette";
 import { Logo } from "@/components/logo";
-import { NotificationBell } from "@/components/NotificationBell";
+import { NotificationControls } from "@/components/NotificationControls";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import type { SlashCommand } from "@/lib/palette";
 import { ThemeProvider } from "@/lib/theme";
@@ -319,8 +319,8 @@ function MobileAppInner() {
             <CommandIcon className="size-4" />
             <span>Commands</span>
           </button>
-          <NotificationBell
-            enabled={notificationsEnabled ?? false}
+          <NotificationControls
+            enabled={notificationsEnabled}
             onEnabledChange={setNotificationsEnabled}
             notifications={notifications}
             unreadIds={unreadIds}

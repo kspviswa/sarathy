@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, within } from "@testing-library/react";
 import type { NotificationFrame } from "@/lib/ws";
 import { useNotifications } from "@/lib/useNotifications";
 
@@ -29,11 +29,20 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("sonner", () => ({
-  toast: vi.fn(),
+  // The notification controls call both `toast(...)` and `toast.info/error(...)`.
+  toast: Object.assign(vi.fn(), {
+    info: vi.fn(),
+    error: vi.fn(),
+    success: vi.fn(),
+  }),
   Toaster: () => null,
 }));
 
 import { toast } from "sonner";
+
+import { NotificationCenter } from "@/components/NotificationCenter";
+import { NotificationControls } from "@/components/NotificationControls";
+import type { AppNotification } from "@/lib/useNotifications";
 
 type NotifyHandler = (n: NotificationFrame) => void;
 
@@ -190,5 +199,154 @@ describe("useNotifications", () => {
     expect(result.current.unreadCount).toBe(0);
     expect(navigator.clearAppBadge).toHaveBeenCalled();
     expect(navigateTo).toHaveBeenCalledWith("status");
+  });
+});
+
+/* ------------------------------------------------- §B controls: toggle + bell */
+
+function notif(id: string, over: Partial<AppNotification> = {}): AppNotification {
+  return {
+    id,
+    title: `Ping ${id}`,
+    body: "body",
+    tab: "jobs",
+    timestamp: new Date().toISOString(),
+    ...over,
+  };
+}
+
+function renderControls(enabled: boolean | null) {
+  const onEnabledChange = vi.fn();
+  const utils = render(
+    <NotificationControls
+      enabled={enabled}
+      onEnabledChange={onEnabledChange}
+      notifications={[notif("1"), notif("2")]}
+      unreadIds={["1", "2"]}
+      onMarkAllRead={vi.fn()}
+      onMarkRead={vi.fn()}
+      onNavigate={vi.fn()}
+    />,
+  );
+  return { ...utils, onEnabledChange };
+}
+
+describe("NotificationControls (toggle first, bell second)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("navigator", {
+      serviceWorker: undefined,
+      setAppBadge: vi.fn(() => Promise.resolve()),
+      clearAppBadge: vi.fn(() => Promise.resolve()),
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the toggle when notifications are OFF, and no bell", () => {
+    renderControls(false);
+    expect(screen.getByTestId("notifications-toggle")).toBeInTheDocument();
+    expect(screen.getByTestId("notifications-toggle")).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByTestId("notifications-bell")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("notifications-badge")).not.toBeInTheDocument();
+  });
+
+  it("renders toggle THEN bell when enabled, in that order", () => {
+    renderControls(true);
+    const controls = screen.getByTestId("notification-controls");
+    const toggle = within(controls).getByTestId("notifications-toggle");
+    const bell = within(controls).getByTestId("notifications-bell");
+
+    expect(toggle).toBeInTheDocument();
+    expect(bell).toBeInTheDocument();
+    // The toggle must come first in the top bar.
+    expect(
+      toggle.compareDocumentPosition(bell) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("shows the unread badge count on the bell", () => {
+    renderControls(true);
+    expect(screen.getByTestId("notifications-badge")).toHaveTextContent("2");
+  });
+
+  it("renders no bell and a disabled toggle while the pref is still resolving", () => {
+    renderControls(null);
+    expect(screen.getByTestId("notifications-toggle")).toBeDisabled();
+    expect(screen.queryByTestId("notifications-bell")).not.toBeInTheDocument();
+  });
+
+  it("toggling off asks the caller to disable notifications", () => {
+    const { onEnabledChange } = renderControls(true);
+    fireEvent.click(screen.getByTestId("notifications-toggle"));
+    expect(onEnabledChange).toHaveBeenCalledWith(false);
+  });
+});
+
+/* ------------------------------------------------- §B2 macOS-style side panel */
+
+describe("NotificationCenter panel (no dimming scrim)", () => {
+  afterEach(cleanup);
+
+  function renderPanel(over: Record<string, unknown> = {}) {
+    return render(
+      <NotificationCenter
+        notifications={[notif("1")]}
+        unreadIds={["1"]}
+        open
+        onOpenChange={vi.fn()}
+        onMarkAllRead={vi.fn()}
+        onMarkRead={vi.fn()}
+        onNavigate={vi.fn()}
+        {...over}
+      />,
+    );
+  }
+
+  it("has no full-screen dim scrim", () => {
+    const { container } = renderPanel();
+
+    // The old drawer's dimming overlay is gone for good.
+    expect(screen.queryByTestId("notifications-scrim")).not.toBeInTheDocument();
+    expect(container.innerHTML).not.toMatch(/notifications-scrim/);
+
+    // Whatever covers the viewport must carry no background at all, so the
+    // app behind the panel stays fully lit.
+    const dismiss = screen.getByTestId("notifications-dismiss");
+    expect(dismiss.className).not.toMatch(/bg-|backdrop-blur|opacity-/);
+  });
+
+  it("portals to <body> so the fixed panel escapes the blurred top bar", () => {
+    const { container } = renderPanel();
+    // The top bar has a backdrop-filter, which makes it a containing block for
+    // `position: fixed`; without the portal the panel would be clipped to it.
+    expect(within(container).queryByTestId("notifications-panel")).toBeNull();
+    expect(document.body.querySelector('[data-testid="notifications-panel"]')).not.toBeNull();
+  });
+
+  it("renders as a right-anchored, full-height side panel", () => {
+    renderPanel();
+    const panel = screen.getByTestId("notifications-panel");
+    expect(panel.className).toContain("fixed");
+    expect(panel.className).toContain("inset-y-0");
+    expect(panel.className).toContain("right-0");
+    expect(panel.className).toContain("max-w-sm");
+    expect(panel.className).toContain("border-l");
+  });
+
+  it("keeps the header, unread marker, timestamp and empty state", () => {
+    renderPanel();
+    const panel = screen.getByTestId("notifications-panel");
+    expect(within(panel).getByText("Notifications")).toBeInTheDocument();
+    expect(screen.getByTestId("notifications-mark-all")).toBeInTheDocument();
+    expect(screen.getByTestId("notifications-time")).toBeInTheDocument();
+    expect(screen.getAllByTestId("notifications-item")[0]).toHaveAttribute("data-unread", "true");
+
+    cleanup();
+    renderPanel({ notifications: [], unreadIds: [] });
+    expect(screen.getByTestId("notifications-empty")).toHaveTextContent("No notifications yet");
   });
 });

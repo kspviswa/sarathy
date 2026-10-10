@@ -187,3 +187,22 @@
   vertical-align: text-bottom;
   animation: blink 1s step-end infinite;
 }
+
+/* Notification center (spec 125 §B2): slides in from the right like a macOS
+   side panel — no full-screen scrim, so nothing behind it dims. */
+@keyframes notify-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[notify-slide-in_180ms_ease-out\] {
+    animation: none;
+  }
+}

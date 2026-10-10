@@ -1,6 +1,0 @@
-import{c as o}from"./openuiRenderer-eVMXMauV.js";import"./index-CvlXjI6C.js";import"./index-DZsy4HeD.js";/**
- * @license lucide-react v0.562.0 - ISC
- *
- * This source code is licensed under the ISC license.
- * See the LICENSE file in the root directory of this source tree.
- */const t=[["path",{d:"m7 15 5 5 5-5",key:"1hf1tw"}],["path",{d:"m7 9 5-5 5 5",key:"sgt6xg"}]],p=o("chevrons-up-down",t);export{t as __iconNode,p as default};

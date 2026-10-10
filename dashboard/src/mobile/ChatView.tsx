@@ -21,6 +21,7 @@ import { ThinkingSection } from "@/components/ThinkingSection";
 import { UsageFooter } from "@/components/UsageFooter";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { stripRuntimeContext } from "@/lib/messageText";
 import { extractProse, hasOpenUIBlock, UIBlock } from "@/lib/uiBlocks";
 import type { SlashCommand } from "@/lib/palette";
 import type { ChatMessage } from "@/views/ChatView";
@@ -444,7 +445,7 @@ function MobileMessage({
   const isUser = message.role === "user";
   const cleanContent = useMemo(() => {
     if (!message.content) return "";
-    return message.content
+    return stripRuntimeContext(message.content)
       .split("\n")
       .filter((line) => !/^\[(image|voice|audio|file): .+\]$/.test(line.trim()))
       .join("\n")

@@ -1,6 +1,7 @@
 import {
   Activity,
   Briefcase,
+  CloudOff,
   Command as CommandIcon,
   FileCode2,
   Gauge,
@@ -102,7 +103,10 @@ function MobileAppInner() {
     refreshCommands();
   }, [authed, refreshCommands]);
 
-  const loadingHistory = useLastSession(authed === true, setMessages);
+  const { loading: loadingHistory, error: historyError } = useLastSession(
+    authed === true,
+    setMessages,
+  );
 
   const { notifications, unreadIds, markAllRead, markRead } = useNotifications(socket, {
     navigateTo: (tabId) => {
@@ -148,7 +152,7 @@ function MobileAppInner() {
       }
     });
     const unsubscribe = socket.onMessage((m) => {
-      if (m.channel !== "dashboard" && m.chatId !== "console") return;
+      if (m.channel !== "dashboard" || m.chatId !== "console") return;
       if (m.metadata?._final) {
         setStreaming(false);
         setMessages((prev) => {
@@ -335,18 +339,29 @@ function MobileAppInner() {
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         {tab === "chat" && (
-          <ChatView
-            messages={messages}
-            streaming={streaming}
-            loading={loadingHistory}
-            onSend={handleSend}
-            onStop={handleStop}
-            onNewChat={handleNewChat}
-            onOpenFile={handleOpenFile}
-            onRegenerate={handleRegenerate}
-            commands={commands}
-            sessionKey={DASHBOARD_SESSION_KEY}
-          />
+          <>
+            {historyError && (
+              <div
+                data-testid="history-error"
+                className="flex items-center gap-2 border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive"
+              >
+                <CloudOff className="size-3.5 shrink-0" />
+                <span>Could not load conversation history: {historyError}</span>
+              </div>
+            )}
+            <ChatView
+              messages={messages}
+              streaming={streaming}
+              loading={loadingHistory}
+              onSend={handleSend}
+              onStop={handleStop}
+              onNewChat={handleNewChat}
+              onOpenFile={handleOpenFile}
+              onRegenerate={handleRegenerate}
+              commands={commands}
+              sessionKey={DASHBOARD_SESSION_KEY}
+            />
+          </>
         )}
         {tab === "files" && <FilesView initialFile={openFile} />}
         {tab === "sessions" && <SessionsView />}

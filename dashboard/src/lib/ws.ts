@@ -15,10 +15,15 @@ export interface NotificationFrame {
 
 type NotificationHandler = (n: NotificationFrame) => void;
 
+/** Fired (on the socket and as a window event) every time the WS opens. */
+export const WS_OPEN_EVENT = "sarathy:ws-open";
+type OpenHandler = () => void;
+
 export class DashboardSocket {
   private ws: WebSocket | null = null;
   private handlers = new Set<MessageHandler>();
   private notifHandlers = new Set<NotificationHandler>();
+  private openHandlers = new Set<OpenHandler>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -47,6 +52,12 @@ export class DashboardSocket {
     return () => this.notifHandlers.delete(handler);
   }
 
+  /** Subscribe to (re)open — fires on the first connect too. */
+  onOpen(handler: OpenHandler): () => void {
+    this.openHandlers.add(handler);
+    return () => this.openHandlers.delete(handler);
+  }
+
   private open(): void {
     if (!getToken()) return;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -69,6 +80,11 @@ export class DashboardSocket {
           this.ws.send(JSON.stringify({ type: "ping" }));
         }
       }, 20000);
+      // Signal every (re)open — including the very first one. Consumers that
+      // loaded data while the gateway was unreachable (e.g. a browser refresh
+      // during a restart) refetch here instead of staying blank.
+      this.openHandlers.forEach((h) => h());
+      window.dispatchEvent(new CustomEvent(WS_OPEN_EVENT));
     };
 
     ws.onmessage = (event) => {

@@ -25,13 +25,55 @@ from sarathy.bus.events import InboundMessage, OutboundMessage
 from sarathy.bus.queue import MessageBus
 from sarathy.channels.base import BaseChannel
 from sarathy.config.schema import BackendConfig
+from sarathy.core.notify import (
+    TG_LIVE_CHAT_ID,
+    normalize_targets,
+    notify_targets_to_json,
+)
+
+# `TG_LIVE_CHAT_ID` moved to sarathy.core.notify (the single source of truth) but
+# is still bound here, so existing `from sarathy.channels.backend import
+# TG_LIVE_CHAT_ID` callers keep working unchanged.
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
-# Live Telegram session chat id — the ONLY id relays should ever target.
-# (AGENTS.md once showed 8281248569 as an example; that id is stale and
-# Telegram returns "Chat not found" for it. See KB #394/#395.)
-TG_LIVE_CHAT_ID = "5878545507"
+
+def resolve_escalate_targets(
+    escalate_to: Any, *, fallback_to_live: bool = True
+) -> list[tuple[str, str]]:
+    """Resolve an ``escalate_to`` value into its target list.
+
+    Accepts the legacy single ``"channel:chat_id"`` string OR a list (of
+    strings / ``{channel, chat_id}`` dicts) so one backend wake can fan out to
+    several surfaces.
+
+    ``fallback_to_live`` selects the unset behavior: the trigger ack falls back
+    to the Telegram live chat (KB #391 — a relay must always reach Viswa), while
+    ``send()`` does NOT escalate an unset value (an unsolicited Telegram ping
+    per turn is exactly the flood job 116 fixed). A string with no ``":"`` is
+    malformed and never a target, in either path.
+    """
+    if not escalate_to:
+        return [("telegram", TG_LIVE_CHAT_ID)] if fallback_to_live else []
+    if isinstance(escalate_to, str) and ":" not in escalate_to:
+        return [("telegram", TG_LIVE_CHAT_ID)] if fallback_to_live else []
+    targets = normalize_targets(escalate_to)
+    if targets:
+        return targets
+    return [("telegram", TG_LIVE_CHAT_ID)] if fallback_to_live else []
+
+
+def escalate_meta(escalate_to: Any) -> str | list[dict[str, str]]:
+    """Canonical metadata value for a resolved escalation target set.
+
+    A single target stays a ``"channel:chat_id"`` string so existing callers and
+    stored metadata keep working verbatim; a fan-out is stored as the list form.
+    """
+    targets = resolve_escalate_targets(escalate_to)
+    if len(targets) == 1:
+        channel, chat_id = targets[0]
+        return f"{channel}:{chat_id}"
+    return notify_targets_to_json(targets)
 
 
 def default_jobs_db_path() -> Path:
@@ -344,9 +386,9 @@ class BackendChannel(BaseChannel):
         if not isinstance(payload, dict):
             payload = {}
         source_session_id = payload.get("source_session_id")
-        escalate_to = payload.get("escalate_to")
-        if not escalate_to or ":" not in str(escalate_to):
-            escalate_to = f"telegram:{TG_LIVE_CHAT_ID}"
+        # A list escalates to several surfaces; a single/unset value resolves to
+        # the live Telegram chat as before (KB #391).
+        escalate_to = escalate_meta(payload.get("escalate_to"))
         envelope = {
             "event_type": event["event_type"],
             "source": sender_id,
@@ -395,24 +437,20 @@ class BackendChannel(BaseChannel):
         agent's first reply. (Viswa 2026-10-05: this must never rely on the
         LLM's judgment; encode it in the trigger path itself.)
         """
-        escalate_to = (msg.metadata or {}).get("escalate_to")
-        if not escalate_to or ":" not in str(escalate_to):
-            escalate_to = f"telegram:{TG_LIVE_CHAT_ID}"
-        channel, _, chat_id = str(escalate_to).partition(":")
-        channel, chat_id = channel.strip(), chat_id.strip()
-        if not channel or not chat_id:
-            return
-        await self.bus.publish_outbound(
-            OutboundMessage(
-                channel=channel,
-                chat_id=chat_id,
-                content=(
-                    f"🛠️ Backend event: {msg.content} — Sarathy engaged, "
-                    "investigating. Full report shortly."
-                ),
-                metadata={"_progress": False, "_tool_hint": False},
-            )
+        targets = resolve_escalate_targets((msg.metadata or {}).get("escalate_to"))
+        content = (
+            f"🛠️ Backend event: {msg.content} — Sarathy engaged, "
+            "investigating. Full report shortly."
         )
+        for channel, chat_id in targets:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=content,
+                    metadata={"_progress": False, "_tool_hint": False},
+                )
+            )
 
     async def send(self, msg: OutboundMessage) -> None:
         """Backend has no user-facing surface: log, and escalate if asked.
@@ -428,17 +466,15 @@ class BackendChannel(BaseChannel):
         if msg.metadata.get("_progress") or msg.metadata.get("_thinking"):
             return
         escalate_to = (msg.metadata or {}).get("escalate_to")
-        if not escalate_to or ":" not in str(escalate_to):
+        if not escalate_to:
             return
-        channel, _, chat_id = str(escalate_to).partition(":")
-        channel, chat_id = channel.strip(), chat_id.strip()
-        if not channel or not chat_id:
-            return
-        await self.bus.publish_outbound(
-            OutboundMessage(
-                channel=channel,
-                chat_id=chat_id,
-                content=msg.content,
-                metadata={"_progress": False, "_tool_hint": False},
+        targets = resolve_escalate_targets(escalate_to, fallback_to_live=False)
+        for channel, chat_id in targets:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=msg.content,
+                    metadata={"_progress": False, "_tool_hint": False},
+                )
             )
-        )

@@ -1,4 +1,4 @@
-import { ArrowLeft, Clock, Loader2, MessageSquareText } from "lucide-react";
+import { ArrowLeft, Clock, Loader2, Lock, MessageSquareText } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -200,9 +200,15 @@ export function SessionsView() {
                 >
                   <MessageSquareText className="size-5 shrink-0" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate">
-                      {sessionTitle(s)}
-                      {s.topic_user_set ? " 🔒" : null}
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate">{sessionTitle(s)}</span>
+                      {s.topic_user_set && (
+                        <Lock
+                          className="size-3.5 shrink-0 opacity-70"
+                          aria-label="Topic locked"
+                          data-testid="topic-lock"
+                        />
+                      )}
                     </span>
                     <span className="block truncate font-mono text-[11px] text-muted-foreground">
                       {sessionTime(s)}

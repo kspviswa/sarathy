@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import { CodeBlock } from "@/components/CodeBlock";
 import { GreetingState, DEFAULT_SUGGESTIONS, type Suggestion } from "@/components/GreetingState";
 import { PresenceIndicator, ReactionChip } from "@/components/Presence";
+import { stripRuntimeContext } from "@/lib/messageText";
 import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { SlashAutocomplete } from "@/components/CommandPalette";
@@ -916,7 +917,7 @@ function MessageRow({
 
   const cleanContent = useMemo(() => {
     if (!message.content) return "";
-    return message.content
+    return stripRuntimeContext(message.content)
       .split("\n")
       .filter((line) => !/^\[(image|voice|audio|file): .+\]$/.test(line.trim()))
       .join("\n")

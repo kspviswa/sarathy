@@ -99,7 +99,7 @@ describe("reaction state machine", () => {
     expect(reactionFrameFrom(undefined)).toBeNull();
   });
 
-  it("exposes a view (glyph/label/live) for every state", () => {
+  it("exposes a view (icon/label/live) for every state", () => {
     for (const state of [
       "queued",
       "working",
@@ -110,13 +110,29 @@ describe("reaction state machine", () => {
     ] as ReactionState[]) {
       const view = reactionFor(state);
       expect(view.state).toBe(state);
-      expect(view.glyph).toBeTruthy();
+      expect(view.icon).toBeTruthy();
       expect(view.label).toBeTruthy();
     }
     // Terminal states are not "live"; in-flight ones are.
     expect(reactionFor("done").live).toBe(false);
     expect(reactionFor("failed").live).toBe(false);
     expect(reactionFor("thinking").live).toBe(true);
+  });
+
+  it("uses lucide icon names, never emoji glyphs", () => {
+    const expected: Record<ReactionState, string> = {
+      queued: "loader-circle",
+      working: "loader-circle",
+      thinking: "brain",
+      tool: "wrench",
+      done: "circle-check",
+      failed: "circle-x",
+    };
+    for (const state of Object.keys(expected) as ReactionState[]) {
+      expect(reactionFor(state).icon).toBe(expected[state]);
+      // The old shape exposed `glyph`; it must be gone, not merely unused.
+      expect("glyph" in reactionFor(state)).toBe(false);
+    }
   });
 });
 

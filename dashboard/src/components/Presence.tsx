@@ -1,5 +1,28 @@
+import {
+  Brain,
+  CircleCheck,
+  CircleX,
+  LoaderCircle,
+  Sparkles,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
+
 import { cn } from "@/lib/utils";
-import { reactionFor, type ReactionState } from "@/lib/reactions";
+import {
+  reactionFor,
+  type ReactionIcon,
+  type ReactionState,
+} from "@/lib/reactions";
+
+/** lucide-react components keyed by the icon names in `reactions.ts`. */
+const ICONS: Record<ReactionIcon, LucideIcon> = {
+  "loader-circle": LoaderCircle,
+  brain: Brain,
+  wrench: Wrench,
+  "circle-check": CircleCheck,
+  "circle-x": CircleX,
+};
 
 /**
  * Presence indicator + per-message reaction chip.
@@ -28,11 +51,12 @@ export function PresenceIndicator({
     >
       <span
         className={cn(
-          "flex size-8 items-center justify-center rounded-full bg-muted text-sm transition-colors",
-          state === "failed" && "bg-destructive/15",
+          "flex size-8 items-center justify-center rounded-full bg-muted text-primary transition-colors",
+          state === "failed" && "bg-destructive/15 text-destructive",
         )}
+        data-testid="presence-avatar"
       >
-        🪆
+        <Sparkles className="size-4" aria-hidden="true" />
       </span>
       {live && (
         <span
@@ -57,6 +81,7 @@ export function ReactionChip({
   className?: string;
 }) {
   const view = reactionFor(state);
+  const Icon = ICONS[view.icon];
 
   return (
     <span
@@ -70,7 +95,12 @@ export function ReactionChip({
       role="status"
       aria-live="polite"
     >
-      <span aria-hidden="true">{view.glyph}</span>
+      <Icon
+        className="size-3 shrink-0"
+        aria-hidden="true"
+        data-testid="reaction-icon"
+        data-icon={view.icon}
+      />
       <span>{view.label}</span>
       {elapsedMs !== undefined && elapsedMs > 0 && (
         <span className="tabular-nums opacity-70" data-testid="reaction-elapsed">

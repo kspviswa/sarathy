@@ -233,5 +233,46 @@ describe("Mobile app — bottom tab bar", () => {
       expect(footer).toBeInTheDocument();
       expect(within(footer).getByTestId("footer-model")).toHaveTextContent("test-model");
     });
+
+    it("pins the shell with the desktop standalone-fix viewport (no bottom gap on phones)", async () => {
+      render(<MobileApp />);
+      const shell = await screen.findByTestId("mobile-app");
+      // Parity with the desktop shell: standalone-fix (100dvh + 100vh fallback)
+      // + min-h-dvh + overflow-hidden. The old `h-dvh`-only shell left a dead
+      // band below the tab bar on real phones when the browser URL bar hid.
+      expect(shell.className).toContain("standalone-fix");
+      expect(shell.className).toContain("min-h-dvh");
+      expect(shell.className).toContain("overflow-hidden");
+    });
+
+    it("grows the composer textarea with content, bounded by min/max (no empty-state collapse)", async () => {
+      render(<MobileApp />);
+      const ta = (await screen.findByPlaceholderText(/Message Sarathy/)) as HTMLTextAreaElement;
+      // Empty: exactly the desktop default composer height (96px).
+      expect(parseInt(ta.style.height, 10)).toBeGreaterThanOrEqual(96);
+      // Multi-line: grows with content, capped at 200px. jsdom reports
+      // jsdom reports scrollHeight 0, so stub it to simulate 10 lines of real layout.
+      Object.defineProperty(ta, "scrollHeight", { configurable: true, value: 210 });
+      await act(async () => {
+        fireEvent.change(ta, { target: { value: "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10" } });
+      });
+      expect(parseInt(ta.style.height, 10)).toBe(200);
+      expect(parseInt(ta.style.height, 10)).toBeLessThanOrEqual(200);
+      // Clearing returns to the desktop-default height, not a collapsed sub-min box.
+      Object.defineProperty(ta, "scrollHeight", { configurable: true, value: 48 });
+      await act(async () => {
+        fireEvent.change(ta, { target: { value: "" } });
+      });
+      expect(parseInt(ta.style.height, 10)).toBeGreaterThanOrEqual(96);
+    });
+
+    it("keeps the composer footer compact — no standalone shortcuts line (parity with desktop)", async () => {
+      render(<MobileApp />);
+      await screen.findByPlaceholderText(/Message Sarathy/);
+      // The shortcut hint lives in the placeholder, exactly like the desktop
+      // ChatView — a separate line under the composer is mobile-only cruft
+      // that inflated the footer.
+      expect(screen.queryByText(/Enter = newline/)).not.toBeInTheDocument();
+    });
   });
 });

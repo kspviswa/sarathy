@@ -28,12 +28,16 @@ export function UsageFooter({
   sessionKey,
   streaming,
   revision,
+  compact,
   className,
 }: {
   sessionKey?: string;
   streaming?: boolean;
   /** Any value that changes when the session's usage may have changed. */
   revision?: number | string;
+  /** Tighter text/spacing for narrow (mobile) footers so the strip stays one
+   *  line instead of wrapping to two and inflating the composer block. */
+  compact?: boolean;
   className?: string;
 }) {
   const [data, setData] = useState<SessionFooter | null>(null);
@@ -84,7 +88,8 @@ export function UsageFooter({
     return (
       <div
         className={cn(
-          "flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground",
+          "flex flex-wrap items-center px-1 text-muted-foreground",
+          compact ? "gap-x-2 gap-y-0 text-[10px]" : "gap-x-3 gap-y-1 text-[11px]",
           className,
         )}
         data-testid="usage-footer"
@@ -111,7 +116,8 @@ export function UsageFooter({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground",
+        "flex flex-wrap items-center px-1 text-muted-foreground",
+        compact ? "gap-x-2 gap-y-0 text-[10px]" : "gap-x-3 gap-y-1 text-[11px]",
         className,
       )}
       data-testid="usage-footer"

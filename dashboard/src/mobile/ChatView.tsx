@@ -141,13 +141,21 @@ export function ChatView({
     }
   }, [messages, streaming]);
 
-  // Enter inserts a newline (native textarea); Ctrl/Cmd+Enter or Send sends.
+  // Auto-grow with content — parity with the desktop composer: same default
+  // height (96px = COMPOSER_DEFAULT_HEIGHT in views/ChatView.tsx) so the box
+  // starts as roomy as desktop, and grows with typing up to a phone-sane cap.
+  // The base Textarea carries min-h-[60px]; `!min-h-24` (96px, important)
+  // overrides it so the empty composer matches the desktop default.
+  const COMPOSER_MIN = 96;
+  const COMPOSER_MAX = 200;
   useEffect(() => {
     const el = textareaRef.current;
-    if (el) {
-      el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
-    }
+    if (!el) return;
+    // Collapse to the min, FORCE a reflow (iOS Safari can return a stale
+    // scrollHeight for the same frame otherwise), then grow to fit.
+    el.style.height = `${COMPOSER_MIN}px`;
+    void el.offsetHeight; // eslint-disable-line no-unused-expressions
+    el.style.height = `${Math.max(COMPOSER_MIN, Math.min(el.scrollHeight, COMPOSER_MAX))}px`;
   }, [input]);
 
   useEffect(() => {
@@ -393,8 +401,8 @@ export function ChatView({
                   }
                 }
               }}
-              placeholder="Message Sarathy…  ·  / for commands"
-              className="min-h-12 max-h-32 flex-1 resize-none overflow-y-auto text-base"
+              placeholder="Message Sarathy…"
+              className="!min-h-24 max-h-[200px] flex-1 resize-none overflow-y-auto text-base"
               rows={1}
               aria-label="Message input"
             />
@@ -413,11 +421,9 @@ export function ChatView({
           sessionKey={sessionKey}
           streaming={streaming}
           revision={messages.length}
+          compact
           className="mt-1.5"
         />
-        <p className="mt-1 px-1 text-center text-[11px] text-muted-foreground">
-          Enter = newline · Ctrl+Enter = send · / = commands
-        </p>
       </div>
     </div>
   );

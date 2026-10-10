@@ -36,7 +36,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"],
         navigateFallback: "index.html",
-        navigateFallbackDenylist: [/^\/api\//, /^\/ws/],
+        navigateFallbackDenylist: [/^\/api\//, /^\/ws/, /^\/mobile/, /^\/mobile\.html/],
         // Web Push handler — lives in public/push-sw.js and is imported into the
         // generated sw.js, so the push logic stays out of the workbox bundle.
         importScripts: ["push-sw.js"],

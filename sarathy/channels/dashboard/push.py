@@ -345,8 +345,13 @@ def send_to_subscriptions(
                     "keys": sub["keys"],
                 },
                 data=payload,
-                vapid_private_key=_unb64url(keys["privateKey"]),
-                vapid_claims={"sub": "mailto:sarathy@localhost"},
+                vapid_private_key=keys["privateKey"],
+                vapid_claims={
+                    # Apple rejects localhost-based subjects (BadJwtToken).
+                    "sub": "mailto:viswa@skandpriya.com",
+                    # Apple's APNs REQUIRES an iat claim; pywebpush omits it.
+                    "iat": int(time.time()),
+                },
                 ttl=ttl,
             )
             result["delivered"] += 1

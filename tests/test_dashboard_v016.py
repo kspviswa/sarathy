@@ -7,6 +7,9 @@ Covers spec §C (command list), §E (channel-aware prompt + CSP), §F (quotes) a
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -247,6 +250,65 @@ class TestPushModule:
 # ------------------------------------------------------------ channel prompt
 
 
+# A FLOOR, not a catalog. These are the widgets the dashboard's own rendering
+# fixtures exercise (Card/Table/Callout stacks, charts, forms). The real catalog
+# is whatever `@openuidev/react-ui` ships, and the prompt is generated from that
+# library — this list only catches the regression where the prompt collapses to
+# a stub that no longer mentions the widgets the UI can actually draw.
+REQUIRED_UI_COMPONENTS = frozenset(
+    {
+        "Stack",
+        "Card",
+        "CardHeader",
+        "TextContent",
+        "MarkDownRenderer",
+        "Callout",
+        "Table",
+        "Col",
+        "BarChart",
+        "LineChart",
+        "AreaChart",
+        "PieChart",
+        "Buttons",
+        "Form",
+        "Tabs",
+    }
+)
+
+
+def _openui_component_names(dashboard_dir: Path) -> list[str] | None:
+    """Component names the installed openUI library exposes, or ``None``.
+
+    This is the only way to ask the *renderer* what it can draw without copying
+    its catalog — the catalog now lives in ``node_modules``, not in the repo.
+    Returns ``None`` instead of raising when the answer is simply unavailable
+    (no Node, or npm deps not installed), so callers can skip rather than fail
+    on an environment that cannot answer.
+    """
+    if not (dashboard_dir / "node_modules" / "@openuidev" / "react-ui").is_dir():
+        return None
+    node = shutil.which("node")
+    if node is None:
+        return None
+    script = (
+        "import {openuiLibrary} from '@openuidev/react-ui/genui-lib';"
+        "process.stdout.write(JSON.stringify(Object.keys(openuiLibrary.components)));"
+    )
+    try:
+        proc = subprocess.run(
+            [node, "--input-type=module", "-e", script],
+            cwd=dashboard_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
+        )
+        names = json.loads(proc.stdout)
+    except (subprocess.SubprocessError, ValueError):
+        return None
+    return [name for name in names if isinstance(name, str)]
+
+
 class TestChannelAwarePrompt:
     def _builder(self):
         from sarathy.agent.context import ContextBuilder
@@ -287,24 +349,81 @@ class TestChannelAwarePrompt:
         assert "Dashboard UI Blocks" not in tg[0]["content"]
 
     def test_adapter_allowlist_matches_the_prompt_catalog(self):
-        """The frontend adapter mirrors this list; drift would mean the model is
-        told about components the UI cannot render."""
-        import re
+        """The prompt advertises exactly what the renderer can draw.
 
-        from sarathy.channels.dashboard.uiblocks import UI_BLOCK_COMPONENTS, ui_block_prompt
+        The historical name is kept for traceability, but there is no longer an
+        adapter allowlist. The catalog used to be hand-written twice — once in
+        `uiBlocks.tsx`, once in `uiblocks.py` — and the two copies could drift,
+        which is exactly what this test used to guard. Both copies are gone: the
+        renderer derives its catalog from `@openuidev/react-ui` at runtime, and
+        `openui_prompt.txt` is generated from that same library by
+        `dashboard/scripts/gen-openui-prompt.mjs`. The invariant is therefore
+        structural, and that is what is pinned here:
 
-        adapter = Path(__file__).resolve().parents[1] / "dashboard" / "src" / "lib" / "uiBlocks.tsx"
-        if not adapter.exists():  # dashboard sources not present in this checkout
-            pytest.skip("dashboard adapter source not available")
-        source = adapter.read_text(encoding="utf-8")
-        block = re.search(r"UI_BLOCK_COMPONENTS\s*=\s*\[(.*?)\]", source, re.S)
-        assert block, "UI_BLOCK_COMPONENTS array not found in adapter"
-        ts_names = set(re.findall(r'"(\w+)"', block.group(1)))
-        assert ts_names == set(UI_BLOCK_COMPONENTS)
+        1. the renderer *derives* `UI_BLOCK_COMPONENTS` from
+           `openuiLibrary.components` instead of declaring a literal array — so
+           a hand-written list cannot creep back in and drift;
+        2. it renders through the library's own `<Renderer library={openuiLibrary}>`,
+           so the advertised catalog describes what actually paints;
+        3. the prompt parses back to a full catalog (not a curated subset) and
+           covers the widgets the dashboard's own fixtures render;
+        4. every advertised name really occurs in the prompt text.
 
-        # Every component advertised in the prompt must exist in the catalog.
-        for name in UI_BLOCK_COMPONENTS:
-            assert name in ui_block_prompt()
+        Exact set equality with the installed library needs Node; that is a
+        separate test so it can skip on its own without hiding these checks.
+        """
+        from sarathy.channels.dashboard.uiblocks import ui_block_components, ui_block_prompt
+
+        renderer = Path(__file__).resolve().parents[1] / "dashboard" / "src" / "lib" / "openuiRenderer.tsx"
+        if not renderer.exists():  # dashboard sources not present in this checkout
+            pytest.skip("dashboard renderer source not available")
+        source = renderer.read_text(encoding="utf-8")
+
+        # (1) catalog comes from the library, never from a literal array.
+        assert re.search(
+            r"UI_BLOCK_COMPONENTS[^=\n]*=\s*Object\.keys\(\s*openuiLibrary\.components\s*\)",
+            source,
+        ), "UI_BLOCK_COMPONENTS must be derived from openuiLibrary.components"
+        assert not re.search(
+            r"UI_BLOCK_COMPONENTS[^=\n]*=\s*\[", source
+        ), "a hand-written UI_BLOCK_COMPONENTS array is exactly the drift this design removed"
+
+        # (2) rendering goes through the library renderer, bound to that catalog.
+        assert "from \"@openuidev/react-lang\"" in source and "Renderer" in source
+        assert re.search(r"<Renderer[\s\S]*?library=\{openuiLibrary\}", source), (
+            "the renderer must hand the library's own Renderer the same library it "
+            "advertises, otherwise the catalog describes components that never render"
+        )
+
+        # (3) the prompt carries a full catalog, not a stub.
+        catalog = ui_block_components()
+        assert len(catalog) > 60, f"prompt catalog collapsed to {len(catalog)} components"
+        missing = REQUIRED_UI_COMPONENTS - set(catalog)
+        assert not missing, f"prompt no longer advertises {sorted(missing)}"
+
+        # (4) every advertised name is really described in the prompt.
+        prompt = ui_block_prompt()
+        for name in catalog:
+            assert name in prompt, f"{name} is in the catalog but not in the prompt"
+
+    def test_prompt_catalog_matches_the_library_exactly(self):
+        """The prompt advertises precisely the library's catalog — no more, no less.
+
+        The drift the old two-list design invited cannot be *observed* statically:
+        the frontend catalog now lives inside `node_modules`. So when Node and
+        the npm deps are present, ask the library directly and compare sets. A
+        name the UI cannot render (`library - prompt`) would let the model emit
+        a block that renders as raw source; a name the model was never told
+        about (`prompt - library`) is dead weight in every turn's system prompt.
+        """
+        from sarathy.channels.dashboard.uiblocks import ui_block_components
+
+        dashboard = Path(__file__).resolve().parents[1] / "dashboard"
+        library_names = _openui_component_names(dashboard)
+        if library_names is None:
+            pytest.skip("node or @openuidev/react-ui not available to derive the real catalog")
+
+        assert set(library_names) == set(ui_block_components())
 
     def test_no_raw_html_component_is_advertised(self):
         from sarathy.channels.dashboard.uiblocks import ui_block_prompt

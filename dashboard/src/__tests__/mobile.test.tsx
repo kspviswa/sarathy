@@ -37,6 +37,7 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/lib/theme", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useTheme: () => ({ theme: "dark", resolved: "dark", setTheme: vi.fn() }),
 }));
 
 vi.mock("@/lib/ws", () => ({
@@ -186,17 +187,28 @@ describe("Mobile app — bottom tab bar", () => {
       mockHistory = [
         {
           role: "assistant",
-          content:
-            '```\nroot = Root([heading, now], "Weather")\nheading = Heading("Current conditions", 2)\nnow = KeyValues([row1])\nrow1 = {label: "Temp", value: "3.6 °C"}\n```',
+          content: [
+            "Here are the current conditions:",
+            "",
+            "```openui-lang",
+            "root = Stack([card])",
+            "card = Card([t, tbl])",
+            't = TextContent("Current conditions")',
+            "tbl = Table([c1])",
+            'c1 = Col("Temp", ["3.6"])',
+            "```",
+          ].join("\n"),
         },
       ];
       render(<MobileApp />);
-      const block = await screen.findByTestId("ui-block");
+      // The renderer is lazy-loaded, so allow extra time for the chunk.
+      const block = await screen.findByTestId("ui-block", {}, { timeout: 5000 });
       expect(block).toBeInTheDocument();
-      expect(within(block).getByText("Weather")).toBeInTheDocument();
-      expect(within(block).getByText("Current conditions")).toBeInTheDocument();
+      await within(block).findByText("Current conditions", {}, { timeout: 5000 });
+      expect(within(block).getByText("Temp")).toBeInTheDocument();
+      expect(within(block).getByText("3.6")).toBeInTheDocument();
       // The raw openui-lang source must not leak as a code block.
-      expect(screen.queryByText(/root = Root\(/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/root = Stack\(/)).not.toBeInTheDocument();
     });
 
     it("shows the commands trigger and opens the palette", async () => {

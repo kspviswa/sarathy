@@ -1,27 +1,25 @@
 import {
-  Bell,
   Briefcase,
   Command as CommandIcon,
   FileCode2,
   Gauge,
+  History,
   LogOut,
   MessageSquareText,
   Search,
-  Send,
   Settings,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { ArchiveBrowser, TranscriptDrawer } from "@/components/ArchiveBrowser";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DEFAULT_SUGGESTIONS } from "@/components/GreetingState";
 import { Logo } from "@/components/logo";
+import { NotificationCenter } from "@/components/NotificationCenter";
 import { PresenceIndicator } from "@/components/Presence";
 import { PushToggle } from "@/components/PushToggle";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import type { SlashCommand } from "@/lib/palette";
@@ -43,29 +41,43 @@ import { ConfigView } from "@/views/ConfigView";
 import { FilesView } from "@/views/FilesView";
 import { JobsView } from "@/views/JobsView";
 import { PairView } from "@/views/PairView";
+import { SessionsView } from "@/views/SessionsView";
 import { StatusView } from "@/views/StatusView";
 
 export type { ChatMessage } from "@/views/ChatView";
 
-/** Secondary views slide over the chat instead of replacing it (spec §A). */
-type Drawer = "files" | "sessions" | "jobs" | "config" | "status" | null;
+/** Navigation is tab-style: picking a section swaps the main content area
+ *  (spec §A). Chat is the default; the rest are peer sections, not drawers. */
+export type Section = "chat" | "sessions" | "files" | "jobs" | "config" | "status";
 
-const DRAWERS: { id: Exclude<Drawer, null>; label: string; icon: typeof Gauge }[] = [
-  { id: "jobs", label: "Jobs", icon: Briefcase },
-  { id: "files", label: "Files", icon: FileCode2 },
-  { id: "config", label: "Config", icon: Settings },
+const SECTIONS: { id: Section; label: string; icon: typeof Gauge; mobile?: boolean }[] = [
+  { id: "chat", label: "Chat", icon: MessageSquareText, mobile: true },
+  { id: "sessions", label: "Sessions", icon: History, mobile: true },
+  { id: "files", label: "Files", icon: FileCode2, mobile: true },
+  { id: "jobs", label: "Jobs", icon: Briefcase, mobile: true },
+  { id: "config", label: "Config", icon: Settings, mobile: true },
   { id: "status", label: "Status", icon: Gauge },
 ];
 
+const SECTION_IDS = new Set<string>(SECTIONS.map((s) => s.id));
+
+/** Map a notification frame's `tab` onto a real section; unknown tabs are
+ *  ignored rather than blanking the main area. */
+function toSection(tab: string | undefined | null): Section | null {
+  if (!tab) return null;
+  return SECTION_IDS.has(tab) ? (tab as Section) : null;
+}
+
 function AppInner() {
   const [authed, setAuthed] = useState<boolean | null>(null);
-  const [drawer, setDrawer] = useState<Drawer>(null);
+  const [section, setSection] = useState<Section>("chat");
   const [transcriptKey, setTranscriptKey] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [reaction, setReaction] = useState<ReactionState>("done");
   const [openFile, setOpenFile] = useState<string | null>(null);
-  const [unread, setUnread] = useState<Partial<Record<Drawer, number>>>({});
+  const [unread, setUnread] = useState<Partial<Record<Section, number>>>({});
+  const [notifPanelOpen, setNotifPanelOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
@@ -73,10 +85,10 @@ function AppInner() {
   const [socket, setSocket] = useState<DashboardSocket | null>(null);
   const socketRef = useRef<DashboardSocket | null>(null);
   const lastUserMessageRef = useRef<string>("");
-  const drawerRef = useRef<Drawer>(null);
+  const sectionRef = useRef<Section>("chat");
   const busyRef = useRef(false);
   const messagesRef = useRef<HTMLDivElement>(null);
-  drawerRef.current = drawer;
+  sectionRef.current = section;
 
   // Handle token in URL (for deep links from Telegram, etc.)
   useEffect(() => {
@@ -95,7 +107,7 @@ function AppInner() {
       if (hash.startsWith("#/jobs/")) {
         const id = parseInt(hash.slice(7), 10);
         if (!isNaN(id)) {
-          setDrawer("jobs");
+          setSection("jobs");
           window.dispatchEvent(new CustomEvent("sarathy:open-job", { detail: { id } }));
         }
       }
@@ -119,8 +131,18 @@ function AppInner() {
 
   const loadingHistory = useLastSession(authed === true, setMessages);
 
-  const { unreadCount, markAllRead } = useNotifications(socket, {
-    navigateTo: (tab) => setDrawer(tab as Drawer),
+  // Tab navigation: swap the main area and clear that section's unread badge.
+  const selectSection = useCallback((next: Section) => {
+    setSection((prev) => (prev === next ? prev : next));
+    setUnread((prev) => ({ ...prev, [next]: 0 }));
+    setRailOpen(false);
+  }, []);
+
+  const { notifications, unreadIds, markAllRead, markRead } = useNotifications(socket, {
+    navigateTo: (tab) => {
+      const target = toSection(tab);
+      if (target) selectSection(target);
+    },
     onMarkAllRead: () => setUnread({}),
   });
 
@@ -171,8 +193,8 @@ function AppInner() {
     setSocket(socket);
 
     const unsubNotif = socket.onNotification((n) => {
-      const t = n.payload.tab as Drawer | undefined;
-      if (t && t !== drawerRef.current) {
+      const t = toSection(n.payload.tab);
+      if (t && t !== sectionRef.current) {
         setUnread((prev) => ({ ...prev, [t]: (prev[t] ?? 0) + 1 }));
       }
     });
@@ -347,11 +369,13 @@ function AppInner() {
     setReaction("done");
   }, []);
 
-  const handleOpenFile = useCallback((path: string) => {
-    setOpenFile(path);
-    setDrawer("files");
-    setUnread((prev) => ({ ...prev, files: 0 }));
-  }, []);
+  const handleOpenFile = useCallback(
+    (path: string) => {
+      setOpenFile(path);
+      selectSection("files");
+    },
+    [selectSection],
+  );
 
   const handleRegenerate = useCallback(async () => {
     const lastUserMsg = lastUserMessageRef.current;
@@ -365,18 +389,18 @@ function AppInner() {
   // A command picked in the palette is sent as a normal slash message.
   const runCommand = useCallback(
     (command: string) => {
-      setDrawer(null);
+      selectSection("chat");
       void handleSend(command);
     },
-    [handleSend],
+    [handleSend, selectSection],
   );
 
   const openTranscript = useCallback(
     (key: string) => {
       setTranscriptKey(key);
-      setDrawer("sessions");
+      selectSection("sessions");
     },
-    [],
+    [selectSection],
   );
 
   const recentTopics = useMemo(
@@ -410,7 +434,10 @@ function AppInner() {
   };
 
   return (
-    <div className="standalone-fix flex min-h-dvh flex-col md:h-dvh md:flex-row" data-testid="app-shell">
+    <div
+      className="standalone-fix flex min-h-dvh flex-col overflow-hidden md:h-dvh md:flex-row"
+      data-testid="app-shell"
+    >
       {/* ------------------------------------------------------------ left rail */}
       <aside
         className={cn(
@@ -444,31 +471,18 @@ function AppInner() {
           </Button>
         </div>
 
-        {unreadCount > 0 && (
-          <button
-            onClick={markAllRead}
-            className="mx-2 mb-1 hidden items-center justify-between rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex"
-            data-testid="notifications-menu"
-          >
-            <span className="flex items-center gap-1.5">
-              <Bell className="size-3.5" />
-              Notifications
-            </span>
-            <Badge variant="destructive">{unreadCount}</Badge>
-          </button>
-        )}
-
-        <nav className="space-y-0.5 px-2">
-          {DRAWERS.map(({ id, label, icon: Icon }) => (
+        <nav className="space-y-0.5 px-2" data-testid="section-nav">
+          {SECTIONS.map(({ id, label, icon: Icon }) => (
             <Button
               key={id}
-              variant={drawer === id && !transcriptKey ? "secondary" : "ghost"}
+              variant={section === id ? "secondary" : "ghost"}
               size="sm"
               onClick={() => {
                 setTranscriptKey(null);
-                setDrawer((d) => (d === id ? null : id));
-                setUnread((prev) => ({ ...prev, [id]: 0 }));
+                selectSection(id);
               }}
+              aria-current={section === id ? "page" : undefined}
+              data-testid={`nav-${id}`}
               className="relative w-full justify-start"
             >
               <Icon className="size-4" />
@@ -535,11 +549,30 @@ function AppInner() {
           <div className="flex-1" />
 
           <PresenceIndicator state={reaction} />
+          <NotificationCenter
+            notifications={notifications}
+            unreadIds={unreadIds}
+            open={notifPanelOpen}
+            onOpenChange={setNotifPanelOpen}
+            onMarkAllRead={markAllRead}
+            onMarkRead={markRead}
+            onNavigate={(tab) => {
+              const target = toSection(tab);
+              if (target) selectSection(target);
+            }}
+          />
           <PushToggle />
           <ThemeToggle />
 
           <div className="hidden items-center gap-2 md:flex">
-            <span className="max-w-[10rem] truncate text-xs text-muted-foreground">Profile</span>
+            {/* Not a dead label: the session this surface is talking to. */}
+            <span
+              className="max-w-[12rem] truncate font-mono text-[11px] text-muted-foreground"
+              title={transcriptKey ?? DASHBOARD_SESSION_KEY}
+              data-testid="session-badge"
+            >
+              {transcriptKey ?? DASHBOARD_SESSION_KEY}
+            </span>
             <Button
               variant="ghost"
               size="icon"
@@ -552,120 +585,81 @@ function AppInner() {
           </div>
         </header>
 
-        {/* chat surface stays mounted so drawers slide OVER it */}
-        <div className="min-h-0 flex-1">
-          <ChatView
-            messages={messages}
-            streaming={streaming}
-            loading={loadingHistory}
-            reaction={reaction}
-            onSend={handleSend}
-            onStop={handleStop}
-            onNewChat={handleNewChat}
-            onOpenFile={handleOpenFile}
-            onRegenerate={handleRegenerate}
-            commands={commands}
-            sessionKey={DASHBOARD_SESSION_KEY}
-            suggestions={
-              recentTopics.length > 0
-                ? [...recentTopics, ...DEFAULT_SUGGESTIONS].slice(0, 6)
-                : DEFAULT_SUGGESTIONS
-            }
-            messagesRef={messagesRef}
-          />
-        </div>
+        {/* Tab-style main area: activating a section swaps this region. */}
+        <div className="min-h-0 flex-1 overflow-hidden" data-testid="main-content">
+          {section === "chat" && (
+            <ChatView
+              messages={messages}
+              streaming={streaming}
+              loading={loadingHistory}
+              reaction={reaction}
+              onSend={handleSend}
+              onStop={handleStop}
+              onNewChat={handleNewChat}
+              onOpenFile={handleOpenFile}
+              onRegenerate={handleRegenerate}
+              commands={commands}
+              sessionKey={DASHBOARD_SESSION_KEY}
+              suggestions={
+                recentTopics.length > 0
+                  ? [...recentTopics, ...DEFAULT_SUGGESTIONS].slice(0, 6)
+                  : DEFAULT_SUGGESTIONS
+              }
+              messagesRef={messagesRef}
+            />
+          )}
 
-        {/* drawers slide over the continuous chat surface */}
-        {drawer && (
-          <div
-            className="fixed inset-0 z-30 flex justify-end bg-background/50 backdrop-blur-sm"
-            onClick={() => setDrawer(null)}
-            data-testid="drawer-scrim"
-          >
-            <aside
-              className="flex h-full w-full max-w-2xl flex-col border-l border-border bg-background shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-              data-testid="drawer-panel"
-            >
-              {drawer === "sessions" && transcriptKey ? (
-                <TranscriptDrawer key_={transcriptKey} onClose={() => setTranscriptKey(null)} />
-              ) : drawer === "sessions" ? (
-                <ArchiveBrowser
-                  sessions={sessions}
-                  onOpen={openTranscript}
-                  onClose={() => setDrawer(null)}
-                  loading={false}
-                />
-              ) : drawer === "files" ? (
-                <div className="flex h-full flex-col">
-                  <div className="flex items-center justify-end border-b border-border px-3 py-2">
-                    <Button variant="ghost" size="icon" onClick={() => setDrawer(null)} aria-label="Close">
-                      <X className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="min-h-0 flex-1">
-                    <FilesView initialFile={openFile} />
-                  </div>
-                </div>
-              ) : drawer === "jobs" ? (
-                <div className="flex h-full flex-col">
-                  <div className="flex items-center justify-end border-b border-border px-3 py-2">
-                    <Button variant="ghost" size="icon" onClick={() => setDrawer(null)} aria-label="Close">
-                      <X className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="min-h-0 flex-1">
-                    <JobsView />
-                  </div>
-                </div>
-              ) : drawer === "config" ? (
-                <div className="flex h-full flex-col">
-                  <div className="flex items-center justify-end border-b border-border px-3 py-2">
-                    <Button variant="ghost" size="icon" onClick={() => setDrawer(null)} aria-label="Close">
-                      <X className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto">
-                    <ConfigView />
-                  </div>
-                </div>
-              ) : drawer === "status" ? (
-                <div className="flex h-full flex-col">
-                  <div className="flex items-center justify-end border-b border-border px-3 py-2">
-                    <Button variant="ghost" size="icon" onClick={() => setDrawer(null)} aria-label="Close">
-                      <X className="size-4" />
-                    </Button>
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto">
-                    <StatusView onLoggedOut={logout} />
-                  </div>
-                </div>
-              ) : null}
-            </aside>
-          </div>
-        )}
+          {section === "sessions" && (
+            <SessionsView sessions={sessions} initialKey={transcriptKey} />
+          )}
+
+          {section === "files" && (
+            <div className="h-full overflow-y-auto">
+              <FilesView initialFile={openFile} />
+            </div>
+          )}
+
+          {section === "jobs" && (
+            <div className="h-full">
+              <JobsView />
+            </div>
+          )}
+
+          {section === "config" && (
+            <div className="h-full overflow-y-auto">
+              <ConfigView />
+            </div>
+          )}
+
+          {section === "status" && (
+            <div className="h-full overflow-y-auto">
+              <StatusView onLoggedOut={logout} />
+            </div>
+          )}
+        </div>
       </main>
 
       {/* bottom nav on mobile */}
       <nav
         className="safe-bottom order-3 flex shrink-0 items-center justify-around border-t bg-background px-2 py-1 md:hidden"
+        data-testid="mobile-section-nav"
       >
-        <Button variant="ghost" size="sm" onClick={() => setRailOpen((v) => !v)}>
-          <MessageSquareText className="size-4" />
-          <span className="text-[11px]">Chats</span>
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setDrawer("jobs")}>
-          <Briefcase className="size-4" />
-          <span className="text-[11px]">Jobs</span>
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setDrawer("files")}>
-          <FileCode2 className="size-4" />
-          <span className="text-[11px]">Files</span>
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setDrawer("config")}>
-          <Settings className="size-4" />
-          <span className="text-[11px]">Config</span>
-        </Button>
+        {SECTIONS.filter((s) => s.mobile).map(({ id, label, icon: Icon }) => (
+          <Button
+            key={id}
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setTranscriptKey(null);
+              selectSection(id);
+            }}
+            aria-current={section === id ? "page" : undefined}
+            className={cn(section === id && "bg-accent text-accent-foreground")}
+          >
+            <Icon className="size-4" />
+            <span className="text-[11px]">{label}</span>
+          </Button>
+        ))}
       </nav>
 
       <CommandPalette

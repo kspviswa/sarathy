@@ -3,9 +3,7 @@ import {
   Copy,
   Download,
   Loader2,
-  Maximize2,
   Mic,
-  Minimize2,
   Paperclip,
   Plus,
   RotateCcw,
@@ -73,6 +71,30 @@ interface PendingMedia {
 
 const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"]);
 const AUDIO_EXTS = new Set([".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"]);
+
+/** Composer height bounds (px). Small enough to stay a composer, tall enough
+ *  to paste a stack trace without scrolling (spec §E). */
+export const COMPOSER_MIN_HEIGHT = 56;
+export const COMPOSER_MAX_HEIGHT = 480;
+export const COMPOSER_DEFAULT_HEIGHT = 96;
+export const COMPOSER_HEIGHT_KEY = "sarathy_composer_height";
+
+function clampComposerHeight(px: number): number {
+  return Math.min(COMPOSER_MAX_HEIGHT, Math.max(COMPOSER_MIN_HEIGHT, Math.round(px)));
+}
+
+/** Remember the drag height across reloads; a bad/hostile value falls back to
+ *  the default instead of rendering a 0px or 100000px composer. */
+export function loadComposerHeight(): number {
+  try {
+    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(COMPOSER_HEIGHT_KEY);
+    const n = raw === null ? NaN : Number(raw);
+    if (Number.isFinite(n)) return clampComposerHeight(n);
+  } catch {
+    // localStorage blocked (private mode / sandboxed iframe) — use the default.
+  }
+  return COMPOSER_DEFAULT_HEIGHT;
+}
 
 function getMediaKind(p: string): "image" | "audio" | "file" {
   const ext = p.substring(p.lastIndexOf(".")).toLowerCase();
@@ -293,7 +315,8 @@ export function ChatView({
   const [quoteChips, setQuoteChips] = useState<QuoteChip[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [composerHeight, setComposerHeightState] = useState(loadComposerHeight);
+  const [resizing, setResizing] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const turnStartRef = useRef<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -306,6 +329,69 @@ export function ChatView({
   const isNearBottomRef = useRef(true);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
+  const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  const setComposerHeight = useCallback((px: number) => {
+    const next = clampComposerHeight(px);
+    setComposerHeightState(next);
+    try {
+      localStorage.setItem(COMPOSER_HEIGHT_KEY, String(next));
+    } catch {
+      // Persisting the height is a convenience, never a hard requirement.
+    }
+  }, []);
+
+  const startResize = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      resizeDragRef.current = { startY: e.clientY, startHeight: composerHeight };
+      setResizing(true);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Pointer capture unsupported (older Safari) — move/up still fire.
+      }
+    },
+    [composerHeight],
+  );
+
+  const dragResize = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const drag = resizeDragRef.current;
+      if (!drag) return;
+      e.preventDefault();
+      // Dragging UP grows the composer, so the delta is inverted.
+      setComposerHeight(drag.startHeight + (drag.startY - e.clientY));
+    },
+    [setComposerHeight],
+  );
+
+  const endResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    resizeDragRef.current = null;
+    setResizing(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // No capture to release — harmless.
+    }
+  }, []);
+
+  const nudgeResize = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const step = e.shiftKey ? 64 : 24;
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setComposerHeight(composerHeight + step);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setComposerHeight(composerHeight - step);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        setComposerHeight(COMPOSER_MIN_HEIGHT);
+      }
+    },
+    [composerHeight, setComposerHeight],
+  );
 
   // Elapsed timer for the reaction chip / thinking drawer.
   useEffect(() => {
@@ -449,15 +535,13 @@ export function ChatView({
     [pendingMedia],
   );
 
-  // Auto-grow. The inline composer caps at 128px; expanded has no artificial
-  // ceiling (spec §A — "no 128px ceiling").
+  // Auto-grow: the textarea grows with its content up to the current composer
+  // height, and is pinned to that height once the user has dragged it taller.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    const max = expanded ? 620 : 128;
-    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
-  }, [input, expanded]);
+    el.style.height = `${composerHeight}px`;
+  }, [composerHeight]);
 
   const send = useCallback(async () => {
     const content = input.trim();
@@ -474,7 +558,6 @@ export function ChatView({
     setPendingMedia([]);
     setReplyToMsg(null);
     setQuoteChips(clearQuotes());
-    setExpanded(false);
 
     try {
       await onSend(
@@ -502,8 +585,40 @@ export function ChatView({
   const showSlashMenu = /^\/[^\s]*$/.test(input.trim()) && input.trimStart().startsWith("/");
 
   const composer = (
-    <div className="border-t bg-background/95 px-4 py-3 backdrop-blur">
-      <div className={cn("mx-auto w-full", expanded ? "max-w-3xl" : "max-w-2xl")}>
+    <div
+      className={cn(
+        "border-t bg-background/95 px-4 pb-3 pt-1 backdrop-blur",
+        resizing && "select-none",
+      )}
+      data-testid="composer"
+    >
+      {/* Drag handle: pull up to give the composer more room (spec §E). */}
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize composer"
+        aria-valuenow={composerHeight}
+        aria-valuemin={COMPOSER_MIN_HEIGHT}
+        aria-valuemax={COMPOSER_MAX_HEIGHT}
+        tabIndex={0}
+        onPointerDown={startResize}
+        onPointerMove={dragResize}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+        onKeyDown={nudgeResize}
+        data-testid="composer-resize-handle"
+        title="Drag to resize the composer (↑/↓ for fine tuning)"
+        className="group flex h-4 w-full cursor-row-resize touch-none items-center justify-center"
+      >
+        <span
+          className={cn(
+            "h-1 w-12 rounded-full transition-colors",
+            resizing ? "bg-primary" : "bg-border group-hover:bg-muted-foreground/40",
+          )}
+        />
+      </div>
+      {/* Full-width band: no max-width cap, so it reflows with the window. */}
+      <div className="w-full">
         <QuoteChips chips={quoteChips} onRemove={(id) => setQuoteChips((c) => removeQuote(c, id))} />
 
         {(pendingMedia.length > 0 || replyToMsg) && (
@@ -624,34 +739,11 @@ export function ChatView({
                 }
               }}
               onPaste={handlePaste}
-              onFocus={() => {
-                if (input.trim()) setExpanded(true);
-              }}
               placeholder="Message Sarathy…  ·  Enter = newline, Ctrl+Enter = send"
-              className={cn(
-                "flex-1 resize-none overflow-y-auto",
-                expanded ? "min-h-40" : "max-h-32 min-h-12",
-              )}
-              rows={expanded ? 8 : 1}
+              style={{ height: composerHeight }}
+              className="flex-1 resize-none overflow-y-auto"
+              rows={1}
             />
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-9 shrink-0"
-                  onClick={() => setExpanded((v) => !v)}
-                  aria-label={expanded ? "Collapse composer" : "Expand composer"}
-                  title={expanded ? "Collapse composer" : "Expand composer"}
-                >
-                  {expanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                {expanded ? "Collapse" : "Expand composer"}
-              </TooltipContent>
-            </Tooltip>
 
             <Tooltip>
               <TooltipTrigger asChild>
@@ -669,7 +761,12 @@ export function ChatView({
           </div>
         </div>
 
-        <UsageFooter sessionKey={sessionKey} streaming={streaming} className="mt-1.5" />
+        <UsageFooter
+          sessionKey={sessionKey}
+          streaming={streaming}
+          revision={messages.length}
+          className="mt-1.5"
+        />
       </div>
     </div>
   );
@@ -737,7 +834,12 @@ export function ChatView({
       </div>
 
       <div ref={scrollRef} className="no-scrollbar flex-1 overflow-y-auto">
-        <div ref={messageListRef} className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-4">
+        {/* Generous cap so wide windows use their width, still readable (spec §B). */}
+        <div
+          ref={messageListRef}
+          className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-4"
+          data-testid="message-list"
+        >
           {messages.length === 0 ? (
             loading ? (
               <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
@@ -779,26 +881,7 @@ export function ChatView({
 
       <QuoteActionBar visible={selection.visible} rect={selection.rect} onAdd={addSelectionAsQuote} />
 
-      {expanded && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/80 p-0 backdrop-blur-sm md:p-6">
-          <div className="flex h-full w-full max-w-3xl flex-col overflow-hidden bg-background md:rounded-2xl md:border md:border-border md:shadow-2xl">
-            <div className="flex items-center justify-between border-b px-4 py-2">
-              <span className="text-sm font-semibold">New message</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setExpanded(false)}
-                aria-label="Collapse composer"
-              >
-                <Minimize2 className="size-4" />
-              </Button>
-            </div>
-            <div className="flex flex-1 flex-col justify-end">{composer}</div>
-          </div>
-        </div>
-      )}
-
-      {!expanded && composer}
+      {composer}
     </div>
   );
 }

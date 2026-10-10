@@ -11,6 +11,22 @@
  * never renames or redefines them.
  */
 
+/**
+ * Icon names used by the chrome. These are `lucide-react` icon names, resolved
+ * to components by the consumers (`ReactionChip` / `PresenceIndicator`) — this
+ * module stays free of JSX so both the desktop and mobile trees can share it.
+ *
+ * Emoji glyphs used to live here (hourglass / brain / wrench / check / cross);
+ * they rendered differently on every platform and broke the "chrome looks like
+ * one product" goal (spec §D).
+ */
+export type ReactionIcon =
+  | "loader-circle"
+  | "brain"
+  | "wrench"
+  | "circle-check"
+  | "circle-x";
+
 /** Visual states a message can be in. */
 export type ReactionState =
   | "queued"
@@ -22,8 +38,8 @@ export type ReactionState =
 
 export interface ReactionView {
   state: ReactionState;
-  /** Emoji shown in the reaction chip. */
-  glyph: string;
+  /** lucide-react icon name rendered in the reaction chip. */
+  icon: ReactionIcon;
   /** Short human label, e.g. "thinking". */
   label: string;
   /** True while the turn is still in flight (drives the pulsing dot). */
@@ -31,12 +47,12 @@ export interface ReactionView {
 }
 
 const REACTIONS: Record<ReactionState, ReactionView> = {
-  queued: { state: "queued", glyph: "⏳", label: "queued", live: true },
-  working: { state: "working", glyph: "⏳", label: "working", live: true },
-  thinking: { state: "thinking", glyph: "🧠", label: "thinking", live: true },
-  tool: { state: "tool", glyph: "🔧", label: "using tools", live: true },
-  done: { state: "done", glyph: "✅", label: "done", live: false },
-  failed: { state: "failed", glyph: "❌", label: "failed", live: false },
+  queued: { state: "queued", icon: "loader-circle", label: "queued", live: true },
+  working: { state: "working", icon: "loader-circle", label: "working", live: true },
+  thinking: { state: "thinking", icon: "brain", label: "thinking", live: true },
+  tool: { state: "tool", icon: "wrench", label: "using tools", live: true },
+  done: { state: "done", icon: "circle-check", label: "done", live: false },
+  failed: { state: "failed", icon: "circle-x", label: "failed", live: false },
 };
 
 export function reactionFor(state: ReactionState): ReactionView {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Gauge, Tag } from "lucide-react";
+import { CircleDollarSign, Gauge, Tag, Zap } from "lucide-react";
 
 import { api } from "@/lib/api";
 import type { SessionFooter } from "@/lib/types";
@@ -122,16 +122,24 @@ export function UsageFooter({
       )}
       data-testid="usage-footer"
     >
-      <span className="tabular-nums" data-testid="footer-tokens">
-        ⚡ {fmtTokens(data.tokens)} tkn
+      <span
+        className="inline-flex items-center gap-1 tabular-nums"
+        data-testid="footer-tokens"
+      >
+        <Zap className="size-3" aria-hidden="true" />
+        {fmtTokens(data.tokens)} tkn
       </span>
       {data.tokensPerSec > 0 && (
         <span className="tabular-nums" data-testid="footer-tps">
           @ {data.tokensPerSec.toFixed(1)} tps
         </span>
       )}
-      <span className="tabular-nums" data-testid="footer-cost">
-        💵 {data.cost === null ? "—" : `$${data.cost.toFixed(4)}`} session
+      <span
+        className="inline-flex items-center gap-1 tabular-nums"
+        data-testid="footer-cost"
+      >
+        <CircleDollarSign className="size-3" aria-hidden="true" />
+        {data.cost === null ? "—" : `$${data.cost.toFixed(4)}`} session
       </span>
       {data.topic && (
         <span className="inline-flex items-center gap-1" data-testid="footer-topic">

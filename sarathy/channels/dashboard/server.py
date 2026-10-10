@@ -943,12 +943,12 @@ class DashboardChannel(BaseChannel):
     # ------------------------------------------------------------------ restart api
 
     async def _api_restart(self, request: web.Request) -> web.Response:
-        from sarathy.utils.helpers import get_data_path
+        from sarathy.core.notify import write_restart_flag
 
-        flag = get_data_path() / "restart_pending.json"
-        flag.write_text(
-            json.dumps({"channel": self.name, "chat_id": "console"}), encoding="utf-8"
-        )
+        # Multi-target flag: the dashboard console AND the Telegram live chat
+        # both get the boot ping. Restarting from the dashboard used to be
+        # silent on Telegram (spec §C3).
+        write_restart_flag(origin_channel=self.name, origin_chat_id="console")
 
         async def _do_restart() -> None:
             await asyncio.sleep(0.5)

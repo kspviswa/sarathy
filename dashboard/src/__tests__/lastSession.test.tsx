@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act } from "@testing-library/react";
 import React from "react";
 
 vi.mock("@/lib/api", () => ({
@@ -74,7 +74,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { api, getToken } from "@/lib/api";
-import { resetLastSession, DASHBOARD_SESSION_KEY, clearResetFlag } from "@/lib/useLastSession";
+import { resetLastSession, DASHBOARD_SESSION_KEY, clearResetFlag, WS_OPEN_EVENT } from "@/lib/useLastSession";
 import { DashboardSocket } from "@/lib/ws";
 import DesktopApp from "@/App";
 import MobileApp from "@/mobile/App";
@@ -271,5 +271,167 @@ describe("Last session load — mobile App (empty session)", () => {
       },
       { timeout: 5000 },
     );
+  });
+});
+
+/**
+ * Spec 124 §B1/B2 — a browser refresh during a restart window must recover.
+ *
+ * The dashboard socket reopens once the gateway is back; that (re)open is the
+ * signal that history can be re-fetched. Until then the failure is surfaced,
+ * never used to blank what is already on screen.
+ */
+describe("Last session reload — reconnect refetch (spec 124 §B1/B2)", () => {
+  // Typed views onto the mocked module (vi.mocked, not raw property access).
+  const meApi = vi.mocked(api.me);
+  const sessionsApi = vi.mocked(api.sessions);
+  const sessionApi = vi.mocked(api.session);
+  const footerApi = vi.mocked(api.sessionFooter);
+  const SocketMock = vi.mocked(DashboardSocket);
+  const getTokenMock = vi.mocked(getToken);
+
+  const CONSOLE_SESSION = {
+    key: "dashboard:console",
+    created_at: "2026-01-01T00:00:00",
+    updated_at: "2026-01-01T00:00:00",
+    path: "/ws/sess.json",
+  };
+
+  beforeEach(() => {
+    meApi.mockReset();
+    meApi.mockResolvedValue({
+      deviceId: "test-device",
+      deviceName: "test",
+      version: "0.16.4",
+    });
+    sessionsApi.mockReset();
+    sessionApi.mockReset();
+    footerApi.mockClear();
+    clearResetFlag();
+    SocketMock.mockReset();
+    SocketMock.mockImplementation(function () {
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        onMessage: vi.fn(() => vi.fn()),
+        onNotification: vi.fn(() => vi.fn()),
+        onOpen: vi.fn(() => vi.fn()),
+      };
+    });
+    getTokenMock.mockReturnValue("test-token");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  /** Mount-time load fails: the gateway is down (restart window). */
+  function setupGatewayDown() {
+    sessionsApi.mockRejectedValue(new Error("gateway unavailable"));
+    sessionApi.mockRejectedValue(new Error("gateway unavailable"));
+  }
+
+  /** The gateway is back: the console session now has a message in it. */
+  function setupRecovered(text: string) {
+    sessionsApi.mockResolvedValue({ sessions: [CONSOLE_SESSION] });
+    sessionApi.mockResolvedValue({
+      key: "dashboard:console",
+      createdAt: "2026-01-01T00:00:00",
+      messages: [{ role: "user", content: text, timestamp: "t9" }],
+    });
+  }
+
+  /** Simulate the socket (re)opening. */
+  function reopenSocket() {
+    act(() => {
+      window.dispatchEvent(new CustomEvent(WS_OPEN_EVENT));
+    });
+  }
+
+  it("refetches history when the socket reopens after a failed first load", async () => {
+    setupGatewayDown();
+    render(<DesktopApp />);
+
+    // The mount load failed: no history yet, but the failure IS surfaced.
+    expect(await screen.findByTestId("history-error")).toBeInTheDocument();
+
+    // The gateway comes back up and the socket reopens.
+    setupRecovered("restart the gateway");
+    reopenSocket();
+
+    expect(await screen.findByText("restart the gateway")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByTestId("history-error")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("recovers on mobile too", async () => {
+    setupGatewayDown();
+    render(<MobileApp />);
+
+    expect(await screen.findByTestId("history-error")).toBeInTheDocument();
+
+    setupRecovered("restart the gateway");
+    reopenSocket();
+
+    expect(await screen.findByText("restart the gateway")).toBeInTheDocument();
+  });
+
+  it("refetches on reconnect even when the first load succeeded", async () => {
+    setupRecovered("first load");
+    render(<DesktopApp />);
+    expect(await screen.findByText("first load")).toBeInTheDocument();
+
+    const before = sessionsApi.mock.calls.length;
+    reopenSocket();
+    await waitFor(() =>
+      expect(sessionsApi.mock.calls.length).toBeGreaterThan(before),
+    );
+  });
+
+  it("keeps existing messages when a later refetch fails", async () => {
+    setupRecovered("already on screen");
+    render(<DesktopApp />);
+    expect(await screen.findByText("already on screen")).toBeInTheDocument();
+
+    sessionsApi.mockRejectedValue(new Error("gateway unavailable"));
+    reopenSocket();
+
+    // The failure is reported...
+    expect(await screen.findByTestId("history-error")).toBeInTheDocument();
+    // ...and it did NOT wipe the transcript.
+    expect(screen.getByText("already on screen")).toBeInTheDocument();
+  });
+
+  it("retries with backoff after a reconnect, then stops without blanking", async () => {
+    vi.useFakeTimers();
+    try {
+      setupGatewayDown();
+      render(<DesktopApp />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const mountCalls = sessionsApi.mock.calls.length;
+      reopenSocket();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(sessionsApi.mock.calls.length).toBeGreaterThan(mountCalls);
+
+      // Bounded retries: the backoff schedule is finite, not an infinite poll.
+      const afterReconnect = sessionsApi.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      const total = sessionsApi.mock.calls.length;
+      expect(total).toBeGreaterThan(afterReconnect);
+      expect(total).toBeLessThan(afterReconnect + 10);
+
+      // Still nothing was blanked, and the error stayed visible.
+      expect(screen.getByTestId("history-error")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,5 +1,6 @@
 import {
   Briefcase,
+  CloudOff,
   Command as CommandIcon,
   FileCode2,
   Gauge,
@@ -128,7 +129,10 @@ function AppInner() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const loadingHistory = useLastSession(authed === true, setMessages);
+  const { loading: loadingHistory, error: historyError } = useLastSession(
+    authed === true,
+    setMessages,
+  );
 
   // Tab navigation: swap the main area and clear that section's unread badge.
   const selectSection = useCallback((next: Section) => {
@@ -202,7 +206,9 @@ function AppInner() {
     });
 
     const unsubscribe = socket.onMessage((m) => {
-      if (m.channel !== "dashboard" && m.chatId !== "console") return;
+      // Accept only the dashboard console pair. The previous `||`-style check
+      // let ANY chatId named "console" and ANY dashboard chat through.
+      if (m.channel !== "dashboard" || m.chatId !== "console") return;
 
       // Fold every streamed frame into the reaction state machine.
       const frame = reactionFrameFrom(m.metadata);
@@ -557,25 +563,38 @@ function AppInner() {
         {/* Tab-style main area: activating a section swaps this region. */}
         <div className="min-h-0 flex-1 overflow-hidden" data-testid="main-content">
           {section === "chat" && (
-            <ChatView
-              messages={messages}
-              streaming={streaming}
-              loading={loadingHistory}
-              reaction={reaction}
-              onSend={handleSend}
-              onStop={handleStop}
-              onNewChat={handleNewChat}
-              onOpenFile={handleOpenFile}
-              onRegenerate={handleRegenerate}
-              commands={commands}
-              sessionKey={DASHBOARD_SESSION_KEY}
-              suggestions={
-                recentTopics.length > 0
-                  ? [...recentTopics, ...DEFAULT_SUGGESTIONS].slice(0, 6)
-                  : DEFAULT_SUGGESTIONS
-              }
-              messagesRef={messagesRef}
-            />
+            <>
+              {historyError && (
+                <div
+                  data-testid="history-error"
+                  className="flex items-center gap-2 border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive"
+                >
+                  <CloudOff className="size-3.5 shrink-0" />
+                  <span>
+                    Could not load conversation history: {historyError}
+                  </span>
+                </div>
+              )}
+              <ChatView
+                messages={messages}
+                streaming={streaming}
+                loading={loadingHistory}
+                reaction={reaction}
+                onSend={handleSend}
+                onStop={handleStop}
+                onNewChat={handleNewChat}
+                onOpenFile={handleOpenFile}
+                onRegenerate={handleRegenerate}
+                commands={commands}
+                sessionKey={DASHBOARD_SESSION_KEY}
+                suggestions={
+                  recentTopics.length > 0
+                    ? [...recentTopics, ...DEFAULT_SUGGESTIONS].slice(0, 6)
+                    : DEFAULT_SUGGESTIONS
+                }
+                messagesRef={messagesRef}
+              />
+            </>
           )}
 
           {section === "sessions" && (

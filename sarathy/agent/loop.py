@@ -1735,26 +1735,50 @@ Remaining: ~{remaining:,} tokens
     async def _handle_restart_command(
         self, session: Session, msg: InboundMessage
     ) -> OutboundMessage:
-        """Handle /restart command - restart the gateway service."""
-        import json
+        """Handle /restart command - restart the gateway service.
+
+        A restart kills this process mid-turn, so everything this turn wants to
+        say must be durable BEFORE the restart is spawned. The turn used to be
+        persisted only by the end-of-turn ``_save_turn`` — which never ran, so
+        the "/restart" ask and its ack vanished from the transcript (spec §A1).
+        Persist first, then notify, then restart.
+        """
         import subprocess
+        from datetime import datetime
 
-        from sarathy.utils.helpers import get_data_path
+        from sarathy.core.notify import write_restart_flag
 
-        restart_flag_path = get_data_path() / "restart_pending.json"
+        # Multi-target flag: the originating channel, the Telegram live chat and
+        # the dashboard console all get the boot ping (spec §C3).
+        write_restart_flag(
+            origin_channel=msg.channel,
+            origin_chat_id=msg.chat_id,
+            sender_id=msg.sender_id,
+        )
 
-        restart_data = {
-            "channel": msg.channel,
-            "chat_id": msg.chat_id,
-            "sender_id": msg.sender_id,
-        }
-        restart_flag_path.write_text(json.dumps(restart_data), encoding="utf-8")
+        ack = "🔄 Gateway restart requested. Saving state and restarting..."
+
+        # Durability first — a restart mid-turn must never drop the exchange
+        # (this is the exact 18:19 → 18:26 hole Viswa reported).
+        now = datetime.now().isoformat()
+        session.messages.append(
+            {"role": "user", "content": msg.content, "timestamp": now}
+        )
+        session.messages.append(
+            {"role": "assistant", "content": ack, "timestamp": now}
+        )
+        session.updated_at = datetime.now()
+        try:
+            self.sessions.save(session)
+        except Exception as e:
+            # Never let a persistence failure block the restart itself.
+            logger.warning("Failed to persist restart turn: {}", e)
 
         await self.bus.publish_outbound(
             OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="🔄 Gateway restart requested. Saving state and restarting...",
+                content=ack,
             )
         )
 

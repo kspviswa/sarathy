@@ -24,21 +24,34 @@ function sessionTime(s: SessionInfo): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export function SessionsView() {
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+export function SessionsView({
+  sessions: providedSessions,
+  initialKey = null,
+}: {
+  /** Preloaded list from the shell (already fetched) — skips the refetch. */
+  sessions?: SessionInfo[];
+  /** Transcript to open as soon as the view mounts. */
+  initialKey?: string | null;
+} = {}) {
+  const [sessions, setSessions] = useState<SessionInfo[]>(providedSessions ?? []);
   const [active, setActive] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [loadingList, setLoadingList] = useState(true);
+  const [loadingList, setLoadingList] = useState(providedSessions === undefined);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [dateFilter, setDateFilter] = useState<string | "all">("all");
 
   useEffect(() => {
+    if (providedSessions !== undefined) {
+      setSessions(providedSessions);
+      setLoadingList(false);
+      return;
+    }
     api
       .sessions()
       .then((res) => setSessions(res.sessions))
       .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load sessions"))
       .finally(() => setLoadingList(false));
-  }, []);
+  }, [providedSessions]);
 
   const dateOptions = useMemo(() => sessionDateOptions(sessions), [sessions]);
   const groups = useMemo(
@@ -59,8 +72,18 @@ export function SessionsView() {
     }
   }
 
+  // Transcript requested by the shell (rail "recent conversations" click)
+  // opens in this view rather than in a drawer.
+  useEffect(() => {
+    if (!initialKey) return;
+    void open(initialKey);
+  }, [initialKey]);
+
   return (
-    <div className="grid h-full gap-3 p-4 lg:grid-cols-[minmax(0,300px)_1fr]">
+    <div
+      className="grid h-full gap-3 p-4 lg:grid-cols-[minmax(0,300px)_1fr]"
+      data-testid="sessions-view"
+    >
       <Card className="min-h-0 overflow-hidden">
         <ScrollArea className="h-full">
           <div className="p-2">
@@ -149,9 +172,9 @@ export function SessionsView() {
         </ScrollArea>
       </Card>
 
-      <Card className="min-h-0 overflow-hidden">
+      <Card className="min-h-0 overflow-hidden" data-testid="session-transcript">
         <ScrollArea className="h-full">
-          <div className="flex flex-col gap-4 p-4">
+          <div className="flex flex-col items-start gap-4 p-4">
             {loadingDetail ? (
               <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />

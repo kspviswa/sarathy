@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Gauge, Tag } from "lucide-react";
 
 import { api } from "@/lib/api";
@@ -19,42 +19,60 @@ function fmtTokens(n: number): string {
  * usage rows and config that `format_usage_footer` uses, so the dashboard and
  * Telegram report the same numbers for the same turn.
  *
- * Refreshes while a turn is streaming so the numbers move live.
+ * Refreshes while a turn is streaming so the numbers move live, when
+ * `revision` changes (the chat passes the message count), and once more after
+ * a turn settles — the usage row for a turn is written *after* its `_final`
+ * frame lands, so a single read at that instant is stale by one turn.
  */
 export function UsageFooter({
   sessionKey,
   streaming,
+  revision,
   className,
 }: {
   sessionKey?: string;
   streaming?: boolean;
+  /** Any value that changes when the session's usage may have changed. */
+  revision?: number | string;
   className?: string;
 }) {
   const [data, setData] = useState<SessionFooter | null>(null);
 
+  const load = useCallback(() => {
+    // Defensive: the footer is decorative telemetry. If the endpoint is
+    // missing or fails, keep rendering the chat rather than crashing it.
+    if (typeof api.sessionFooter !== "function") return;
+    api
+      .sessionFooter(sessionKey)
+      .then((d) => setData(d))
+      .catch(() => {
+        /* telemetry is best-effort; keep the last good value */
+      });
+  }, [sessionKey]);
+
   useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      // Defensive: the footer is decorative telemetry. If the endpoint is
-      // missing or fails, keep rendering the chat rather than crashing it.
-      if (typeof api.sessionFooter !== "function") return;
-      api
-        .sessionFooter(sessionKey)
-        .then((d) => {
-          if (!cancelled) setData(d);
-        })
-        .catch(() => {
-          /* telemetry is best-effort; keep the last good value */
-        });
-    };
     load();
-    if (!streaming) return () => { cancelled = true; };
-    const id = setInterval(load, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [sessionKey, streaming]);
+    if (!streaming) return;
+    const id = setInterval(load, 2000);
+    return () => clearInterval(id);
+  }, [load, streaming, revision]);
+
+  // Trailing refresh: usage for the just-finished turn lands shortly after the
+  // final frame, so re-read once it has had a chance to be written.
+  const wasStreaming = useRef(false);
+  useEffect(() => {
+    const live = Boolean(streaming);
+    if (wasStreaming.current && !live) {
+      wasStreaming.current = false;
+      const soon = setTimeout(load, 1200);
+      const later = setTimeout(load, 4500);
+      return () => {
+        clearTimeout(soon);
+        clearTimeout(later);
+      };
+    }
+    wasStreaming.current = live;
+  }, [streaming, load]);
 
   if (!data) return null;
 

@@ -41,14 +41,15 @@ function updateAppBadge(count: number): void {
 /**
  * Subscribe once to ws.onNotification, keep a capped list of notifications,
  * and surface an unread badge via the Badging API (with document.title
- * fallback). markAllRead() clears the unread count and the PWA/app badge.
+ * fallback). markAllRead() clears the unread count and the PWA/app badge;
+ * markRead(id) clears a single notification (clicked in the sidebar).
  */
 export function useNotifications(
   socket: DashboardSocket | null,
   options?: UseNotificationsOptions,
 ) {
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadIds, setUnreadIds] = useState<string[]>([]);
   const seen = useRef(new Set<string>());
   const counter = useRef(0);
   const baseTitle = useRef(
@@ -78,7 +79,7 @@ export function useNotifications(
       setNotifications((prev) =>
         [notification, ...prev].slice(0, MAX_NOTIFICATIONS),
       );
-      setUnreadCount((prev) => prev + 1);
+      setUnreadIds((prev) => [...prev, notification.id]);
 
       toast(title, {
         description: body,
@@ -93,6 +94,9 @@ export function useNotifications(
     });
   }, [socket]);
 
+  const unreadCount = unreadIds.length;
+  const isUnread = useCallback((id: string) => unreadIds.includes(id), [unreadIds]);
+
   useEffect(() => {
     if (supportsBadging()) {
       updateAppBadge(unreadCount);
@@ -105,13 +109,19 @@ export function useNotifications(
   }, [unreadCount]);
 
   const markAllRead = useCallback(() => {
-    setUnreadCount(0);
+    setUnreadIds([]);
     optionsRef.current?.onMarkAllRead?.();
+  }, []);
+
+  /** Mark a single notification read (opened in the sidebar). */
+  const markRead = useCallback((id: string) => {
+    setUnreadIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev));
   }, []);
 
   const remove = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
+    setUnreadIds((prev) => prev.filter((x) => x !== id));
   }, []);
 
-  return { notifications, unreadCount, markAllRead, remove };
+  return { notifications, unreadCount, unreadIds, isUnread, markAllRead, markRead, remove };
 }

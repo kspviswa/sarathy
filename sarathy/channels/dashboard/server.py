@@ -996,7 +996,14 @@ class DashboardChannel(BaseChannel):
             info["messageCount"] = len(messages)
             for m in messages:
                 if m.get("role") == "user":
-                    _, body = split_quotes(m.get("content", ""))
+                    content = m.get("content", "")
+                    # Multipart content arrives as a list of blocks; keep the
+                    # text blocks only (media/attachments have no text).
+                    if isinstance(content, list):
+                        content = " ".join(
+                            str(b.get("text", "")) for b in content if isinstance(b, dict)
+                        )
+                    _, body = split_quotes(str(content))
                     body = " ".join(body.split())
                     if body:
                         info["preview"] = body[:280]

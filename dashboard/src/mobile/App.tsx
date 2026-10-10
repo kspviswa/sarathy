@@ -295,7 +295,10 @@ function MobileAppInner() {
   };
 
   return (
-    <div className="safe-top flex h-dvh flex-col" data-testid="mobile-app">
+    <div
+      className="standalone-fix safe-top flex min-h-dvh flex-col overflow-hidden"
+      data-testid="mobile-app"
+    >
       <header className="flex items-center justify-between border-b bg-background/90 px-4 py-3 backdrop-blur">
         <div className="flex items-center gap-2">
           <Logo size={22} />

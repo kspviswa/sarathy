@@ -9,7 +9,6 @@ import {
   MessageSquareText,
   Search,
   Settings,
-  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -17,7 +16,7 @@ import { toast } from "sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DEFAULT_SUGGESTIONS } from "@/components/GreetingState";
 import { Logo } from "@/components/logo";
-import { NotificationBell } from "@/components/NotificationBell";
+import { NotificationControls } from "@/components/NotificationControls";
 import { PresenceIndicator } from "@/components/Presence";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
@@ -391,7 +390,7 @@ function AppInner() {
     setMessages((prev) => [...prev, { role: "user", content: lastUserMsg }]);
     setStreaming(true);
     setReaction(startTurn());
-    await api.sendChat({ content: lastUserMsg });
+    await api.sendChat(lastUserMsg);
   }, [streaming]);
 
   // A command picked in the palette is sent as a normal slash message.
@@ -441,23 +440,13 @@ function AppInner() {
       {/* ------------------------------------------------------------ left rail */}
       <aside
         className={cn(
-          "safe-bottom order-2 flex shrink-0 flex-col border-t bg-background md:order-1 md:w-64 md:border-r md:border-t-0",
+          // safe-top: the rail spans the full viewport height at md+, so on
+          // iPad/notch devices its top row collided with the status bar.
+          "safe-top safe-bottom order-2 flex shrink-0 flex-col overflow-y-auto border-t bg-background md:order-1 md:w-64 md:border-r md:border-t-0",
           railOpen ? "flex" : "hidden md:flex",
         )}
         data-testid="left-rail"
       >
-        <div className="hidden items-center gap-2 px-4 py-4 md:flex">
-          <Logo size={26} />
-          <span className="flex-1 font-bold tracking-tight">Sarathy</span>
-          <button
-            onClick={() => setRailOpen(false)}
-            className="rounded p-1 text-muted-foreground md:hidden"
-            aria-label="Hide conversations"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-
         <div className="flex items-center gap-1 px-2 pb-2">
           <Button
             variant="secondary"
@@ -496,8 +485,26 @@ function AppInner() {
           ))}
         </nav>
 
-        {/* Recent conversations were removed (spec §B): the rail is logo,
-            Search, and section nav. Sessions live in the Sessions tab now. */}
+        {/* Branding sits at the BOTTOM (spec 125 §C2), below the nav's Status
+            button: the mascot + title used to collide with the safe area up
+            top, and the space below the nav was dead anyway. `mt-auto` pins it
+            to the bottom of whatever height the rail has. */}
+        <div
+          className="mt-auto hidden items-center gap-3 border-t border-border/60 px-4 py-5 md:flex"
+          data-testid="rail-branding"
+        >
+          <Logo size={44} />
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-lg font-bold tracking-tight">Sarathy</span>
+            <span className="truncate text-[11px] text-muted-foreground">
+              Local-first AI assistant
+            </span>
+          </div>
+        </div>
+
+        {/* Recent conversations were removed (spec §B): the rail is Search,
+            section nav, and the branding block. Sessions live in the Sessions
+            tab now. */}
       </aside>
 
       {/* ---------------------------------------------------------------- main */}
@@ -525,8 +532,8 @@ function AppInner() {
           <div className="flex-1" />
 
           <PresenceIndicator state={reaction} />
-          <NotificationBell
-            enabled={notificationsEnabled ?? false}
+          <NotificationControls
+            enabled={notificationsEnabled}
             onEnabledChange={setNotificationsEnabled}
             notifications={notifications}
             unreadIds={unreadIds}

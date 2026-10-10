@@ -70,3 +70,49 @@ export function stripRuntimeContext(content: string): string {
 function dropStrayRuntimeContextLines(lines: string[]): string[] {
   return lines.filter((line) => !RUNTIME_CONTEXT_LINE.test(line.trim()));
 }
+
+/**
+ * Machine lines the agent stores alongside the text: `[image: /path]`,
+ * `[file: name.pdf]`, and friends. They are transport metadata — the UI renders
+ * the referenced media itself (see each view's `displayMedia`), so showing the
+ * raw line would leak a filesystem path into the bubble.
+ *
+ * Capture group 2 is the path, which is what `extractMediaPaths` reads.
+ */
+const MACHINE_LINE = /^\[(image|voice|audio|file): (.+)\]$/;
+
+/**
+ * The canonical text to RENDER for a stored message.
+ *
+ * Every transcript surface (chat bubbles desktop + mobile, and the session
+ * viewer desktop + mobile) must go through this, or the same message renders
+ * differently depending on where you read it — the session viewer used to print
+ * the raw stored content and leaked the `[Runtime Context …]` preamble and the
+ * `[image: /path]` machine lines straight into the bubble (spec 126 §B).
+ *
+ * Deliberately a render-time transform: the stored transcript and the
+ * `/api/session` contract are untouched, because the LLM still needs the
+ * runtime context and the backend still needs the machine lines to resolve
+ * attachments.
+ *
+ * Media extraction must keep reading the RAW content, not this — the machine
+ * lines it looks for are exactly what this removes.
+ */
+export function cleanRenderedContent(content: string): string {
+  if (!content) return "";
+  return stripRuntimeContext(content)
+    .split("\n")
+    .filter((line) => !MACHINE_LINE.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
+/** Pull media paths out of a stored message's machine lines. */
+export function extractMediaPaths(content: string): string[] {
+  const paths: string[] = [];
+  for (const line of (content || "").split("\n")) {
+    const m = line.trim().match(MACHINE_LINE);
+    if (m) paths.push(m[2]);
+  }
+  return paths;
+}

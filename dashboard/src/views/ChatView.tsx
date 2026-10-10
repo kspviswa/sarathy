@@ -26,7 +26,8 @@ import { toast } from "sonner";
 import { CodeBlock } from "@/components/CodeBlock";
 import { GreetingState, DEFAULT_SUGGESTIONS, type Suggestion } from "@/components/GreetingState";
 import { PresenceIndicator, ReactionChip } from "@/components/Presence";
-import { stripRuntimeContext } from "@/lib/messageText";
+import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
+import { SAFE_REHYPE_PLUGINS, SafeLink } from "@/lib/markdown";
 import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { SlashAutocomplete } from "@/components/CommandPalette";
@@ -239,7 +240,9 @@ function MessageBody({
         <ReactMarkdown
           key={i}
           remarkPlugins={[remarkGfm]}
+          rehypePlugins={SAFE_REHYPE_PLUGINS}
           components={{
+            a: SafeLink,
             code: ({ children, className, ...props }) => {
               const isBlock = className?.startsWith("language-");
               if (isBlock) {
@@ -295,6 +298,7 @@ export function ChatView({
   sessionKey,
   suggestions = DEFAULT_SUGGESTIONS,
   messagesRef,
+  followUpSeed = null,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -315,6 +319,12 @@ export function ChatView({
   sessionKey?: string;
   suggestions?: Suggestion[];
   messagesRef?: RefObject<HTMLDivElement>;
+  /**
+   * Notification text to seed the composer with, from the notification center's
+   * "Reply" action (spec 126 §D). Carries a nonce so replying to the SAME
+   * notification twice re-seeds instead of being swallowed as a no-op change.
+   */
+  followUpSeed?: { text: string; nonce: number } | null;
 }) {
   const [input, setInput] = useState("");
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
@@ -588,6 +598,31 @@ export function ChatView({
     window.getSelection()?.removeAllRanges();
     toast.success("Added to follow-up");
   }, []);
+
+  /**
+   * Seed the composer from a notification-center "Reply" (spec 126 §D).
+   *
+   * The notification lands as a quote chip — the same channel selection-based
+   * quoting already uses — so it travels with the next send as `quotes` and the
+   * model reads it as genuine prior context. Nothing is auto-sent: the chip is
+   * placed, a short stub prompt is prefilled for editing, and the textarea takes
+   * focus so the user can just start typing.
+   *
+   * Keyed on `nonce`, not the text, so replying to the same notification twice
+   * re-seeds rather than being dropped as an unchanged prop.
+   */
+  useEffect(() => {
+    if (!followUpSeed?.text) return;
+    setQuoteChips((chips) =>
+      addQuote(chips, {
+        text: followUpSeed.text,
+        source_message_id: `notification-${followUpSeed.nonce}`,
+        source_role: "assistant",
+      }),
+    );
+    setInput("Replying to this notification — ");
+    textareaRef.current?.focus();
+  }, [followUpSeed?.nonce, followUpSeed?.text]);
 
   const showSlashMenu = /^\/[^\s]*$/.test(input.trim()) && input.trimStart().startsWith("/");
 
@@ -915,23 +950,18 @@ function MessageRow({
     !isUser && ((message.toolHints?.length ?? 0) + (message.thinkingContent?.length ?? 0) > 0);
   const live = !isUser && (streaming || Boolean(message.progress));
 
-  const cleanContent = useMemo(() => {
-    if (!message.content) return "";
-    return stripRuntimeContext(message.content)
-      .split("\n")
-      .filter((line) => !/^\[(image|voice|audio|file): .+\]$/.test(line.trim()))
-      .join("\n")
-      .trim();
-  }, [message.content]);
+  // Shared render-layer cleanup (spec 126 §B): the same text the chat bubble
+  // shows is what the session viewer shows — no preamble, no machine lines.
+  const cleanContent = useMemo(
+    () => cleanRenderedContent(message.content),
+    [message.content],
+  );
 
+  // Reads the RAW content: the machine lines holding these paths are exactly
+  // what cleanRenderedContent strips, so cleaned text could not resolve them.
   const displayMedia = useMemo(() => {
     if (message.media?.length) return message.media;
-    const paths: string[] = [];
-    for (const line of (message.content || "").split("\n")) {
-      const m = line.trim().match(/^\[(image|voice|audio|file): (.+)\]$/);
-      if (m) paths.push(m[2]);
-    }
-    return paths;
+    return extractMediaPaths(message.content);
   }, [message.media, message.content]);
 
   return (

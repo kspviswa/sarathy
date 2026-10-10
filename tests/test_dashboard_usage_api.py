@@ -309,7 +309,11 @@ class TestSessionFooterEpoch(AioHTTPTestCase):
         )
         assert resp.status == 200
         before = await resp.json()
-        assert before["tokens"] == 1200
+        # Completion tokens, matching Telegram's footer semantics (spec §E) —
+        # not prompt + completion (1200).
+        assert before["tokens"] == 200
+        # 200 completion tokens over 0.5s.
+        assert before["tokensPerSec"] == 400.0
 
         resp = await self.client.request(
             "POST", "/api/session/new", json={"key": key}, headers=self._auth_headers()

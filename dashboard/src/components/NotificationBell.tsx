@@ -20,6 +20,7 @@ export function NotificationBell({
   onMarkAllRead,
   onMarkRead,
   onNavigate,
+  onReply,
   notificationsEnabled = true,
   onNotificationsEnabledChange,
   className,
@@ -31,6 +32,8 @@ export function NotificationBell({
   onMarkAllRead: () => void;
   onMarkRead: (id: string) => void;
   onNavigate: (tab: string) => void;
+  /** Forwarded to the panel's per-item Reply action. */
+  onReply?: (notification: AppNotification) => void;
   /** Forwarded to the panel's secondary enable/disable switch. */
   notificationsEnabled?: boolean;
   onNotificationsEnabledChange?: (enabled: boolean) => void;
@@ -73,6 +76,7 @@ export function NotificationBell({
           onMarkAllRead={onMarkAllRead}
           onMarkRead={onMarkRead}
           onNavigate={onNavigate}
+          onReply={onReply}
           notificationsEnabled={notificationsEnabled}
           onNotificationsEnabledChange={onNotificationsEnabledChange}
         />

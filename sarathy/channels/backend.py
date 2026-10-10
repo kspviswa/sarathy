@@ -28,6 +28,7 @@ from sarathy.config.schema import BackendConfig
 from sarathy.core.notify import (
     DASHBOARD_CHANNEL,
     TG_LIVE_CHAT_ID,
+    dashboard_target,
     normalize_targets,
     notify_targets_to_json,
 )
@@ -64,7 +65,9 @@ def resolve_escalate_targets(
     return [("telegram", TG_LIVE_CHAT_ID)] if fallback_to_live else []
 
 
-def escalation_metadata(channel: str, *, title: str | None = None) -> dict[str, Any]:
+def escalation_metadata(
+    channel: str, *, title: str | None = None, tab: str = "jobs"
+) -> dict[str, Any]:
     """Metadata for one escalated copy of a backend reply.
 
     Telegram targets get a plain chat message, exactly as before. The dashboard
@@ -72,11 +75,14 @@ def escalation_metadata(channel: str, *, title: str | None = None) -> dict[str, 
     in-app notification (bell badge + notification center) instead of dumping
     the relay output into the chat transcript — the same escalation the user
     would get on Telegram, in the form their surface understands.
+
+    ``tab`` is the dashboard view the notification deep-links to; it defaults to
+    the jobs view, which is where backend escalations belong.
     """
     metadata: dict[str, Any] = {"_progress": False, "_tool_hint": False}
     if channel == DASHBOARD_CHANNEL:
         metadata["notify"] = True
-        metadata["tab"] = "jobs"
+        metadata["tab"] = tab
         if title:
             metadata["notify_title"] = title
     return metadata
@@ -435,6 +441,7 @@ class BackendChannel(BaseChannel):
             while self._running:
                 try:
                     for event in self._poll_new_events():
+                        await self._publish_event_ping(event)
                         msg = self._tail_event_to_inbound(event)
                         if msg is not None:
                             await self.bus.publish_inbound(msg)
@@ -444,6 +451,80 @@ class BackendChannel(BaseChannel):
                 await asyncio.sleep(self._poll_interval)
         except asyncio.CancelledError:
             raise
+
+    # ------------------------------------------------------------------ pings
+
+    def _event_ping(self, event: dict) -> tuple[str, str] | None:
+        """Extract ``(title, html)`` from an event's ping payload, or None.
+
+        ``jobctl`` writes the monitor's human-facing ping — same bold header,
+        message and dashboard deep link it sends to Telegram — into the event
+        payload as ``notify_html`` (spec §C). Keeping it on the event row means
+        the dashboard gets the same content Telegram already gets, with no new
+        transport and no dependency on what the agent decides to say.
+        """
+        payload = event.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        if not isinstance(payload, dict):
+            return None
+
+        html = payload.get("notify_html")
+        if not isinstance(html, str) or not html.strip():
+            return None
+
+        job_id = event.get("job_id")
+        title = payload.get("notify_title") or f"Job {job_id}"
+        return str(title), html
+
+    async def _publish_event_ping(self, event: dict) -> None:
+        """Relay one job event's ping to the dashboard as an in-app notification.
+
+        Deliberately DASHBOARD-ONLY: ``jobctl`` already delivers this exact ping
+        to Telegram directly via ``send_tg()``, so escalating it again here would
+        double-ping Viswa (the flood job 116 removed). The dashboard is the
+        surface that had none, so this fills exactly that gap.
+
+        Fired independently of ``tail_event_types`` — that filter decides which
+        events WAKE THE AGENT, and ``completed`` is not in the default set. A
+        notification must not be gated on whether an LLM turn is worth running.
+        """
+        ping = self._event_ping(event)
+        if ping is None:
+            return
+        title, html = ping
+
+        payload = event.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        targets = [
+            t
+            for t in resolve_escalate_targets(
+                (payload or {}).get("escalate_to"), fallback_to_live=False
+            )
+            if t[0] == DASHBOARD_CHANNEL
+        ] or [dashboard_target()]
+
+        for channel, chat_id in targets:
+            try:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=channel,
+                        chat_id=chat_id,
+                        content=html,
+                        metadata=escalation_metadata(
+                            channel, title=title, tab="jobs"
+                        ),
+                    )
+                )
+            except Exception as e:
+                logger.warning("Job {} ping to {} failed: {}", event.get("job_id"), channel, e)
 
     # ------------------------------------------------------------------ send
 

@@ -1,9 +1,12 @@
-import { BellRing, CheckCheck, X } from "lucide-react";
+import { BellRing, CheckCheck, CornerDownRight, X } from "lucide-react";
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { SAFE_REHYPE_PLUGINS, SafeLink } from "@/lib/markdown";
 import { relativeTime } from "@/lib/relativeTime";
 import type { AppNotification } from "@/lib/useNotifications";
 import { cn } from "@/lib/utils";
@@ -26,6 +29,18 @@ import { cn } from "@/lib/utils";
  * the top bar that hosts the bell has a `backdrop-filter`, which makes it a
  * containing block for fixed descendants — without the portal the panel would
  * be clipped to the header instead of running the full height of the viewport.
+ *
+ * Items show the FULL message (spec 126 §D). They used to `truncate` the title
+ * and `line-clamp-2` the body, so a long job ping was unreadable with no way to
+ * reach the rest; the title now wraps, the body is unclamped, and the list
+ * scrolls within the panel. Body text goes through the same sanitized markdown
+ * pipeline as chat bubbles, so a job ping's bold header and deep link render
+ * here exactly as they do on Telegram.
+ *
+ * Each item also offers "Reply", which starts a NEW session seeded with the
+ * notification as prior context. Tapping the body keeps the pre-existing
+ * mark-read + navigate behavior — the two are separate controls, so a stray tap
+ * never silently throws away the current conversation.
  */
 export function NotificationCenter({
   notifications,
@@ -35,6 +50,7 @@ export function NotificationCenter({
   onMarkAllRead,
   onMarkRead,
   onNavigate,
+  onReply,
   notificationsEnabled = true,
   onNotificationsEnabledChange,
   className,
@@ -46,6 +62,8 @@ export function NotificationCenter({
   onMarkAllRead: () => void;
   onMarkRead: (id: string) => void;
   onNavigate: (tab: string) => void;
+  /** Start a new chat seeded with this notification as prior context. */
+  onReply?: (notification: AppNotification) => void;
   /** Present when the caller owns the single on/off notification control. */
   notificationsEnabled?: boolean;
   onNotificationsEnabledChange?: (enabled: boolean) => void;
@@ -140,49 +158,106 @@ export function NotificationCenter({
               {notifications.map((n) => {
                 const unread = unreadIds.includes(n.id);
                 return (
-                  <li key={n.id} className="border-b border-border/60 last:border-b-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onMarkRead(n.id);
-                        onOpenChange(false);
-                        if (n.tab) onNavigate(n.tab);
-                      }}
-                      data-testid="notifications-item"
-                      data-unread={unread ? "true" : "false"}
-                      className={cn(
-                        "flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left transition-colors hover:bg-accent",
-                        unread && "bg-accent/40",
-                      )}
-                    >
-                      <span className="flex w-full items-center gap-2">
-                        {unread && (
-                          <span
-                            className="size-1.5 shrink-0 rounded-full bg-primary"
-                            aria-hidden="true"
-                          />
+                  <li
+                    key={n.id}
+                    className="border-b border-border/60 last:border-b-0"
+                    data-testid="notifications-row"
+                  >
+                    <div className="flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onMarkRead(n.id);
+                          onOpenChange(false);
+                          if (n.tab) onNavigate(n.tab);
+                        }}
+                        data-testid="notifications-item"
+                        data-unread={unread ? "true" : "false"}
+                        className={cn(
+                          "flex w-full flex-col items-start gap-0.5 text-left transition-colors hover:bg-accent",
+                          unread && "bg-accent/40",
                         )}
-                        <span
-                          className={cn(
-                            "min-w-0 flex-1 truncate text-sm",
-                            unread ? "font-semibold" : "font-medium",
+                      >
+                        {/* Title wraps — no `truncate`: a long header must be
+                            fully readable, with the timestamp beside it. */}
+                        <span className="flex w-full items-start gap-2">
+                          {unread && (
+                            <span
+                              className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary"
+                              aria-hidden="true"
+                            />
                           )}
+                          <span
+                            className={cn(
+                              "min-w-0 flex-1 break-words text-sm",
+                              unread ? "font-semibold" : "font-medium",
+                            )}
+                            data-testid="notifications-title"
+                          >
+                            {n.title}
+                          </span>
+                          <span
+                            className="shrink-0 pt-0.5 text-[11px] text-muted-foreground tabular-nums"
+                            data-testid="notifications-time"
+                          >
+                            {relativeTime(n.timestamp)}
+                          </span>
+                        </span>
+                        {/* Full body — no `line-clamp-2`. Markdown + a
+                            sanitized HTML subset, so a job ping's <b> and
+                            deep link render instead of showing as source. */}
+                        {n.body && (
+                          <div
+                            className="w-full break-words text-xs text-muted-foreground [&_a]:underline"
+                            data-testid="notifications-body"
+                          >
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              rehypePlugins={SAFE_REHYPE_PLUGINS}
+                              components={{
+                                a: ({ children, href, ...props }) => (
+                                  <SafeLink
+                                    {...props}
+                                    href={href}
+                                    onClick={(e) => {
+                                      // The link is the notification's own deep
+                                      // link: open it without also closing the
+                                      // panel or marking the item navigated.
+                                      e.stopPropagation();
+                                    }}
+                                  >
+                                    {children}
+                                  </SafeLink>
+                                ),
+                                p: ({ children }) => (
+                                  <p className="mb-1 last:mb-0">{children}</p>
+                                ),
+                              }}
+                            >
+                              {n.body}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </button>
+
+                      {onReply && (
+                        <button
+                          type="button"
+                          onClick={() => onReply(n)}
+                          data-testid="notifications-reply"
+                          className={cn(
+                            "mt-1.5 inline-flex items-center gap-1 rounded-md px-2 py-1",
+                            "text-[11px] font-medium text-muted-foreground",
+                            "transition-colors hover:bg-accent hover:text-foreground",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          )}
+                          title="Start a new chat seeded with this notification"
                         >
-                          {n.title}
-                        </span>
-                        <span
-                          className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
-                          data-testid="notifications-time"
-                        >
-                          {relativeTime(n.timestamp)}
-                        </span>
-                      </span>
-                      {n.body && (
-                        <span className="line-clamp-2 w-full text-xs text-muted-foreground">
-                          {n.body}
-                        </span>
+                          <CornerDownRight className="size-3" aria-hidden="true" />
+                          Reply
+                        </button>
                       )}
-                    </button>
+                    </div>
                   </li>
                 );
               })}

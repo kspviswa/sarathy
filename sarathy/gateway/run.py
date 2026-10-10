@@ -81,7 +81,20 @@ async def publish_restart_status(bus, config, flag_path=None) -> None:
         for channel, chat_id in targets:
             try:
                 await bus.publish_outbound(
-                    OutboundMessage(channel=channel, chat_id=chat_id, content=body)
+                    OutboundMessage(
+                        channel=channel,
+                        chat_id=chat_id,
+                        content=body,
+                        # Surface the boot ping in the in-app notification center
+                        # (bell + center) instead of as a stray chat bubble. The
+                        # dashboard channel buffers this frame while the browser
+                        # is still reconnecting and flushes it on connect.
+                        metadata={
+                            "notify": True,
+                            "tab": "status",
+                            "notify_title": "Sarathy restarted",
+                        },
+                    )
                 )
             except Exception as e:
                 # One dead target must not swallow the ping for the others.

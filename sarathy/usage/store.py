@@ -386,6 +386,17 @@ class UsageStore:
         Powers the dashboard's per-turn footer (tokens / tokens-per-sec), which
         mirrors what ``format_usage_footer`` renders for Telegram from the same
         underlying rows. Never raises — telemetry must not break a UI render.
+
+        ``tokens_per_sec`` uses the SAME derivation as AgentLoop's stats: a row is
+        one LLM call, and AgentLoop accumulates ``completion_tokens`` over
+        ``elapsed`` seconds for every call in the turn (see ``_process_message``
+        and the ``stats`` dict it returns). Dividing by ``total_tokens`` — i.e.
+        prompt + completion — measured a 70k-token prompt against a single
+        call's wall time and produced nonsense like 38 000 tps (spec §E).
+
+        Telegram sums the per-call rates across the whole turn; this reports the
+        most recent call's rate, so the two are not summed identically but the
+        numerator/denominator semantics are identical.
         """
         try:
             with self._get_conn() as conn:
@@ -403,13 +414,13 @@ class UsageStore:
                 if row is None:
                     return None
                 event = {k: row[k] for k in row.keys()}
-                total = int(event.get("total_tokens") or 0)
+                # Completion tokens only — the generated half, which is what
+                # "tokens per second" is a meaningful rate for.
+                completion = int(event.get("completion_tokens") or 0)
                 duration_ms = event.get("duration_ms")
-                # Same derivation as AgentLoop's tokens_per_sec, so the dashboard
-                # and Telegram report the same number for the same turn.
                 event["tokens_per_sec"] = (
-                    total / (float(duration_ms) / 1000.0)
-                    if total > 0 and duration_ms and float(duration_ms) > 0
+                    completion / (float(duration_ms) / 1000.0)
+                    if completion > 0 and duration_ms and float(duration_ms) > 0
                     else 0.0
                 )
                 return event

@@ -17,9 +17,18 @@
  * every pure-text reply and any reply whose only fenced code is a normal
  * language block — renders as ordinary markdown, exactly as before openUI
  * existed. The UI path can never turn a text reply into a blank bubble: the
- * lazy renderer falls back to showing the raw block source if parsing fails.
+ * lazy renderer is wrapped in {@link UIBlockBoundary}, so a chunk that fails to
+ * load or a widget that throws while rendering falls back to showing the raw
+ * block source — it never propagates up and unmounts the app.
  */
-import { lazy, Suspense, type ComponentType } from "react";
+import {
+  Component,
+  lazy,
+  Suspense,
+  type ComponentType,
+  type LazyExoticComponent,
+  type ReactNode,
+} from "react";
 
 /** Action types a rendered block can raise. Mirrors the library enum. */
 export const CONTINUE_CONVERSATION = "continue_conversation";
@@ -101,19 +110,94 @@ export function hasOpenUIBlock(text: string | null | undefined): boolean {
   return false;
 }
 
-const LazyOpenUIBlock = lazy(
+/**
+ * Retry a dynamic import before giving up.
+ *
+ * A failed `import()` is the single most common cause of the blank-screen
+ * report: the chunk hash changes on every redeploy, and a client holding a
+ * stale bundle (or a phone on a flaky network) can fail to fetch the new one.
+ * One bounded retry rides out a transient blip; a permanent 404 still throws so
+ * the boundary below can degrade instead of killing the app.
+ */
+function lazyWithRetry(
+  importer: () => Promise<{ default: ComponentType<UIBlockProps> }>,
+  retries = 1,
+  delayMs = 350,
+): LazyExoticComponent<ComponentType<UIBlockProps>> {
+  return lazy(async () => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await importer();
+      } catch (err) {
+        if (attempt >= retries) throw err;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  });
+}
+
+const LazyOpenUIBlock = lazyWithRetry(
   () => import("./openuiRenderer") as Promise<{ default: ComponentType<UIBlockProps> }>,
 );
 
 /**
+ * Per-message error boundary around the openUI renderer.
+ *
+ * A widget that fails to load or throws while rendering must NEVER take the
+ * conversation down with it — an uncaught render error unmounts the whole React
+ * tree (blank screen). Instead we fall back to showing the block's raw source,
+ * exactly as an unparseable block does, so the message still reads.
+ *
+ * The boundary resets when `source` changes: a message that failed mid-stream
+ * gets another chance once more of it arrives.
+ */
+class UIBlockBoundary extends Component<
+  { children: ReactNode; source: string },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error): void {
+    console.warn("[openui] widget failed to render; showing source instead", error);
+  }
+
+  componentDidUpdate(prev: { source: string }): void {
+    if (this.state.failed && prev.source !== this.props.source) {
+      this.setState({ failed: false });
+    }
+  }
+
+  render(): ReactNode {
+    if (!this.state.failed) return this.props.children;
+    const raw = extractUIBlocks(this.props.source) || this.props.source;
+    if (!raw) return null;
+    return (
+      <pre
+        data-testid="ui-block-raw"
+        className="mt-1 overflow-x-auto rounded-lg border border-border bg-muted/40 p-3 text-[11px] text-muted-foreground"
+      >
+        {raw}
+      </pre>
+    );
+  }
+}
+
+/**
  * Render a UI block. The heavy renderer is fetched on first use; until it
  * arrives (or if the chunk fails to load) nothing extra is shown, which keeps
- * a text reply intact.
+ * a text reply intact. Any failure inside — load or render — degrades to the
+ * block's raw source via {@link UIBlockBoundary} rather than crashing the app.
  */
 export function UIBlock(props: UIBlockProps) {
   return (
-    <Suspense fallback={null}>
-      <LazyOpenUIBlock {...props} />
-    </Suspense>
+    <UIBlockBoundary source={props.source}>
+      <Suspense fallback={null}>
+        <LazyOpenUIBlock {...props} />
+      </Suspense>
+    </UIBlockBoundary>
   );
 }

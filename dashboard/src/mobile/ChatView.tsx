@@ -557,6 +557,11 @@ function MobileMessage({
     return extractMediaPaths(message.content);
   }, [message.media, message.content]);
 
+  // A reply carrying a widget needs room: on a 390px phone the content-sized
+  // bubble is ~186px, which crushes charts and tables. Widen only these
+  // bubbles (desktop MessageRow does the same) so ordinary chat stays compact.
+  const hasUI = useMemo(() => hasOpenUIBlock(cleanContent), [cleanContent]);
+
   const showThinking =
     !isUser && !isNotice && (message.toolHints?.length || 0) + (message.thinkingContent?.length || 0) > 0;
   const isStreaming = message.progress && !isNotice && (message.content?.length ?? 0) === 0;
@@ -566,6 +571,7 @@ function MobileMessage({
       <div
         className={cn(
           "max-w-[88%] rounded-2xl px-4 py-2.5 text-base leading-relaxed",
+          hasUI && "w-full",
           isUser
             ? "bg-primary text-primary-foreground"
             : isNotice

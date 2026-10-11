@@ -155,7 +155,7 @@ export default function OpenUIBlock({
   const tokens = brandTokens();
   return (
     <OpenUIThemeProvider mode={resolved} lightTheme={tokens} darkTheme={tokens} cssSelector="body">
-      <div data-testid="ui-block">
+      <div className="w-full" data-testid="ui-block">
         <Renderer
           response={extractUIBlocks(source) || source}
           library={openuiLibrary}

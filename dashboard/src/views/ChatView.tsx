@@ -974,6 +974,11 @@ function MessageRow({
     [message.content],
   );
 
+  // A reply carrying a widget needs room: the bubble is otherwise sized to its
+  // content (~186px), which squashes charts and tables into an unreadable
+  // column. Widening only these bubbles keeps ordinary chat bubbles compact.
+  const hasUI = useMemo(() => hasOpenUIBlock(cleanContent), [cleanContent]);
+
   // Reads the RAW content: the machine lines holding these paths are exactly
   // what cleanRenderedContent strips, so cleaned text could not resolve them.
   const displayMedia = useMemo(() => {
@@ -986,6 +991,7 @@ function MessageRow({
       <div
         className={cn(
           "max-w-[85%] rounded-2xl px-4 text-[15px] leading-relaxed",
+          hasUI && "w-full",
           isUser
             ? "bg-primary text-primary-foreground py-2"
             : isNotice

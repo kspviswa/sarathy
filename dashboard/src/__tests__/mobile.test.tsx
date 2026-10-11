@@ -562,3 +562,48 @@ describe("Mobile — notification Reply quotes into the CURRENT session", () => 
     expect(chip).toHaveTextContent("Job 126 completed");
   });
 });
+
+/**
+ * Regression: the thinking strip's live state must track the *turn*, not just
+ * `message.progress`. Reasoning / tool-hint frames never set `progress`, so
+ * keying off `progress` alone made mobile render a finished "Thought for 0s ✓"
+ * while the turn was still reasoning — desktop (which uses `streaming ||
+ * progress`) showed the live "Thinking ⟳". This locks the parity.
+ */
+describe("Mobile — thinking strip tracks the live turn (parity with desktop)", () => {
+  const props = {
+    onSend: vi.fn().mockResolvedValue(undefined),
+    onStop: vi.fn(),
+    onNewChat: vi.fn(),
+  };
+  const threaded = {
+    role: "assistant" as const,
+    content: "",
+    progress: false,
+    thinkingContent: "Let me reason about this.",
+    toolHints: ["read_file(dashboard/src/App.tsx)"],
+  };
+
+  it("shows the live 'Thinking' state (not a finished 'Thought for') while streaming", () => {
+    render(<MobileChatView {...props} streaming messages={[threaded]} />);
+
+    const strip = screen.getByRole("button", { name: /thinking/i });
+    expect(strip).toHaveTextContent(/thinking/i);
+    expect(strip).not.toHaveTextContent(/thought for/i);
+    // Per-message live indicator, matching the desktop MessageRow.
+    expect(screen.getByTestId("reaction-chip")).toHaveAttribute("data-state", "working");
+  });
+
+  it("collapses to 'Thought for …' once the turn finishes", () => {
+    render(
+      <MobileChatView
+        {...props}
+        streaming={false}
+        messages={[{ ...threaded, content: "Here is the answer." }]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /thought for/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("reaction-chip")).toBeNull();
+  });
+});

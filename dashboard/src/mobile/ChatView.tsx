@@ -1,4 +1,6 @@
 import {
+  Check,
+  Copy,
   Loader2,
   Mic,
   Paperclip,
@@ -17,6 +19,7 @@ import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/Quote
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CodeBlock } from "@/components/CodeBlock";
+import { ReactionChip } from "@/components/Presence";
 import { SlashAutocomplete } from "@/components/CommandPalette";
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { UsageFooter } from "@/components/UsageFooter";
@@ -368,11 +371,23 @@ export function ChatView({
             <MobileMessage
               key={i}
               message={m}
+              streaming={streaming}
               onOpenFile={onOpenFile}
               onRegenerate={m.role === "assistant" && !streaming ? onRegenerate : undefined}
               onSend={(text) => void onSend(text, undefined)}
             />
           ))}
+
+          {/* Parity with the desktop ChatView: a live "responding" strip while
+              the turn is running and the last message is still the user's. */}
+          {streaming &&
+            messages.length > 0 &&
+            messages[messages.length - 1].role === "user" && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <ReactionChip state="working" />
+                <span>Sarathy is responding…</span>
+              </div>
+            )}
         </div>
       </div>
 
@@ -533,11 +548,13 @@ export function ChatView({
 
 function MobileMessage({
   message,
+  streaming,
   onOpenFile,
   onRegenerate,
   onSend,
 }: {
   message: ChatMessage;
+  streaming: boolean;
   onOpenFile?: (path: string) => void;
   onRegenerate?: () => void;
   onSend?: (message: string) => void;
@@ -549,6 +566,13 @@ function MobileMessage({
     () => cleanRenderedContent(message.content),
     [message.content],
   );
+
+  const [copied, setCopied] = useState(false);
+  const copyMessage = useCallback(() => {
+    void navigator.clipboard.writeText(cleanContent);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [cleanContent]);
 
   // Reads the RAW content: the machine lines holding these paths are exactly
   // what cleanRenderedContent strips.
@@ -564,7 +588,13 @@ function MobileMessage({
 
   const showThinking =
     !isUser && !isNotice && (message.toolHints?.length || 0) + (message.thinkingContent?.length || 0) > 0;
-  const isStreaming = message.progress && !isNotice && (message.content?.length ?? 0) === 0;
+  // Parity with the desktop MessageRow. The thinking strip's live state must
+  // track the *turn*, not just `message.progress`: reasoning/tool-hint frames
+  // never set `progress`, so keying off `progress` alone made mobile claim a
+  // finished "Thought for 0s ✓" while the turn was still reasoning, whereas
+  // desktop shows the live "Thinking ⟳". `streaming` is the App-level turn flag.
+  const live = !isUser && !isNotice && (streaming || Boolean(message.progress));
+  const hasContent = (message.content?.length ?? 0) > 0;
 
   return (
     <div className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}>
@@ -584,7 +614,7 @@ function MobileMessage({
           <ThinkingSection
             toolHints={message.toolHints || []}
             thinkingContent={message.thinkingContent || ""}
-            done={!message.progress}
+            done={!live}
             onOpenFile={onOpenFile}
           />
         )}
@@ -620,26 +650,39 @@ function MobileMessage({
         )}
         {isUser ? (
           <div className="whitespace-pre-wrap break-words">{cleanContent}</div>
-        ) : isStreaming ? (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
-            thinking…
-          </div>
-        ) : cleanContent ? (
+        ) : hasContent ? (
           <AssistantBody content={cleanContent} onOpenFile={onOpenFile} streaming={message.progress} onSend={onSend} />
-        ) : message.progress ? (
+        ) : live ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
             thinking…
           </div>
         ) : null}
-        {!isUser && !isNotice && onRegenerate && (
-          <button
-            onClick={onRegenerate}
-            className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground"
-          >
-            <RotateCcw className="size-3.5" /> Regenerate
-          </button>
+        {!isUser && !isNotice && live && (
+          <div className="mt-1.5">
+            <ReactionChip state="working" />
+          </div>
+        )}
+        {!isUser && !isNotice && hasContent && (
+          <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
+            <button
+              onClick={copyMessage}
+              className="inline-flex items-center gap-1.5 active:text-foreground"
+              title="Copy"
+            >
+              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+            {onRegenerate && (
+              <button
+                onClick={onRegenerate}
+                className="inline-flex items-center gap-1.5 active:text-foreground"
+                title="Regenerate"
+              >
+                <RotateCcw className="size-3.5" /> Regenerate
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

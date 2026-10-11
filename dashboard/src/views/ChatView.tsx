@@ -306,6 +306,7 @@ export function ChatView({
   suggestions = DEFAULT_SUGGESTIONS,
   messagesRef,
   followUpSeed = null,
+  onFollowUpSeedConsumed,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -332,6 +333,8 @@ export function ChatView({
    * notification twice re-seeds instead of being swallowed as a no-op change.
    */
   followUpSeed?: { text: string; nonce: number } | null;
+  /** Called once a `followUpSeed` has been applied, so the owner can clear it. */
+  onFollowUpSeedConsumed?: () => void;
 }) {
   const [input, setInput] = useState("");
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
@@ -619,7 +622,9 @@ export function ChatView({
    * empty. Nothing is auto-sent; the textarea takes focus so the user can type.
    *
    * Keyed on `nonce`, not the text, so replying to the same notification twice
-   * re-seeds rather than being dropped as an unchanged prop.
+   * re-seeds rather than being dropped as an unchanged prop. The seed is then
+   * CONSUMED (the owner clears it) so that leaving the chat section and coming
+   * back does not re-inject a chip the user has already removed.
    */
   useEffect(() => {
     if (!followUpSeed?.text) return;
@@ -632,7 +637,8 @@ export function ChatView({
     );
     setInput((prev) => prev.trim() || "Replying to this notification — ");
     textareaRef.current?.focus();
-  }, [followUpSeed?.nonce, followUpSeed?.text]);
+    onFollowUpSeedConsumed?.();
+  }, [followUpSeed?.nonce, followUpSeed?.text, onFollowUpSeedConsumed]);
 
   const showSlashMenu = /^\/[^\s]*$/.test(input.trim()) && input.trimStart().startsWith("/");
 

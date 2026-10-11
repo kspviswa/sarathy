@@ -65,6 +65,24 @@ vi.mock("@/components/ui/tooltip", () => ({
 import MobileApp from "@/mobile/App";
 import { ChatView as MobileChatView } from "@/mobile/ChatView";
 import { api } from "@/lib/api";
+import { useNotifications } from "@/lib/useNotifications";
+
+vi.mock("@/lib/useNotifications", () => ({
+  useNotifications: vi.fn().mockReturnValue({
+    notifications: [],
+    unreadCount: 0,
+    unreadIds: [],
+    isUnread: () => false,
+    markAllRead: vi.fn(),
+    markRead: vi.fn(),
+    remove: vi.fn(),
+    clearAll: vi.fn(),
+  }),
+}));
+
+vi.mock("@/lib/useNotificationPref", () => ({
+  useNotificationPref: vi.fn(() => ({ enabled: true, setEnabled: vi.fn() })),
+}));
 
 // Injectable history: lets tests feed messages directly into the mobile chat.
 vi.mock("@/lib/useLastSession", () => ({
@@ -495,3 +513,47 @@ describe("Mobile quote-and-ask (parity with desktop)", () => {
   });
 });
 
+describe("Mobile — notification Reply quotes into the CURRENT session", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not archive the session; quotes the item into the open chat", async () => {
+    vi.mocked(useNotifications).mockReturnValue({
+      notifications: [
+        {
+          id: "n1",
+          title: "Job 126 completed",
+          body: "All suites green.",
+          tab: "jobs",
+          timestamp: "2026-10-11T00:00:00.000Z",
+        },
+      ],
+      unreadCount: 1,
+      unreadIds: ["n1"],
+      isUnread: () => true,
+      markAllRead: vi.fn(),
+      markRead: vi.fn(),
+      remove: vi.fn(),
+      clearAll: vi.fn(),
+    } as never);
+
+    render(<MobileApp />);
+    await screen.findByTestId("mobile-tabbar");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("notifications-bell"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("notifications-reply"));
+      await Promise.resolve();
+    });
+
+    // The whole point (parity with desktop): a turn in the live session, never
+    // a fresh session — replying must not throw away the open conversation.
+    expect(api.sessionNew).not.toHaveBeenCalled();
+    const chip = await screen.findByTestId("quote-chip");
+    expect(chip).toHaveTextContent("Job 126 completed");
+  });
+});

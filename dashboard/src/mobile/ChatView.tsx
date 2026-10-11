@@ -5,9 +5,11 @@ import {
   Mic,
   Paperclip,
   Plus,
+  Reply as ReplyIcon,
   RotateCcw,
   Send,
   Square,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -144,6 +146,10 @@ export function ChatView({
   const [input, setInput] = useState("");
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
   const [quoteChips, setQuoteChips] = useState<QuoteChip[]>([]);
+  // Reply-to-message (parity with the desktop ChatView's `replyToMsg`): the
+  // "↩ Reply" action on any message attaches that whole message to the next
+  // send. Distinct from quote-and-ask, which attaches a selected snippet.
+  const [replyToMsg, setReplyToMsg] = useState<ChatMessage | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -319,15 +325,18 @@ export function ChatView({
       return;
     }
     const quotes = buildQuotesPayload(quoteChips);
+    const replyTo = replyToMsg?.messageId ?? null;
+    const replyToContent = replyToMsg?.content;
     setInput("");
     setPendingMedia([]);
+    setReplyToMsg(null);
     setQuoteChips(clearQuotes());
     try {
       await onSend(
         content,
         mediaPaths.length ? mediaPaths : undefined,
-        undefined,
-        undefined,
+        replyTo,
+        replyToContent,
         quotes.length ? quotes : undefined,
       );
     } catch (err) {
@@ -374,6 +383,7 @@ export function ChatView({
               streaming={streaming}
               onOpenFile={onOpenFile}
               onRegenerate={m.role === "assistant" && !streaming ? onRegenerate : undefined}
+              onReply={!streaming ? () => setReplyToMsg(m) : undefined}
               onSend={(text) => void onSend(text, undefined)}
             />
           ))}
@@ -412,6 +422,18 @@ export function ChatView({
           chips={quoteChips}
           onRemove={(id) => setQuoteChips((c) => removeQuote(c, id))}
         />
+        {replyToMsg && (
+          <div
+            className="mb-2 flex items-start gap-2 rounded-xl border border-border bg-muted/30 p-2 text-xs text-muted-foreground"
+            data-testid="reply-preview"
+          >
+            <span className="mt-0.5 shrink-0 opacity-60">↩</span>
+            <span className="flex-1 truncate">{replyToMsg.content}</span>
+            <button onClick={() => setReplyToMsg(null)} aria-label="Cancel reply">
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
         {pendingMedia.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
             {pendingMedia.map((pm) => (
@@ -551,12 +573,14 @@ function MobileMessage({
   streaming,
   onOpenFile,
   onRegenerate,
+  onReply,
   onSend,
 }: {
   message: ChatMessage;
   streaming: boolean;
   onOpenFile?: (path: string) => void;
   onRegenerate?: () => void;
+  onReply?: () => void;
   onSend?: (message: string) => void;
 }) {
   const isUser = message.role === "user";
@@ -663,7 +687,7 @@ function MobileMessage({
             <ReactionChip state="working" />
           </div>
         )}
-        {!isUser && !isNotice && hasContent && (
+        {!isNotice && hasContent && (
           <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
             <button
               onClick={copyMessage}
@@ -673,13 +697,23 @@ function MobileMessage({
               {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
               {copied ? "Copied" : "Copy"}
             </button>
-            {onRegenerate && (
+            {!isUser && onRegenerate && (
               <button
                 onClick={onRegenerate}
                 className="inline-flex items-center gap-1.5 active:text-foreground"
                 title="Regenerate"
               >
                 <RotateCcw className="size-3.5" /> Regenerate
+              </button>
+            )}
+            {onReply && (
+              <button
+                onClick={onReply}
+                className="inline-flex items-center gap-1.5 active:text-foreground"
+                title="Reply"
+                data-testid="message-reply"
+              >
+                <ReplyIcon className="size-3.5" /> Reply
               </button>
             )}
           </div>

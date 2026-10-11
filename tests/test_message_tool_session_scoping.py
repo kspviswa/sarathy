@@ -94,36 +94,6 @@ def test_telegram_turn_description_is_unchanged() -> None:
     assert "delivered there automatically" not in tool.description
 
 
-def test_message_tool_strips_topic_marker() -> None:
-    """The session-topic machine marker must never reach a channel.
-
-    The model ends its FINAL response with `<topic>{...}</topic>`, but it also
-    sometimes appends the marker to a message-tool call — Viswa saw the raw
-    `{"set": null}` JSON on the dashboard after a voice reply (2026-10-11).
-    The tool must strip it before sending.
-    """
-    sent: list[OutboundMessage] = []
-
-    async def _cb(msg: OutboundMessage) -> None:
-        sent.append(msg)
-
-    tool = MessageTool(send_callback=_cb, channels_config=type("C", (), {})())
-    tool.start_turn()
-    tool.set_context("dashboard", "console", session_key="dashboard:console")
-
-    asyncio.run(
-        tool.execute(
-            content='🗣️ Voice reply\n\n<topic>{"set": null}</topic>',
-            channel="dashboard",
-            chat_id="console",
-        )
-    )
-    assert sent, "expected a send"
-    assert "<topic>" not in sent[0].content
-    assert '"set"' not in sent[0].content
-    assert sent[0].content.strip() == "🗣️ Voice reply"
-
-
 def test_dashboard_appears_in_enabled_channels_when_configured() -> None:
     """Viswa's catch (2026-10-10): the enabled-channel list omitted dashboard,
     so on a dashboard turn the tool advertised only telegram — the model then

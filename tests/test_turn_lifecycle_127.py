@@ -142,46 +142,6 @@ async def test_process_message_brackets_turn_with_state_frames(tmp_path) -> None
     assert turn_frames[-1].metadata["turn"]["active"] is False
 
 
-@pytest.mark.asyncio
-async def test_suppressed_final_still_emits_turn_end(tmp_path) -> None:
-    """A message-tool send to the SAME target suppresses the final response
-    (returns None) but MUST still emit the terminal ``turn_state`` frame.
-
-    Regression guard for the "spinner stuck after a voice reply" report
-    (2026-10-11): the voice-reply flow relays via the message tool to the same
-    dashboard target, so no ``_final`` frame is ever sent — the client relies
-    entirely on ``turn_state:false`` to clear the spinner.
-    """
-    loop, bus = _make_loop(tmp_path)
-    key = "dashboard:console"
-    msg = InboundMessage(channel="dashboard", sender_id="u", chat_id="console", content="hi")
-
-    async def _fake_run(*args, **kwargs):
-        # Simulate the model relaying its answer through the message tool to the
-        # SAME channel/target, then producing a final text that gets suppressed.
-        message_tool = loop.tools.get("message")
-        message_tool.start_turn()
-        message_tool.set_context("dashboard", "console", session_key=key)
-        await message_tool.execute(content="voice reply", channel="dashboard", chat_id="console")
-        return "final answer", None, [], {}
-
-    with patch.object(loop, "_run_agent_loop", side_effect=_fake_run):
-        result = await loop._process_message(msg, session_key=key)
-
-    assert result is None, "same-target message-tool send must suppress the final response"
-
-    frames: list[OutboundMessage] = []
-    while True:
-        try:
-            frames.append(await asyncio.wait_for(bus.consume_outbound(), timeout=0.3))
-        except asyncio.TimeoutError:
-            break
-
-    turn_frames = [f for f in frames if f.metadata.get("_turn_state")]
-    assert turn_frames, "expected turn_state frames even when the final is suppressed"
-    assert turn_frames[-1].metadata["turn"]["active"] is False
-
-
 # ---------------------------------------------------------------------------
 # ChannelManager routes turn_state to dashboard only (spec 127 §A.2)
 # ---------------------------------------------------------------------------

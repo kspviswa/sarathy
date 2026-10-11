@@ -1,6 +1,8 @@
 import { Check, ChevronRight, Loader2, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+
+import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 import remarkGfm from "remark-gfm";
 
 import { cn } from "@/lib/utils";
@@ -78,7 +80,9 @@ export function ThinkingSection({
             <div className="text-xs leading-relaxed text-muted-foreground/80">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
+                rehypePlugins={SAFE_REHYPE_PLUGINS}
                 components={{
+                  ...MD_COMPONENTS,
                   code: ({ children, className, ...props }) => {
                     const isBlock = className?.startsWith("language-");
                     if (isBlock) {

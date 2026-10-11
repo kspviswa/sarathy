@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import { SwipeRow } from "@/components/SwipeRow";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { SAFE_REHYPE_PLUGINS, SafeLink } from "@/lib/markdown";
+import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS, SafeLink } from "@/lib/markdown";
 import { relativeTime } from "@/lib/relativeTime";
 import type { AppNotification } from "@/lib/useNotifications";
 import { cn } from "@/lib/utils";
@@ -266,6 +266,7 @@ export function NotificationCenter({
                               remarkPlugins={[remarkGfm]}
                               rehypePlugins={SAFE_REHYPE_PLUGINS}
                               components={{
+                                ...MD_COMPONENTS,
                                 a: ({ children, href, ...props }) => (
                                   <SafeLink
                                     {...props}

@@ -82,6 +82,26 @@ function dropStrayRuntimeContextLines(lines: string[]): string[] {
 const MACHINE_LINE = /^\[(image|voice|audio|file): (.+)\]$/;
 
 /**
+ * The session-topic machine marker the agent appends to its final response:
+ * `<topic>{"set": "..."}</topic>`. It is agent-only metadata — the gateway
+ * parses it to set the session topic — and must never render.
+ *
+ * The message tool sends content verbatim (transport stays dumb; the marker is
+ * legitimate payload), so the CONSUMER strips it here, exactly like the
+ * runtime-context preamble and the machine lines. A voice reply relayed through
+ * the message tool leaked the raw `{"set": null}` JSON into the dashboard
+ * bubble (Viswa, 2026-10-11) because this transform never ran on the marker.
+ */
+const TOPIC_MARKER = /[ \t]*<topic>[\s\S]*?<\/topic>[ \t]*/g;
+
+/** Remove any `<topic>…</topic>` machine markers from rendered content. */
+export function stripTopicMarker(content: string): string {
+  if (!content) return content;
+  if (!content.includes("<topic>")) return content;
+  return content.replace(TOPIC_MARKER, "");
+}
+
+/**
  * The canonical text to RENDER for a stored message.
  *
  * Every transcript surface (chat bubbles desktop + mobile, and the session
@@ -100,7 +120,7 @@ const MACHINE_LINE = /^\[(image|voice|audio|file): (.+)\]$/;
  */
 export function cleanRenderedContent(content: string): string {
   if (!content) return "";
-  return stripRuntimeContext(content)
+  return stripTopicMarker(stripRuntimeContext(content))
     .split("\n")
     .filter((line) => !MACHINE_LINE.test(line.trim()))
     .join("\n")

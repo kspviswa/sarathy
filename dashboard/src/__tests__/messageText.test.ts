@@ -122,6 +122,27 @@ describe("cleanRenderedContent", () => {
     expect(cleanRenderedContent("")).toBe("");
   });
 
+  it("strips the session-topic marker (voice-reply leak, 2026-10-11)", () => {
+    // A voice reply relayed via the message tool arrives as a plain frame whose
+    // content carries the trailing `<topic>` marker — the raw JSON must never
+    // render.
+    expect(cleanRenderedContent('🗣️ Voice reply\n\n<topic>{"set": null}</topic>')).toBe(
+      "🗣️ Voice reply",
+    );
+    expect(
+      cleanRenderedContent('Done, sir.\n\n<topic>{"set": "job 115 completed"}</topic>'),
+    ).toBe("Done, sir.");
+  });
+
+  it("strips a bare topic marker with no surrounding text", () => {
+    expect(cleanRenderedContent('<topic>{"set": null}</topic>')).toBe("");
+  });
+
+  it("leaves text that merely mentions the marker word intact", () => {
+    const msg = "I emit a trailing topic marker line after every reply.";
+    expect(cleanRenderedContent(msg)).toBe(msg);
+  });
+
   it("leaves the stored transcript untouched (LLM still sees the preamble)", () => {
     // The transform is render-only: the same string still contains the header,
     // which is what keeps the model's context intact on reload.

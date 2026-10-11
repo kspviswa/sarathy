@@ -17,6 +17,7 @@ import hmac
 import json
 import secrets
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -188,10 +189,77 @@ class DeviceRegistry:
         return False
 
     def list_devices(self) -> list[dict[str, Any]]:
+        """Return paired devices with secrets stripped.
+
+        ``token_hash`` and ``key_fingerprint`` are never exposed: the former is
+        the credential, the latter would let a reader correlate devices to the
+        pairing key that minted them. Both are omitted entirely (rather than
+        blanked) so a caller cannot accidentally echo them over HTTP.
+        """
         return [
-            {"id": dev_id, **dev, "token_hash": ""}
+            {
+                "id": dev_id,
+                "name": dev.get("name", ""),
+                "created_at": dev.get("created_at"),
+                "last_seen": dev.get("last_seen"),
+                "notifications_enabled": dev.get("notifications_enabled"),
+            }
             for dev_id, dev in self._devices.items()
         ]
+
+    def prune_stale(
+        self, older_than_seconds: int, keep_ids: Iterable[str] | None = None
+    ) -> int:
+        """Remove devices whose ``last_seen`` predates ``older_than_seconds``.
+
+        Args:
+            older_than_seconds: Age threshold; devices seen more recently than
+                ``now - older_than_seconds`` are kept.
+            keep_ids: Device ids that must never be removed even when stale —
+                callers pass the ids of currently connected/authenticated
+                devices so a live client is not pruned out from under itself.
+
+        Returns:
+            The number of devices removed.
+
+        This is the ONLY hard-delete in the registry. It is invoked from the
+        ``sarathy dashboard devices prune`` CLI (dry-run by default); the code
+        path never prunes as a side effect of serving requests.
+        """
+        cutoff = int(time.time()) - int(older_than_seconds)
+        keep = set(keep_ids or ())
+        removed = 0
+        for device_id, dev in list(self._devices.items()):
+            if device_id in keep:
+                continue
+            try:
+                last_seen = int(dev.get("last_seen") or dev.get("created_at") or 0)
+            except (TypeError, ValueError):
+                last_seen = 0
+            if last_seen < cutoff:
+                del self._devices[device_id]
+                removed += 1
+        if removed:
+            self.save()
+        return removed
+
+    def stale_devices(
+        self, older_than_seconds: int, keep_ids: Iterable[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Non-destructively list the devices ``prune_stale`` would remove."""
+        cutoff = int(time.time()) - int(older_than_seconds)
+        keep = set(keep_ids or ())
+        out: list[dict[str, Any]] = []
+        for dev in self.list_devices():
+            if dev["id"] in keep:
+                continue
+            try:
+                last_seen = int(dev.get("last_seen") or dev.get("created_at") or 0)
+            except (TypeError, ValueError):
+                last_seen = 0
+            if last_seen < cutoff:
+                out.append(dev)
+        return out
 
     def get_notification_pref(self, device_id: str) -> bool | None:
         """Return the stored notification preference, or None when unset.

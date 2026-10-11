@@ -2,6 +2,7 @@ import type { Quote } from "./quotes";
 import type { SlashCommand } from "./palette";
 import type {
   ConfigResponse,
+  DevicesResponse,
   JobDetailResponse,
   JobsListResponse,
   MeResponse,
@@ -193,6 +194,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ enabled }),
     }),
+
+  /** Paired-device management (spec 128 §A). Shared by both SPAs. */
+  devices: {
+    list: () => request<DevicesResponse>("/api/devices"),
+    /**
+     * Revoke a paired device. Revoking the *current* device needs `force`
+     * (the backend 409s otherwise, guarding against locking yourself out).
+     */
+    remove: (id: string, force = false) =>
+      request<{ ok: boolean; removed: string }>(
+        `/api/devices/${encodeURIComponent(id)}${force ? "?force=1" : ""}`,
+        { method: "DELETE" },
+      ),
+  },
 
   workspaceTree: () => request<WorkspaceTree>("/api/workspace/tree"),
 

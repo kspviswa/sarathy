@@ -133,6 +133,12 @@ export class DashboardSocket {
           this.notifHandlers.forEach((h) => h(data as NotificationFrame));
           // Emit custom event for views that don't have direct socket access
           window.dispatchEvent(new CustomEvent("sarathy:notification", { detail: data }));
+          // Parked/replayed notifications carry a top-level `seq` (spec 128 §C.4);
+          // acking advances the server cursor so it drops the frame and never
+          // re-delivers it on the next reconnect. Live frames omit `seq`.
+          if (typeof data?.seq === "number" && this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "ack", seq: data.seq }));
+          }
         } else if (data?.type === "message") {
           this.handlers.forEach((h) => h(data as OutboundMessage));
         }

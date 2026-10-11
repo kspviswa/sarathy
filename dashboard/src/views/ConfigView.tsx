@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { DevicesPanel } from "@/components/DevicesPanel";
 import { api } from "@/lib/api";
 import type { ConfigResponse, ProviderInfo } from "@/lib/types";
 
@@ -101,7 +102,7 @@ function fromFormValue(v: string, field: FieldDef): unknown {
 
 export function ConfigView() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
-  const [tab, setTab] = useState<"form" | "raw">("form");
+  const [tab, setTab] = useState<"form" | "raw" | "devices">("form");
   const [formState, setFormState] = useState<Record<string, string>>({});
   const [raw, setRaw] = useState("");
   const [loading, setLoading] = useState(true);
@@ -277,10 +278,11 @@ export function ConfigView() {
           <CardDescription>Edit Sarathy configuration. Secrets show as placeholder values.</CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs value={tab} onValueChange={(v) => setTab(v as "form" | "raw")}>
+          <Tabs value={tab} onValueChange={(v) => setTab(v as "form" | "raw" | "devices")}>
             <TabsList>
               <TabsTrigger value="form">Form</TabsTrigger>
               <TabsTrigger value="raw">JSON</TabsTrigger>
+              <TabsTrigger value="devices">Devices</TabsTrigger>
             </TabsList>
             <TabsContent value="form" className="flex flex-col gap-6">
               {SECTIONS.map((section) => (
@@ -354,6 +356,9 @@ export function ConfigView() {
                   {saving ? "Saving…" : "Save"}
                 </Button>
               </div>
+            </TabsContent>
+            <TabsContent value="devices">
+              <DevicesPanel />
             </TabsContent>
           </Tabs>
         </CardContent>

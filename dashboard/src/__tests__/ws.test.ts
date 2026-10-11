@@ -51,6 +51,7 @@ class FakeWebSocket {
     this.readyState = 3;
   }
   emit(type: string, data?: unknown) {
+    if (type === "open") this.readyState = 1;
     const cb = this.handlers[type]?.[0];
     if (cb) cb(data === undefined ? undefined : { data: JSON.stringify(data) });
   }
@@ -118,6 +119,61 @@ describe("DashboardSocket notification frames", () => {
     });
 
     expect(msgSpy).toHaveBeenCalledTimes(1);
+    socket.disconnect();
+  });
+});
+
+/**
+ * Spec 128 §C.4 — parked/replayed notifications carry a top-level `seq`, and
+ * the client acks it so the server cursor advances and the frame is never
+ * re-delivered on the next reconnect.
+ */
+describe("DashboardSocket notification ack", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    (globalThis as any).WebSocket = FakeWebSocket;
+    vi.stubGlobal("window", {
+      location: { protocol: "http:", host: "localhost:18790" },
+      dispatched: [] as Array<{ type: string }>,
+      addEventListener: vi.fn(),
+      dispatchEvent: vi.fn(function (this: { dispatched: Array<{ type: string }> }, ev: any) {
+        this.dispatched.push(ev);
+        return true;
+      }),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("acks a notification frame that carries a seq", () => {
+    const socket = new DashboardSocket();
+    socket.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("open");
+
+    ws.emit("message", {
+      type: "notification",
+      seq: 7,
+      payload: { title: "Boot", body: "ok", timestamp: "x" },
+    });
+
+    expect(ws.sent).toContain(JSON.stringify({ type: "ack", seq: 7 }));
+    socket.disconnect();
+  });
+
+  it("does not ack a live notification frame without a seq", () => {
+    const socket = new DashboardSocket();
+    socket.connect();
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit("message", {
+      type: "notification",
+      payload: { title: "Live", body: "ok", timestamp: "x" },
+    });
+
+    expect(ws.sent.filter((s) => s.includes('"ack"'))).toEqual([]);
     socket.disconnect();
   });
 });

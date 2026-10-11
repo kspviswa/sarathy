@@ -82,6 +82,29 @@ class BaseChannel(ABC):
                 if part and part in allow_list:
                     return True
         return False
+
+    # ------------------------------------------------------------------ outbox
+    #
+    # A minimal per-device delivery contract (spec 128 §C.1). Channels with a
+    # notion of per-device inboxes (the dashboard) override these; every other
+    # channel gets the no-op defaults, so nothing changes for them. The shape is
+    # deliberately tiny — parking an undelivered frame, replaying frames newer
+    # than a cursor, and advancing that cursor. It is not a framework.
+    #
+    # ``frame`` is an already-serialized wire payload; ``cursor`` is the highest
+    # sequence number a device has acknowledged/received.
+
+    async def park_outbound(self, device_id: str, frame: str) -> None:
+        """Park an undelivered frame for ``device_id`` (no-op by default)."""
+        return None
+
+    async def replay_since(self, device_id: str, cursor: int) -> list[str]:
+        """Return parked frames for ``device_id`` newer than ``cursor`` (none by default)."""
+        return []
+
+    async def ack(self, device_id: str, cursor: int) -> None:
+        """Advance the delivery cursor for ``device_id`` (no-op by default)."""
+        return None
     
     async def _handle_message(
         self,

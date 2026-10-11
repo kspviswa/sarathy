@@ -173,6 +173,134 @@ def dashboard_key_delete(
     dashboard_key_revoke(key)
 
 
+devices_app = typer.Typer(help="Manage paired dashboard devices")
+dashboard_app.add_typer(devices_app, name="devices")
+
+
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 60 * 60, "d": 60 * 60 * 24, "w": 60 * 60 * 24 * 7}
+
+
+def _parse_duration(text: str) -> int:
+    """Parse ``30d`` / ``12h`` / ``90m`` / ``3600`` into seconds."""
+    text = (text or "").strip().lower()
+    if not text:
+        raise ValueError("empty duration")
+    if text[-1] in _DURATION_UNITS:
+        value, unit = text[:-1], text[-1]
+        if not value.isdigit():
+            raise ValueError(f"invalid duration: {text!r}")
+        return int(value) * _DURATION_UNITS[unit]
+    if text.isdigit():
+        return int(text)
+    raise ValueError(f"invalid duration: {text!r}")
+
+
+def _format_age(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+@devices_app.command("list")
+def dashboard_devices_list():
+    """List paired devices (secrets never shown)."""
+    from sarathy.channels.dashboard.auth import DeviceRegistry
+
+    import time as _time
+
+    devices = DeviceRegistry().list_devices()
+    if not devices:
+        console.print("[dim]No paired devices.[/dim]")
+        return
+
+    devices.sort(key=lambda d: d.get("last_seen") or 0, reverse=True)
+    now = int(_time.time())
+    table = Table(title="Dashboard Devices")
+    table.add_column("Device ID", style="cyan")
+    table.add_column("Name")
+    table.add_column("Created")
+    table.add_column("Last seen")
+    table.add_column("Notifs")
+    for d in devices:
+        last = d.get("last_seen") or d.get("created_at") or 0
+        table.add_row(
+            str(d.get("id", "")),
+            str(d.get("name", "")),
+            str(d.get("created_at", "")),
+            f"{last} ({_format_age(now - last)} ago)",
+            "on" if d.get("notifications_enabled") else "—",
+        )
+    console.print(table)
+    console.print(f"  Total: [bold]{len(devices)}[/bold] device(s)")
+
+
+@devices_app.command("prune")
+def dashboard_devices_prune(
+    older_than: str = typer.Option(
+        "30d", "--older-than", help="Remove devices not seen within this window (e.g. 30d, 12h)"
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--apply", help="Report only (default) or actually prune"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt on --apply"),
+):
+    """Prune devices that have not been seen for a while.
+
+    Deletes nothing by default: prints a report of what WOULD be removed. Pass
+    ``--apply`` (and ``--yes`` for non-interactive use) to delete.
+    """
+    from sarathy.channels.dashboard.auth import DeviceRegistry
+
+    import time as _time
+
+    try:
+        seconds = _parse_duration(older_than)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    registry = DeviceRegistry()
+    total = len(registry.list_devices())
+    stale = registry.stale_devices(seconds)
+    kept = total - len(stale)
+
+    now = int(_time.time())
+    console.print(
+        f"[bold]Prune preview[/bold] — devices not seen within [cyan]{older_than}[/cyan] "
+        f"({seconds}s). Total paired: {total}, stale: [yellow]{len(stale)}[/yellow]."
+    )
+
+    if stale:
+        table = Table(title="Would prune")
+        table.add_column("Device ID", style="cyan")
+        table.add_column("Name")
+        table.add_column("Last seen")
+        table.add_column("Age")
+        stale.sort(key=lambda d: d.get("last_seen") or 0)
+        for d in stale:
+            last = d.get("last_seen") or d.get("created_at") or 0
+            table.add_row(str(d.get("id", "")), str(d.get("name", "")), str(last), _format_age(now - last))
+        console.print(table)
+    else:
+        console.print("[green]Nothing to prune.[/green]")
+
+    if dry_run:
+        console.print("[dim]Dry run — nothing deleted. Re-run with --apply to prune.[/dim]")
+        return
+
+    if not yes and not typer.confirm(f"Delete {len(stale)} device(s)?"):
+        console.print("[yellow]Aborted.[/yellow]")
+        raise typer.Exit(1)
+
+    removed = registry.prune_stale(seconds)
+    console.print(f"[green]✓[/green] Pruned {removed} device(s); {kept} kept.")
+
+
 def _do_gateway_restart() -> None:
     """Restart the gateway via the CLI restart command."""
     import subprocess

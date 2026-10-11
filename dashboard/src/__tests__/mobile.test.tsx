@@ -607,3 +607,75 @@ describe("Mobile — thinking strip tracks the live turn (parity with desktop)",
     expect(screen.queryByTestId("reaction-chip")).toBeNull();
   });
 });
+
+/**
+ * Parity: desktop's MessageRow has an "↩ Reply" action that attaches the whole
+ * message to the next send (`replyTo`/`replyToContent`). Mobile had no way to
+ * create a reply — it could only display one. This locks the mobile affordance
+ * and the payload it produces.
+ */
+describe("Mobile — reply-to-message (parity with desktop)", () => {
+  it("attaches the replied message to the next send", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MobileChatView
+        streaming={false}
+        messages={[{ role: "assistant", content: "The ten lākāras are…", messageId: "m-42" }]}
+        onSend={onSend}
+        onStop={vi.fn()}
+        onNewChat={vi.fn()}
+      />,
+    );
+
+    // Tapping Reply surfaces the composer preview, not an immediate send.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("message-reply"));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("reply-preview")).toHaveTextContent("The ten lākāras are…");
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("mobile-composer-input"), {
+        target: { value: "and the second one?" },
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mobile-send"));
+      await Promise.resolve();
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    const [content, media, replyTo, replyToContent] = onSend.mock.calls[0];
+    expect(content).toBe("and the second one?");
+    expect(media).toBeUndefined();
+    expect(replyTo).toBe("m-42");
+    expect(replyToContent).toBe("The ten lākāras are…");
+    // The preview clears after sending.
+    expect(screen.queryByTestId("reply-preview")).toBeNull();
+  });
+
+  it("cancels a pending reply without sending", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MobileChatView
+        streaming={false}
+        messages={[{ role: "assistant", content: "Earlier answer", messageId: "m-1" }]}
+        onSend={onSend}
+        onStop={vi.fn()}
+        onNewChat={vi.fn()}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("message-reply"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Cancel reply"));
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("reply-preview")).toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+});

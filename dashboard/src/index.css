@@ -110,6 +110,28 @@
   }
 }
 
+/* openUI gallery modal — safe-area fix.
+ *
+ * The library's modal is `position:fixed; top:0; height:100%` with a flat 24px
+ * padding, and its header holds the only visible close control. The dashboard
+ * opts into `viewport-fit=cover` (so the app chrome can paint under the notch),
+ * which means on a notched phone the modal header sat inside the status-bar /
+ * notch band and the close button could not be seen or tapped — reported as
+ * "close button missing when there's more than one image", because a single
+ * image opens our own lightbox and only a multi-image gallery opens this modal.
+ *
+ * Pad by the safe area, exactly as `.safe-top` / `.safe-bottom` do for the app
+ * chrome. On desktop (and any device with no inset) `env()` is 0, so the
+ * `max()` keeps the library's original 24px and nothing changes.
+ *
+ * Two classes, not one: the library stylesheet arrives later (inside the lazy
+ * openUI chunk), so an equal-specificity rule here would lose the cascade.
+ */
+.openui-gallery__modal .openui-gallery__modal-content {
+  padding-top: max(var(--openui-space-xl, 1.5rem), env(safe-area-inset-top));
+  padding-bottom: max(var(--openui-space-xl, 1.5rem), env(safe-area-inset-bottom));
+}
+
 /* Markdown chat rendering */
 .md {
   @apply text-[15px] leading-relaxed break-words;

@@ -63,6 +63,12 @@ export interface ChatMessage {
   replyTo?: string | null;
   replyToContent?: string;
   quotes?: Quote[];
+  /**
+   * Out-of-band command notice — the ack for `/stop`, `/steer`, `/btw` and
+   * friends. Rendered as its own bubble (Telegram delivers each as a separate
+   * message) and never merged into a turn's streaming bubble.
+   */
+  notice?: boolean;
 }
 
 interface PendingMedia {
@@ -948,10 +954,11 @@ function MessageRow({
   onSend?: (message: string) => void;
 }) {
   const isUser = message.role === "user";
+  const isNotice = !isUser && Boolean(message.notice);
   const hasContent = (message.content?.length ?? 0) > 0;
   const showThinking =
-    !isUser && ((message.toolHints?.length ?? 0) + (message.thinkingContent?.length ?? 0) > 0);
-  const live = !isUser && (streaming || Boolean(message.progress));
+    !isUser && !isNotice && ((message.toolHints?.length ?? 0) + (message.thinkingContent?.length ?? 0) > 0);
+  const live = !isUser && !isNotice && (streaming || Boolean(message.progress));
 
   // Shared render-layer cleanup (spec 126 §B): the same text the chat bubble
   // shows is what the session viewer shows — no preamble, no machine lines.
@@ -972,8 +979,13 @@ function MessageRow({
       <div
         className={cn(
           "max-w-[85%] rounded-2xl px-4 text-[15px] leading-relaxed",
-          isUser ? "bg-primary text-primary-foreground py-2" : "border border-border bg-card text-card-foreground py-2.5",
+          isUser
+            ? "bg-primary text-primary-foreground py-2"
+            : isNotice
+              ? "border border-dashed border-border bg-muted/40 py-2 text-[13px] text-muted-foreground"
+              : "border border-border bg-card text-card-foreground py-2.5",
         )}
+        data-testid={isNotice ? "command-notice" : undefined}
       >
         {message.quotes && message.quotes.length > 0 && (
           <div
@@ -1035,7 +1047,7 @@ function MessageRow({
           </div>
         )}
 
-        {!isUser && hasContent && (
+        {!isUser && !isNotice && hasContent && (
           <div className="mt-1 -mb-1">
             <MessageActions content={cleanContent} onRegenerate={onRegenerate} onReply={onReply} />
           </div>

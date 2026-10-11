@@ -839,6 +839,7 @@ class AgentLoop:
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content=content,
+                metadata={"_notice": True},
             )
         )
 
@@ -862,6 +863,7 @@ class AgentLoop:
                         "Inject a mid-turn instruction into the current response "
                         "as soon as the running step finishes."
                     ),
+                    metadata={"_notice": True},
                 )
             )
             return
@@ -877,6 +879,7 @@ class AgentLoop:
                     channel=msg.channel,
                     chat_id=msg.chat_id,
                     content="🎯 Steer noted — I'll fold that into the current turn at the next pause.",
+                    metadata={"_notice": True},
                 )
             )
         else:
@@ -903,6 +906,7 @@ class AgentLoop:
                         "Usage: /btw <message>\n\n"
                         "Ask a side question. It runs concurrently and is delivered as soon as it's ready."
                     ),
+                    metadata={"_notice": True},
                 )
             )
             return
@@ -912,6 +916,7 @@ class AgentLoop:
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content="💬 BTW noted — running as a side question. I'll deliver the answer as soon as it's ready.",
+                metadata={"_notice": True},
             )
         )
         asyncio.create_task(self._run_btw_turn(msg, text))

@@ -44,6 +44,12 @@ _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_FAILURES = 10
 _MEDIA_DIR = Path.home() / ".sarathy" / "media"
 
+# Per-device notification outbox (spec 128 §C). Mirrors dashboard_devices.json:
+# inboxes + delivery cursors + a channel-wide sequence counter, bounded so an
+# unattended gateway cannot grow it without limit.
+OUTBOX_FILE = Path.home() / ".sarathy" / "dashboard_outbox.json"
+_OUTBOX_MAX_DEVICES = 256
+
 # Auth cookie that unlocks ONLY `GET /api/media`.
 #
 # Media is rendered by <img>/<audio>/<a> elements, which CANNOT attach an
@@ -270,6 +276,7 @@ class DashboardChannel(BaseChannel):
         devices_path: Path | None = None,
         runtime=None,
         agent=None,
+        outbox_path: Path | None = None,
     ):
         super().__init__(config, bus)
         self.config: DashboardConfig = config
@@ -295,6 +302,136 @@ class DashboardChannel(BaseChannel):
         # the transcript at turn end (spec 127 §B), so a dropped terminal frame
         # can never lose the attachment and message ordering stays deterministic.
         self._pending_media: dict[str, list[dict]] = {}
+        # Per-device notification outbox (spec 128 §C). A socket is keyed to the
+        # server-resolved device id; frames for offline devices park in that
+        # device's bounded inbox and replay on its next connect, advances past
+        # the device's cursor. Keep tests (which pass a devices_path) isolated.
+        if outbox_path is not None:
+            self._outbox_path = Path(outbox_path)
+        elif devices_path is not None:
+            self._outbox_path = Path(devices_path).parent / "dashboard_outbox.json"
+        else:
+            self._outbox_path = OUTBOX_FILE
+        self._notify_inbox: dict[str, deque[str]] = {}
+        self._notify_cursor: dict[str, int] = {}
+        self._notify_seq: int = 0
+        self._ws_devices: dict[web.WebSocketResponse, str | None] = {}
+        self._load_outbox()
+
+    # ------------------------------------------------------------------ outbox
+
+    def _load_outbox(self) -> None:
+        """Load persisted inboxes + cursors, tolerating a missing/corrupt file."""
+        if not self._outbox_path.exists():
+            return
+        try:
+            data = json.loads(self._outbox_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            logger.warning("Failed to read dashboard outbox {}", self._outbox_path)
+            return
+        if not isinstance(data, dict):
+            return
+        try:
+            self._notify_seq = int(data.get("seq", 0) or 0)
+        except (TypeError, ValueError):
+            self._notify_seq = 0
+        cursors = data.get("cursors", {})
+        if isinstance(cursors, dict):
+            for dev, value in cursors.items():
+                try:
+                    self._notify_cursor[str(dev)] = int(value)
+                except (TypeError, ValueError):
+                    continue
+        inbox = data.get("inbox", {})
+        if isinstance(inbox, dict):
+            for dev, frames in inbox.items():
+                if isinstance(frames, list):
+                    self._notify_inbox[str(dev)] = deque(
+                        str(f) for f in frames[-_NOTIFY_BACKLOG:]
+                    )
+
+    def _ensure_outbox(self) -> None:
+        """Guarantee the outbox attributes exist (tests build via __new__)."""
+        if not hasattr(self, "_notify_inbox"):
+            self._notify_inbox = {}
+        if not hasattr(self, "_notify_cursor"):
+            self._notify_cursor = {}
+        if not hasattr(self, "_notify_seq"):
+            self._notify_seq = 0
+        if not hasattr(self, "_ws_devices"):
+            self._ws_devices = {}
+        if not hasattr(self, "_pending_notify"):
+            self._pending_notify = deque(maxlen=_NOTIFY_BACKLOG)
+        if not hasattr(self, "_outbox_path"):
+            self._outbox_path = OUTBOX_FILE
+
+    def _persist_outbox(self) -> None:
+        """Write the bounded outbox to disk (best-effort)."""
+        self._ensure_outbox()
+        # Bound the number of tracked devices: keep connected devices and any
+        # with a non-empty inbox; drop the stalest cursor-only entries.
+        if len(self._notify_cursor) > _OUTBOX_MAX_DEVICES:
+            connected = {d for d in self._ws_devices.values() if d}
+            keep = set(connected) | {d for d, box in self._notify_inbox.items() if box}
+            for dev in sorted(self._notify_cursor, key=lambda d: self._notify_cursor[d]):
+                if len(self._notify_cursor) <= _OUTBOX_MAX_DEVICES:
+                    break
+                if dev not in keep:
+                    self._notify_cursor.pop(dev, None)
+        payload = {
+            "seq": self._notify_seq,
+            "cursors": self._notify_cursor,
+            "inbox": {dev: list(box) for dev, box in self._notify_inbox.items() if box},
+        }
+        try:
+            self._outbox_path.parent.mkdir(parents=True, exist_ok=True)
+            self._outbox_path.write_text(
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            logger.warning("Failed to write dashboard outbox {}", self._outbox_path)
+
+    @staticmethod
+    def _frame_seq(frame: str) -> int:
+        try:
+            return int(json.loads(frame).get("seq", 0) or 0)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return 0
+
+    async def park_outbound(self, device_id: str, frame: str) -> None:
+        """Park an undelivered frame in ``device_id``'s bounded inbox."""
+        self._ensure_outbox()
+        if not device_id:
+            return
+        box = self._notify_inbox.setdefault(device_id, deque(maxlen=_NOTIFY_BACKLOG))
+        box.append(frame)
+        self._persist_outbox()
+
+    async def replay_since(self, device_id: str, cursor: int) -> list[str]:
+        """Return parked frames for ``device_id`` with ``seq`` > ``cursor``."""
+        self._ensure_outbox()
+        box = self._notify_inbox.get(device_id)
+        if not box:
+            return []
+        return [f for f in box if self._frame_seq(f) > cursor]
+
+    async def ack(self, device_id: str, cursor: int) -> None:
+        """Advance ``device_id``'s cursor and drop frames at or below it."""
+        self._ensure_outbox()
+        if not device_id:
+            return
+        prev = self._notify_cursor.get(device_id, 0)
+        if cursor > prev:
+            self._notify_cursor[device_id] = cursor
+        box = self._notify_inbox.get(device_id)
+        if box is not None:
+            floor = self._notify_cursor.get(device_id, 0)
+            kept = deque((f for f in box if self._frame_seq(f) > floor), maxlen=_NOTIFY_BACKLOG)
+            if kept:
+                self._notify_inbox[device_id] = kept
+            else:
+                self._notify_inbox.pop(device_id, None)
+        self._persist_outbox()
 
     # ------------------------------------------------------------------ start/stop
 
@@ -334,6 +471,8 @@ class DashboardChannel(BaseChannel):
             except Exception:
                 pass
         self._ws_clients.clear()
+        if hasattr(self, "_ws_devices"):
+            self._ws_devices.clear()
         if self._site:
             try:
                 await self._site.stop()
@@ -511,41 +650,101 @@ class DashboardChannel(BaseChannel):
     async def send_notification(
         self, title: str, body: str = "", tab: str | None = None
     ) -> None:
-        """Broadcast an in-app notification frame to connected dashboard clients.
+        """Deliver an in-app notification frame to every eligible device once.
 
         Additive to the existing chat streaming contract: clients receive a
         ``{type: "notification", payload: {title, body, timestamp, tab}}`` frame
         and surface it as a toast / unread badge. Does not disturb the
         ``_progress`` / ``_thinking`` / ``_tool_hint`` / ``_final`` contract.
 
-        When no client is connected the serialized frame is parked in
-        ``_pending_notify`` and replayed by the next socket to complete its
-        handshake. That gap is exactly where the restart/redeploy boot ping
-        lands, so without this it was discarded before the browser came back.
+        Per-device delivery (spec 128 §C): a frame for a **connected** device is
+        sent live; a frame for an **offline** device is parked in that device's
+        own bounded inbox and replayed on its next connect. Parked frames carry
+        an additive top-level ``seq`` (the live frame does not, so the 126 frame
+        contract is untouched). When no device is known yet — the cold-start
+        window the restart boot ping lands in — the frame falls back to the
+        legacy shared backlog, drained by the first socket to connect.
         """
-        payload = json.dumps(
-            {
-                "type": "notification",
-                "payload": {
-                    "title": title,
-                    "body": body,
-                    "tab": tab,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                },
+        self._ensure_outbox()
+        self._notify_seq += 1
+        seq = self._notify_seq
+        payload = {
+            "type": "notification",
+            "payload": {
+                "title": title,
+                "body": body,
+                "tab": tab,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
-            ensure_ascii=False,
-        )
-        if not self._ws_clients:
-            self._pending_notify.append(payload)
+        }
+        live = json.dumps(payload, ensure_ascii=False)
+        parked = json.dumps({**payload, "seq": seq}, ensure_ascii=False)
+
+        connected: dict[str, web.WebSocketResponse] = {}
+        for ws, dev in self._ws_devices.items():
+            if dev:
+                connected[dev] = ws
+        targets = set(self._notify_cursor) | set(connected)
+
+        if not targets:
+            # Cold start (no device has ever connected): fall back to the legacy
+            # shared backlog / broadcast so the boot ping is never lost.
+            if not self._ws_clients:
+                self._pending_notify.append(live)
+                self._persist_outbox()
+                return
+            await self._broadcast(live)
+            self._persist_outbox()
             return
-        await self._broadcast(payload)
+
+        for dev in targets:
+            ws = connected.get(dev)
+            if ws is not None:
+                try:
+                    await ws.send_str(live)
+                    # Delivered live: advance past it so it is not replayed.
+                    await self.ack(dev, seq)
+                    continue
+                except Exception:
+                    self._ws_clients.discard(ws)
+                    self._ws_devices.pop(ws, None)
+            await self.park_outbound(dev, parked)
+
+        # Sockets without a resolved device (defensive; the middleware normally
+        # rejects them) still get the frame best-effort.
+        for ws, dev in list(self._ws_devices.items()):
+            if dev is None:
+                try:
+                    await ws.send_str(live)
+                except Exception:
+                    self._ws_clients.discard(ws)
+                    self._ws_devices.pop(ws, None)
+        self._persist_outbox()
+
+    async def _replay_device_inbox(self, ws: web.WebSocketResponse, device_id: str) -> None:
+        """Replay a device's parked frames in order, advancing its cursor.
+
+        Frames are sent oldest-first; the cursor only moves after a successful
+        send, so a dropped socket replays rather than loses its backlog.
+        """
+        self._ensure_outbox()
+        cursor = self._notify_cursor.get(device_id, 0)
+        for frame in await self.replay_since(device_id, cursor):
+            try:
+                await ws.send_str(frame)
+            except Exception:
+                self._ws_clients.discard(ws)
+                return
+            await self.ack(device_id, self._frame_seq(frame))
 
     async def _flush_pending_notify(self, ws: web.WebSocketResponse) -> None:
-        """Deliver the offline notification backlog to the first client back.
+        """Deliver the legacy offline backlog to the first client back.
 
-        The buffer is drained before any await so a second socket connecting in
-        the same tick cannot replay the same frames.
+        Retained for the cold-start window and pre-outbox compatibility: the
+        buffer is drained before any await so a second socket connecting in the
+        same tick cannot replay the same frames.
         """
+        self._ensure_outbox()
         while self._pending_notify:
             payload = self._pending_notify.popleft()
             try:
@@ -734,6 +933,10 @@ class DashboardChannel(BaseChannel):
         # Per-device notification preference (spec 127 §D).
         app.router.add_get("/api/notifications/pref", self._api_notifications_pref_get)
         app.router.add_post("/api/notifications/pref", self._api_notifications_pref_set)
+        # Paired-device management (spec 128 §A). Below the auth middleware, so
+        # request["device_id"] is set (used for the `current` flag + 409 guard).
+        app.router.add_get("/api/devices", self._api_devices_list)
+        app.router.add_delete("/api/devices/{id}", self._api_devices_remove)
 
         app.router.add_get("/ws", self._ws_handler)
 
@@ -884,6 +1087,62 @@ class DashboardChannel(BaseChannel):
         enabled = bool(data.get("enabled"))
         self._registry.set_notification_pref(device_id, enabled)
         return web.json_response({"ok": True, "enabled": enabled})
+
+    # ------------------------------------------------------------------ devices api
+
+    async def _api_devices_list(self, request: web.Request) -> web.Response:
+        """List paired devices (spec 128 §A.1), sorted by lastSeen desc.
+
+        ``token_hash`` / ``key_fingerprint`` are stripped in the registry and
+        never surface here. ``current`` marks the requesting device.
+        """
+        current = request.get("device_id", "")
+        devices: list[dict] = []
+        for dev in self._registry.list_devices():
+            device_id = str(dev.get("id", ""))
+            devices.append(
+                {
+                    "id": device_id,
+                    "name": dev.get("name", ""),
+                    "shortId": device_id[:6],
+                    "createdAt": dev.get("created_at"),
+                    "lastSeen": dev.get("last_seen"),
+                    "notificationsEnabled": dev.get("notifications_enabled"),
+                    "current": device_id == current,
+                }
+            )
+        devices.sort(key=lambda d: d.get("lastSeen") or 0, reverse=True)
+        return web.json_response({"devices": devices})
+
+    async def _api_devices_remove(self, request: web.Request) -> web.Response:
+        """Revoke a paired device (spec 128 §A.2).
+
+        404 for an unknown id; 409 when revoking the *current* device without an
+        explicit ``force`` (``?force=1`` or ``{"force": true}``), so a misclick
+        cannot lock the caller out of their own UI.
+        """
+        device_id = request.match_info.get("id", "")
+        current = request.get("device_id", "")
+        force = str(request.query.get("force", "")).lower() in ("1", "true", "yes", "on")
+        if not force:
+            try:
+                data = await request.json()
+                force = bool((data or {}).get("force"))
+            except Exception:
+                force = False
+        if device_id and device_id == current and not force:
+            return web.json_response(
+                {"error": "refusing to revoke the current device — pass force=1 to confirm"},
+                status=409,
+            )
+        if not self._registry.remove_device(device_id):
+            return web.json_response({"error": "unknown device"}, status=404)
+        logger.info("Dashboard device revoked: {}", device_id)
+        # A revoked device must not replay its parked backlog if it reconnects.
+        self._notify_inbox.pop(device_id, None)
+        self._notify_cursor.pop(device_id, None)
+        self._persist_outbox()
+        return web.json_response({"ok": True, "removed": device_id})
 
     # ------------------------------------------------------------------ chat api
 
@@ -1898,7 +2157,25 @@ class DashboardChannel(BaseChannel):
     async def _ws_handler(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
+        self._ensure_outbox()
         self._ws_clients.add(ws)
+
+        # Resolve the device (spec 128 §C.4). The browser cannot send an
+        # Authorization header on a WS upgrade, so the SPA appends `?token=` to
+        # the URL. On a missing/invalid token we degrade to the legacy
+        # broadcast bucket rather than erroring — a bad socket must never break
+        # the others.
+        token = request.query.get("token", "") or self._extract_token(request) or ""
+        device_id = request.get("device_id") or (
+            self._registry.validate(token) if token else None
+        )
+        self._ws_devices[ws] = device_id
+        if device_id:
+            # Remember the device so future notifications park for it while it
+            # is offline (a device that never connects is unknown, not parked).
+            self._notify_cursor.setdefault(device_id, 0)
+            self._persist_outbox()
+
         # Authoritative snapshot on every (re)connect (spec 127 §A.5): the
         # client reconciles its turn state without waiting for a future frame,
         # so a terminal frame missed while offline can't strand the UI.
@@ -1916,7 +2193,12 @@ class DashboardChannel(BaseChannel):
             )
         except Exception:
             pass
+        # Drain the legacy cold-start backlog to whichever socket is first back
+        # (it is drained, so only one socket sees it), then replay this device's
+        # own parked inbox. A device that connects after a cold start gets both.
         await self._flush_pending_notify(ws)
+        if device_id:
+            await self._replay_device_inbox(ws, device_id)
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
@@ -1926,8 +2208,14 @@ class DashboardChannel(BaseChannel):
                         continue
                     if data.get("type") == "ping":
                         await ws.send_str(json.dumps({"type": "pong"}))
+                    elif data.get("type") == "ack" and device_id:
+                        try:
+                            await self.ack(device_id, int(data.get("seq", 0) or 0))
+                        except (TypeError, ValueError):
+                            pass
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     break
         finally:
             self._ws_clients.discard(ws)
+            self._ws_devices.pop(ws, None)
         return ws

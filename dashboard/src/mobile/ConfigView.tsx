@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { DevicesPanel } from "@/components/DevicesPanel";
 import { api } from "@/lib/api";
 import type { ConfigResponse, ProviderInfo } from "@/lib/types";
 
@@ -257,6 +258,16 @@ export function ConfigView() {
         )}
 
         <ImageModelControl providers={providers} />
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Devices</CardTitle>
+            <CardDescription>Paired devices with access to this dashboard. Revoking one signs it out immediately.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DevicesPanel />
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader className="flex-row items-center justify-between gap-2">

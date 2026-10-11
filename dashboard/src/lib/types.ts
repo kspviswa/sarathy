@@ -19,6 +19,22 @@ export interface MeResponse {
   version: string;
 }
 
+/** A paired dashboard device (spec 128 §A). Never carries token_hash/key_fingerprint. */
+export interface DeviceInfo {
+  id: string;
+  name: string;
+  shortId: string;
+  createdAt: number | null;
+  lastSeen: number | null;
+  notificationsEnabled: boolean | null;
+  /** True for the device making the request. */
+  current: boolean;
+}
+
+export interface DevicesResponse {
+  devices: DeviceInfo[];
+}
+
 export interface SessionInfo {
   key: string;
   created_at?: string;

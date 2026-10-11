@@ -350,7 +350,7 @@ export function ChatView({
         <h1 className="text-base font-semibold">Chat</h1>
         <div className="flex items-center gap-1">
           {streaming && (
-            <Button variant="secondary" size="sm" onClick={() => void onStop()} title="Stop">
+            <Button variant="destructive" size="sm" onClick={() => void onStop()} title="Stop">
               <Square className="size-4" />
             </Button>
           )}

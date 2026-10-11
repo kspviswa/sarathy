@@ -884,7 +884,7 @@ export function ChatView({
         </div>
         <div className="flex items-center gap-2">
           {streaming && (
-            <Button variant="secondary" size="sm" onClick={() => void onStop()} title="Stop processing">
+            <Button variant="destructive" size="sm" onClick={() => void onStop()} title="Stop processing">
               <Square className="size-4" />
               <span className="hidden sm:inline">Stop</span>
             </Button>

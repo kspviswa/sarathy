@@ -1,6 +1,7 @@
 """Entry point for running the gateway directly (not via CLI)."""
 
 import asyncio
+import signal
 
 from loguru import logger
 
@@ -327,16 +328,55 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
     await asyncio.sleep(0.1)
     await _check_restart_flag()
 
+    # Graceful shutdown: a restart arrives as SIGTERM and would otherwise kill
+    # the process mid-turn, dropping the in-flight exchange from the transcript
+    # (the end-of-turn save never runs). Trap the signal, flush every in-memory
+    # session, then shut down cleanly — see tests/test_shutdown_flush.py.
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown(signame: str) -> None:
+        logger.info("{} received — flushing sessions and shutting down", signame)
+        stop_event.set()
+
+    for _sig, _name in ((signal.SIGTERM, "SIGTERM"), (signal.SIGINT, "SIGINT")):
+        try:
+            loop.add_signal_handler(_sig, _request_shutdown, _name)
+        except (NotImplementedError, RuntimeError):  # pragma: no cover — non-POSIX
+            pass
+
+    supervisor = asyncio.ensure_future(
+        asyncio.gather(agent.run(), channels_task, return_exceptions=True)
+    )
+    stopper = asyncio.ensure_future(stop_event.wait())
+
     try:
         await cron.start()
         await heartbeat.start()
-        await asyncio.gather(
-            agent.run(),
-            channels_task,
+        await asyncio.wait(
+            {supervisor, stopper}, return_when=asyncio.FIRST_COMPLETED
         )
     except KeyboardInterrupt:
         pass
     finally:
+        # Durability first: land the in-memory transcript on disk before the
+        # process goes away.
+        try:
+            session_manager.save_all()
+        except Exception as e:
+            logger.warning("Session flush on shutdown failed: {}", e)
+
+        for _task in (supervisor, stopper):
+            if not _task.done():
+                _task.cancel()
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(supervisor, stopper, return_exceptions=True),
+                timeout=5,
+            )
+        except Exception:
+            pass  # a wedged task must never block process exit
+
         await agent.close_mcp()
         heartbeat.stop()
         cron.stop()

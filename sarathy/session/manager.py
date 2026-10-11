@@ -411,6 +411,30 @@ class SessionManager:
         except Exception as e:
             logger.debug("Failed to update sessions index for {}: {}", session.key, e)
 
+    def save_all(self) -> int:
+        """Persist every session currently held in memory.
+
+        Called from the gateway's graceful-shutdown path (SIGTERM/SIGINT). A
+        restart kills the process mid-turn, so the end-of-turn save never runs;
+        without this flush the exchange in flight is lost from the transcript
+        (the 2026-10-11 redeploy hole — see tests/test_shutdown_flush.py).
+
+        Best effort: one bad session never prevents the others from flushing.
+        Returns the number of sessions written.
+        """
+        flushed = 0
+        for session in list(self._cache.values()):
+            try:
+                self.save(session)
+                flushed += 1
+            except Exception as e:
+                logger.warning(
+                    "Failed to flush session {} on shutdown: {}", session.key, e
+                )
+        if flushed:
+            logger.info("Flushed {} in-memory session(s) to disk", flushed)
+        return flushed
+
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)

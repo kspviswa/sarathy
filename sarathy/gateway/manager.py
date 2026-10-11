@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -118,12 +119,34 @@ def start_gateway(
     return process
 
 
-def stop_gateway() -> bool:
+def _process_alive(pid: int) -> bool:
+    """True while ``pid`` is a live, non-zombie process on this machine."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+            state = f.read().split(") ", 1)[1].split(" ", 1)[0]
+        return state != "Z"
+    except FileNotFoundError:
+        return False
+    except Exception:
+        # /proc unavailable — fall back to a signal-0 liveness probe.
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+
+def stop_gateway(timeout: float = 5.0) -> bool:
     """
-    Stop the gateway process.
+    Stop the gateway process (SIGTERM) and wait for it to actually exit.
+
+    The gateway flushes its in-memory sessions during a graceful shutdown, so
+    waiting for the process to exit means that flush finishes (and the listen
+    port is released) before a replacement gateway starts — the two never race
+    on the same session file or socket.
 
     Returns:
-        True if stopped successfully, False otherwise
+        True if the stop signal was delivered, False otherwise
     """
     pid = read_pid()
     if pid is None:
@@ -131,11 +154,16 @@ def stop_gateway() -> bool:
 
     try:
         os.kill(pid, signal.SIGTERM)
-        clear_pid()
-        return True
     except OSError:
         clear_pid()
         return False
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and _process_alive(pid):
+        time.sleep(0.05)
+
+    clear_pid()
+    return True
 
 
 def get_gateway_status() -> dict:

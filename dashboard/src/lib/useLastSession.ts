@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { WS_OPEN_EVENT } from "@/lib/events";
 import type { ChatMessage } from "@/views/ChatView";
 
 export const DASHBOARD_SESSION_KEY = "dashboard:console";
@@ -11,7 +12,7 @@ export const DASHBOARD_SESSION_KEY = "dashboard:console";
  * on mount: that is what lets a refresh mid-restart recover once the gateway is
  * back instead of staying blank forever.
  */
-export const WS_OPEN_EVENT = "sarathy:ws-open";
+export { WS_OPEN_EVENT } from "@/lib/events";
 
 /** Backoff between post-reconnect refetch attempts (bounded — spec §B1). */
 const RECONNECT_RETRY_DELAYS_MS = [0, 1000, 3000];
@@ -85,19 +86,23 @@ export function useLastSession(
         const detail = await api.session(chosen.key);
         if (!isCurrent()) return;
         const mapped = detail.messages
-          // Only surface user + assistant messages that actually carry text.
-          // Tool-call bookkeeping rows have null/empty content; rendering them
-          // would crash on `.content.length` (blank-screen regression).
+          // Surface user + assistant messages that carry text OR an attachment
+          // (spec 127 §B): an assistant voice reply persists with empty content
+          // and a `media` path, and must survive a reload like any other row.
+          // Tool-call bookkeeping rows have null/empty content and no media;
+          // rendering them would crash on `.content.length` (blank screen).
           .filter(
             (m) =>
               (m.role === "user" || m.role === "assistant") &&
               typeof m.content === "string" &&
-              m.content.length > 0,
+              (m.content.length > 0 || (m.media?.length ?? 0) > 0),
           )
           .map<ChatMessage>((m) => ({
             role: m.role as "user" | "assistant",
             content: m.content,
             messageId: m.timestamp,
+            turnId: m.turn_id,
+            media: m.media?.length ? m.media : undefined,
           }));
         if (mapped.length > 0) onMessagesRef.current(mapped);
         if (isCurrent()) setError(null);

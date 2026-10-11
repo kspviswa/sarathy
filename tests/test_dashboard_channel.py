@@ -355,6 +355,9 @@ async def test_ws_receives_outbound_broadcast(tmp_path) -> None:
     async with client:
         token = await _pair(client)
         ws = await client.ws_connect(f"/ws?token={token}")
+        # Spec 127 §A.5: the first frame on every (re)connect is the snapshot.
+        snap = json.loads((await asyncio_wait_ws(ws)).data)
+        assert snap["type"] == "snapshot"
         await channel.send(
             OutboundMessage(channel="dashboard", chat_id="console", content="streamed!")
         )
@@ -378,6 +381,9 @@ async def test_ws_notification_frame_broadcast(tmp_path) -> None:
     async with client:
         token = await _pair(client)
         ws = await client.ws_connect(f"/ws?token={token}")
+        # Spec 127 §A.5: the first frame on every (re)connect is the snapshot.
+        snap = json.loads((await asyncio_wait_ws(ws)).data)
+        assert snap["type"] == "snapshot"
         await channel.send_notification("Job done", "Backup finished", tab="status")
         raw = await asyncio_wait_ws(ws)
         payload = json.loads(raw.data)

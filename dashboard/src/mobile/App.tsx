@@ -20,6 +20,13 @@ import type { SlashCommand } from "@/lib/palette";
 import { ThemeProvider } from "@/lib/theme";
 import { useLastSession, resetLastSession, DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 import { applyOutbound } from "@/lib/transcript";
+import {
+  attachTurnSync,
+  beginOptimisticTurn,
+  endTurnLocal,
+  noteMessageFrame,
+  useTurn,
+} from "@/lib/turn";
 import { useNotificationPref } from "@/lib/useNotificationPref";
 import { useNotifications, type AppNotification } from "@/lib/useNotifications";
 import { DashboardSocket } from "@/lib/ws";
@@ -48,7 +55,9 @@ function MobileAppInner() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [tab, setTab] = useState<Tab>("chat");
   const [messages, setMessages] = useState<ChatMessageT[]>([]);
-  const [streaming, setStreaming] = useState(false);
+  // `streaming` is DERIVED from the server-owned turn state (spec 127 §C.1) via
+  // the shared module, so a missed terminal frame no longer strands the UI.
+  const { streaming } = useTurn();
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [unread, setUnread] = useState<Partial<Record<Tab, number>>>({});
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -159,30 +168,24 @@ function MobileAppInner() {
       if (m.channel !== "dashboard" || m.chatId !== "console") return;
       const md = (m.metadata || {}) as Record<string, unknown>;
 
-      // Out-of-band command acks (/stop, /steer, /btw): their own bubble, and
-      // they must not disturb the running turn's streaming state.
+      // Keep the shared turn state in lockstep with the transcript (spec §C.1).
+      noteMessageFrame(m);
+
+      // Out-of-band command acks (/stop, /steer, /btw): their own bubble.
       if (md._notice) {
         setMessages((prev) => applyOutbound(prev, m));
         return;
       }
 
-      if (md._final) {
-        setStreaming(false);
-        setMessages((prev) => applyOutbound(prev, m));
-        return;
-      }
-
-      if (md._progress || md._thinking || md._tool_hint) {
-        setStreaming(true);
-        setMessages((prev) => applyOutbound(prev, m));
-        return;
-      }
-
-      setStreaming(false);
       setMessages((prev) => applyOutbound(prev, m));
     });
+
+    // Reconcile server turn state on (re)connect and on tab resume (spec §C.2/§C.3).
+    const detachTurn = attachTurnSync(socket);
+
     socket.connect();
     return () => {
+      detachTurn();
       unsubNotif();
       unsubscribe();
       socket.disconnect();
@@ -204,7 +207,7 @@ function MobileAppInner() {
         ...prev,
         { role: "user", content, media, replyTo, replyToContent, quotes },
       ]);
-      setStreaming(true);
+      beginOptimisticTurn();
       await api.sendChatFull({
         content,
         ...(media?.length ? { media } : {}),
@@ -240,7 +243,7 @@ function MobileAppInner() {
       await api.sessionNew(DASHBOARD_SESSION_KEY);
       resetLastSession();
       setMessages([]);
-      setStreaming(false);
+      endTurnLocal();
       setOpenFile(null);
       toast.success("Session archived · new chat started");
     } catch (err) {
@@ -252,7 +255,7 @@ function MobileAppInner() {
 
   const handleStop = useCallback(async () => {
     await api.stopChat();
-    setStreaming(false);
+    endTurnLocal();
   }, []);
 
   const handleOpenFile = useCallback(
@@ -267,6 +270,7 @@ function MobileAppInner() {
     const lastUserMsg = lastUserMessageRef.current;
     if (!lastUserMsg || streaming) return;
     setMessages((prev) => [...prev, { role: "user", content: lastUserMsg }]);
+    beginOptimisticTurn();
     await api.sendChat(lastUserMsg);
   }, [streaming]);
 

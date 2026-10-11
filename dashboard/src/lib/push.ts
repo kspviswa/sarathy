@@ -65,10 +65,24 @@ export function hasServiceWorker(): boolean {
   return typeof navigator !== "undefined" && "serviceWorker" in navigator;
 }
 
-async function getRegistration(): Promise<ServiceWorkerRegistration | null> {
+/** Bound on `serviceWorker.ready` so a cold activation can never hang the UI. */
+const SW_READY_TIMEOUT_MS = 3000;
+
+/**
+ * Resolve the active service-worker registration, bounded by a timeout.
+ *
+ * `navigator.serviceWorker.ready` does not settle until the SW is registered AND
+ * activated; with `vite-plugin-pwa` `registerType:"autoUpdate"` a cold launch can
+ * take seconds. Spec 127 §D.3 requires every readiness await used to decide UI
+ * availability to be bounded so the toggle can never stay permanently disabled.
+ */
+export async function getRegistration(): Promise<ServiceWorkerRegistration | null> {
   if (!hasServiceWorker()) return null;
   try {
-    return await navigator.serviceWorker.ready;
+    return await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), SW_READY_TIMEOUT_MS)),
+    ]);
   } catch {
     return null;
   }

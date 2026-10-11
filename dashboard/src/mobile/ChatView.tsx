@@ -378,7 +378,7 @@ export function ChatView({
         <div ref={messageListRef} className="flex w-full flex-col gap-3" data-testid="mobile-message-list">
           {messages.map((m, i) => (
             <MobileMessage
-              key={i}
+              key={m.turnId ?? m.messageId ?? i}
               message={m}
               streaming={streaming}
               onOpenFile={onOpenFile}

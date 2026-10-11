@@ -14,6 +14,7 @@ import type {
   SessionFooter,
   SessionInfo,
   StatusResponse,
+  TurnBlock,
   UsageSummary,
   WorkspaceTree,
 } from "./types";
@@ -175,6 +176,23 @@ export const api = {
 
   session: (key: string) =>
     request<SessionDetail>(`/api/session?key=${encodeURIComponent(key)}`),
+
+  /**
+   * Authoritative turn state for a session (spec 127 §A.4). Returns the turn
+   * block at the top level.
+   */
+  turn: (key?: string) =>
+    request<TurnBlock>(`/api/turn${key ? `?key=${encodeURIComponent(key)}` : ""}`),
+
+  /** Per-device notification preference (spec 127 §D.2). */
+  notificationsPref: () =>
+    request<{ enabled: boolean | null }>("/api/notifications/pref"),
+
+  setNotificationsPref: (enabled: boolean) =>
+    request<{ ok: boolean; enabled: boolean }>("/api/notifications/pref", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
 
   workspaceTree: () => request<WorkspaceTree>("/api/workspace/tree"),
 

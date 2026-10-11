@@ -192,3 +192,24 @@ class DeviceRegistry:
             {"id": dev_id, **dev, "token_hash": ""}
             for dev_id, dev in self._devices.items()
         ]
+
+    def get_notification_pref(self, device_id: str) -> bool | None:
+        """Return the stored notification preference, or None when unset.
+
+        Backward compatible with device files written before the preference
+        existed: absent key means "no preference" (client picks its default).
+        """
+        dev = self._devices.get(device_id)
+        if dev is None:
+            return None
+        value = dev.get("notifications_enabled")
+        return bool(value) if value is not None else None
+
+    def set_notification_pref(self, device_id: str, enabled: bool) -> bool:
+        """Persist the notification preference for a device. False if unknown."""
+        dev = self._devices.get(device_id)
+        if dev is None:
+            return False
+        dev["notifications_enabled"] = bool(enabled)
+        self.save()
+        return True

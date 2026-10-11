@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import subprocess
 import sys
 import uuid
@@ -268,12 +269,18 @@ class DashboardChannel(BaseChannel):
         config_path: Path | None = None,
         devices_path: Path | None = None,
         runtime=None,
+        agent=None,
     ):
         super().__init__(config, bus)
         self.config: DashboardConfig = config
         self.session_manager = session_manager
         self.config_path = Path(config_path) if config_path else None
         self.runtime = runtime
+        # Agent handle (spec 127 §A): the dashboard reads the authoritative
+        # turn registry directly and prefixes `GET /api/turn` / `GET
+        # /api/session` with the live turn block. Optional so tests and
+        # degraded boots still work.
+        self._agent = agent
         self._registry = DeviceRegistry(devices_path)
         self._static_dir = Path(__file__).parent / "static"
         self._runner: web.AppRunner | None = None
@@ -284,6 +291,10 @@ class DashboardChannel(BaseChannel):
         # restart/redeploy boot ping fires ~0.1s after channels.start_all(),
         # long before any browser reconnects, so it must survive the gap.
         self._pending_notify: deque[str] = deque(maxlen=_NOTIFY_BACKLOG)
+        # Media emitted during an active turn is buffered here and flushed into
+        # the transcript at turn end (spec 127 §B), so a dropped terminal frame
+        # can never lose the attachment and message ordering stays deterministic.
+        self._pending_media: dict[str, list[dict]] = {}
 
     # ------------------------------------------------------------------ start/stop
 
@@ -352,10 +363,61 @@ class DashboardChannel(BaseChannel):
         when offline, matching the pre-existing behavior.
         """
         metadata = msg.metadata or {}
+
+        # Server-owned turn frames (spec 127 §A.2). The end frame also flushes
+        # any media buffered during the turn into the transcript.
+        if metadata.get("_turn_state"):
+            key = f"{msg.channel}:{msg.chat_id}"
+            turn = metadata.get("turn") or {}
+            if not turn.get("active"):
+                await self._flush_pending_media(key)
+            await self._broadcast(
+                json.dumps(
+                    {
+                        "type": "turn_state",
+                        "channel": msg.channel,
+                        "chatId": msg.chat_id,
+                        "turn": turn,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
         if metadata.get("notify"):
             title, body = notification_parts(msg.content, metadata)
             await self.send_notification(title, body, tab=metadata.get("tab"))
             return
+
+        key = f"{msg.channel}:{msg.chat_id}"
+        # Stamp the live frame with the active turn id when the producer (e.g.
+        # the message tool) did not set one, so the SPA can key the bubble to
+        # the same turn the streaming frames belong to (spec 127 §C.4). Advisory
+        # frames and non-turn sends are left untouched.
+        if "_notice" not in metadata and not metadata.get("turn_id"):
+            turn_id = self._session_turn_id(key)
+            if turn_id:
+                metadata = {**metadata, "turn_id": turn_id}
+
+        # Attachments produced during a turn are normalized to live under the
+        # media root (spec 127 §B) then buffered until turn end so a dropped
+        # terminal frame can't lose them and transcript ordering is stable.
+        media = self._normalize_media_paths(msg.media)
+        if media:
+            self._pending_media.setdefault(key, []).append(
+                {
+                    "content": msg.content or "",
+                    "media": media,
+                    "turn_id": metadata.get("turn_id"),
+                }
+            )
+            # Flush now when the turn is already over (the media arrived late,
+            # after the turn_state end frame) or when this frame itself is the
+            # turn's terminal message. Otherwise wait for turn end so ordering
+            # after the turn's saved messages is deterministic.
+            if metadata.get("_final") or not self._session_turn_block(key).get("active"):
+                await self._flush_pending_media(key)
+
         if not self._ws_clients:
             return
         payload = json.dumps(
@@ -364,13 +426,79 @@ class DashboardChannel(BaseChannel):
                 "channel": msg.channel,
                 "chatId": msg.chat_id,
                 "content": msg.content,
-                "media": msg.media,
+                "media": media,
                 "replyTo": msg.reply_to,
                 "metadata": metadata,
             },
             ensure_ascii=False,
         )
         await self._broadcast(payload)
+
+    # ------------------------------------------------------------------ turn helpers
+
+    def _session_turn_block(self, key: str) -> dict:
+        """Authoritative turn block for ``key`` from the agent (spec 127 §A.1)."""
+        agent = getattr(self, "_agent", None)
+        getter = getattr(agent, "turn_state", None) if agent is not None else None
+        if callable(getter):
+            try:
+                return getter(key)
+            except Exception as e:  # never let telemetry break a request
+                logger.debug("turn_state lookup failed for {}: {}", key, e)
+        return {"active": False, "state": "idle", "turn_id": None, "started_at": None}
+
+    def _session_turn_id(self, key: str) -> str | None:
+        return self._session_turn_block(key).get("turn_id")
+
+    def _normalize_media_paths(self, paths) -> list[str] | None:
+        """Copy out-of-root attachments into ``_MEDIA_DIR`` so they are servable.
+
+        Returns ``None`` when there is nothing to send, preserving the existing
+        ``media: null`` frame shape for text-only messages.
+        """
+        if not paths:
+            return None
+        root = _MEDIA_DIR.resolve()
+        out: list[str] = []
+        for raw in paths:
+            try:
+                src = Path(raw).resolve()
+            except Exception:
+                out.append(str(raw))
+                continue
+            if src == root or root in src.parents:
+                out.append(str(src))
+                continue
+            try:
+                if not src.is_file():
+                    out.append(str(src))
+                    continue
+                _MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+                dest = _MEDIA_DIR / f"{uuid.uuid4().hex[:16]}{src.suffix}"
+                shutil.copy2(src, dest)
+                out.append(str(dest))
+            except Exception as e:
+                logger.warning("media normalize failed for {}: {}", raw, e)
+                out.append(str(raw))
+        return out
+
+    async def _flush_pending_media(self, key: str) -> None:
+        """Persist media buffered during a finished turn into the transcript."""
+        pending = self._pending_media.pop(key, None)
+        if not pending or self.session_manager is None:
+            return
+        try:
+            session = self.session_manager.get_or_create(key)
+            for item in pending:
+                session.add_message(
+                    "assistant",
+                    item["content"],
+                    media=item["media"],
+                    turn_id=item.get("turn_id"),
+                )
+            self.session_manager.save(session)
+        except Exception as e:
+            logger.warning("failed to persist outbound media for {}: {}", key, e)
 
     async def _broadcast(self, payload: str) -> None:
         """Write a pre-serialized frame to every live client, pruning dead ones."""
@@ -582,6 +710,7 @@ class DashboardChannel(BaseChannel):
         app.router.add_post("/api/restart", self._api_restart)
         app.router.add_get("/api/sessions", self._api_sessions)
         app.router.add_get("/api/session", self._api_session_messages)
+        app.router.add_get("/api/turn", self._api_turn)
         app.router.add_post("/api/session/new", self._api_session_new)
         app.router.add_post("/api/session/delete", self._api_session_delete)
         app.router.add_get("/api/workspace/tree", self._api_workspace_tree)
@@ -602,6 +731,9 @@ class DashboardChannel(BaseChannel):
         app.router.add_post("/api/push/subscribe", self._api_push_subscribe)
         app.router.add_post("/api/push/unsubscribe", self._api_push_unsubscribe)
         app.router.add_post("/api/push/send", self._api_push_send)
+        # Per-device notification preference (spec 127 §D).
+        app.router.add_get("/api/notifications/pref", self._api_notifications_pref_get)
+        app.router.add_post("/api/notifications/pref", self._api_notifications_pref_set)
 
         app.router.add_get("/ws", self._ws_handler)
 
@@ -729,6 +861,29 @@ class DashboardChannel(BaseChannel):
         resp = web.json_response({"ok": True})
         resp.del_cookie(_MEDIA_COOKIE, path="/")
         return resp
+
+    async def _api_notifications_pref_get(self, request: web.Request) -> web.Response:
+        """Per-device notification preference (spec 127 §D).
+
+        Returns ``{"enabled": bool|null}`` — null when the device has no stored
+        preference yet, so the client falls back to its local default instead of
+        blocking on a server round-trip.
+        """
+        device_id = request.get("device_id", "")
+        pref = self._registry.get_notification_pref(device_id) if device_id else None
+        return web.json_response({"enabled": pref})
+
+    async def _api_notifications_pref_set(self, request: web.Request) -> web.Response:
+        device_id = request.get("device_id", "")
+        if not device_id:
+            return web.json_response({"error": "unpaired device"}, status=401)
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        enabled = bool(data.get("enabled"))
+        self._registry.set_notification_pref(device_id, enabled)
+        return web.json_response({"ok": True, "enabled": enabled})
 
     # ------------------------------------------------------------------ chat api
 
@@ -1154,10 +1309,30 @@ class DashboardChannel(BaseChannel):
             }
             if quotes:
                 entry["quotes"] = quotes
+            # Attachments persisted for this turn (spec 127 §B) — surfaced so a
+            # reload reconstructs media bubbles the live stream may have missed.
+            if m.get("media"):
+                entry["media"] = m["media"]
+            if m.get("turn_id"):
+                entry["turn_id"] = m["turn_id"]
             messages.append(entry)
         return web.json_response(
-            {"key": key, "createdAt": session.created_at.isoformat(), "messages": messages}
+            {
+                "key": key,
+                "createdAt": session.created_at.isoformat(),
+                "messages": messages,
+                "turn": self._session_turn_block(key),
+            }
         )
+
+    async def _api_turn(self, request: web.Request) -> web.Response:
+        """Authoritative turn state for a session (spec 127 §A.4).
+
+        Clients reconcile on WS (re)connect and on tab resume so a missed
+        terminal frame can never strand the UI in a "streaming" state.
+        """
+        key = request.query.get("key") or DASHBOARD_SESSION_KEY
+        return web.json_response(self._session_turn_block(key))
 
     async def _api_session_new(self, request: web.Request) -> web.Response:
         if not self.session_manager:
@@ -1724,6 +1899,23 @@ class DashboardChannel(BaseChannel):
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
         self._ws_clients.add(ws)
+        # Authoritative snapshot on every (re)connect (spec 127 §A.5): the
+        # client reconciles its turn state without waiting for a future frame,
+        # so a terminal frame missed while offline can't strand the UI.
+        try:
+            await ws.send_str(
+                json.dumps(
+                    {
+                        "type": "snapshot",
+                        "channel": self.name,
+                        "chatId": "console",
+                        "turn": self._session_turn_block(DASHBOARD_SESSION_KEY),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        except Exception:
+            pass
         await self._flush_pending_notify(ws)
         try:
             async for msg in ws:

@@ -1,5 +1,8 @@
 import { getToken } from "./api";
+import { WS_OPEN_EVENT } from "./events";
 import type { OutboundMessage } from "./types";
+
+export { WS_OPEN_EVENT } from "./events";
 
 type MessageHandler = (msg: OutboundMessage) => void;
 
@@ -15,8 +18,10 @@ export interface NotificationFrame {
 
 type NotificationHandler = (n: NotificationFrame) => void;
 
-/** Fired (on the socket and as a window event) every time the WS opens. */
-export const WS_OPEN_EVENT = "sarathy:ws-open";
+/** A raw parsed WS frame of any type (`message`, `notification`, `turn_state`, `snapshot`). */
+export type RawFrame = { type?: string } & Record<string, unknown>;
+type FrameHandler = (frame: RawFrame) => void;
+
 type OpenHandler = () => void;
 
 export class DashboardSocket {
@@ -24,6 +29,7 @@ export class DashboardSocket {
   private handlers = new Set<MessageHandler>();
   private notifHandlers = new Set<NotificationHandler>();
   private openHandlers = new Set<OpenHandler>();
+  private frameHandlers = new Set<FrameHandler>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -58,6 +64,36 @@ export class DashboardSocket {
     return () => this.openHandlers.delete(handler);
   }
 
+  /**
+   * Subscribe to EVERY parsed frame, regardless of `type`. The shared turn
+   * module reads `turn_state` / `snapshot` frames (spec 127 §C) without
+   * stealing them from `onMessage`, whose `type:"message"` contract is
+   * unchanged.
+   */
+  onFrame(handler: FrameHandler): () => void {
+    this.frameHandlers.add(handler);
+    return () => this.frameHandlers.delete(handler);
+  }
+
+  /**
+   * Re-open the socket if it is not already usable (spec 127 §C.3).
+   *
+   * The iOS PWA suspends the page and the socket dies without a prompt
+   * `onclose`; on resume `visibilitychange`/`pageshow` call this to force a
+   * reconnect immediately instead of waiting out the backoff. No-ops when the
+   * socket is OPEN or already CONNECTING.
+   */
+  ensureConnected(): void {
+    if (this.closed) return;
+    const state = this.ws?.readyState;
+    if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.open();
+  }
+
   private open(): void {
     if (!getToken()) return;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -90,6 +126,9 @@ export class DashboardSocket {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data as string);
+        // Fan every frame to generic subscribers first (additive; does not
+        // consume the frame — the typed handlers below still run).
+        this.frameHandlers.forEach((h) => h(data as RawFrame));
         if (data?.type === "notification") {
           this.notifHandlers.forEach((h) => h(data as NotificationFrame));
           // Emit custom event for views that don't have direct socket access

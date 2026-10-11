@@ -533,6 +533,7 @@ function MobileMessage({
   onSend?: (message: string) => void;
 }) {
   const isUser = message.role === "user";
+  const isNotice = !isUser && Boolean(message.notice);
   // Shared render-layer cleanup (spec 126 §B).
   const cleanContent = useMemo(
     () => cleanRenderedContent(message.content),
@@ -547,16 +548,21 @@ function MobileMessage({
   }, [message.media, message.content]);
 
   const showThinking =
-    !isUser && (message.toolHints?.length || 0) + (message.thinkingContent?.length || 0) > 0;
-  const isStreaming = message.progress && (message.content?.length ?? 0) === 0;
+    !isUser && !isNotice && (message.toolHints?.length || 0) + (message.thinkingContent?.length || 0) > 0;
+  const isStreaming = message.progress && !isNotice && (message.content?.length ?? 0) === 0;
 
   return (
     <div className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
           "max-w-[88%] rounded-2xl px-4 py-2.5 text-base leading-relaxed",
-          isUser ? "bg-primary text-primary-foreground" : "border border-border bg-card",
+          isUser
+            ? "bg-primary text-primary-foreground"
+            : isNotice
+              ? "border border-dashed border-border bg-muted/40 py-2 text-[13px] text-muted-foreground"
+              : "border border-border bg-card",
         )}
+        data-testid={isNotice ? "command-notice" : undefined}
       >
         {showThinking && (
           <ThinkingSection
@@ -611,7 +617,7 @@ function MobileMessage({
             thinking…
           </div>
         ) : null}
-        {!isUser && onRegenerate && (
+        {!isUser && !isNotice && onRegenerate && (
           <button
             onClick={onRegenerate}
             className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground"

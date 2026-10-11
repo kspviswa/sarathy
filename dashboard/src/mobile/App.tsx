@@ -19,6 +19,7 @@ import type { Quote } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
 import { ThemeProvider } from "@/lib/theme";
 import { useLastSession, resetLastSession, DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
+import { applyOutbound } from "@/lib/transcript";
 import { useNotificationPref } from "@/lib/useNotificationPref";
 import { useNotifications, type AppNotification } from "@/lib/useNotifications";
 import { DashboardSocket } from "@/lib/ws";
@@ -156,71 +157,29 @@ function MobileAppInner() {
     });
     const unsubscribe = socket.onMessage((m) => {
       if (m.channel !== "dashboard" || m.chatId !== "console") return;
-      if (m.metadata?._final) {
+      const md = (m.metadata || {}) as Record<string, unknown>;
+
+      // Out-of-band command acks (/stop, /steer, /btw): their own bubble, and
+      // they must not disturb the running turn's streaming state.
+      if (md._notice) {
+        setMessages((prev) => applyOutbound(prev, m));
+        return;
+      }
+
+      if (md._final) {
         setStreaming(false);
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.role === "assistant" && last.progress) {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, content: m.content, progress: false, media: m.media?.length ? m.media : last.media, replyTo: m.replyTo ?? last.replyTo },
-            ];
-          }
-          if (last?.role === "assistant" && !last.progress) {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, content: last.content + m.content, progress: false, media: m.media?.length ? m.media : last.media, replyTo: m.replyTo ?? last.replyTo },
-            ];
-          }
-          return [...prev, { role: "assistant", content: m.content, media: m.media, replyTo: m.replyTo }];
-        });
+        setMessages((prev) => applyOutbound(prev, m));
         return;
       }
-      if (m.metadata?._progress) {
+
+      if (md._progress || md._thinking || md._tool_hint) {
         setStreaming(true);
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.role === "assistant") {
-            return [...prev.slice(0, -1), { ...last, content: m.content, progress: true }];
-          }
-          return [...prev, { role: "assistant", content: m.content, progress: true }];
-        });
+        setMessages((prev) => applyOutbound(prev, m));
         return;
       }
-      if (m.metadata?._thinking) {
-        setStreaming(true);
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last?.role === "assistant") {
-            return [...prev.slice(0, -1), { ...last, thinkingContent: m.content }];
-          }
-          return [...prev, { role: "assistant", content: "", thinkingContent: m.content }];
-        });
-        return;
-      }
-      if (m.metadata?._tool_hint) {
-        setStreaming(true);
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          const hint = String(m.metadata._tool_hint);
-          if (last?.role === "assistant") {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, toolHint: hint, toolHints: [...(last.toolHints || []), hint] },
-            ];
-          }
-          return [...prev, { role: "assistant", content: "", toolHint: hint, toolHints: [hint] }];
-        });
-        return;
-      }
+
       setStreaming(false);
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.role === "assistant" && !last.progress) {
-          return [...prev.slice(0, -1), { ...last, content: last.content + m.content, media: m.media?.length ? m.media : last.media, replyTo: m.replyTo ?? last.replyTo }];
-        }
-        return [...prev, { role: "assistant", content: m.content, media: m.media, replyTo: m.replyTo }];
-      });
+      setMessages((prev) => applyOutbound(prev, m));
     });
     socket.connect();
     return () => {

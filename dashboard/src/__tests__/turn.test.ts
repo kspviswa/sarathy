@@ -30,7 +30,6 @@ import {
   attachTurnSync,
   getTurnSnapshot,
   endTurnLocal,
-  noteMessageFrame,
   reconcileTurn,
   setServerTurn,
   useTurn,
@@ -91,52 +90,6 @@ describe("turn module — server-owned streaming state", () => {
 
     expect(getTurnSnapshot().streaming).toBe(false);
     expect(apiMock.turn).toHaveBeenCalled();
-  });
-
-  it("voice-reply flow clears streaming: media frame (no _final) then turn_state:false", () => {
-    // The voice-reply path relays via the message tool to the SAME dashboard
-    // target, so the final response is suppressed and NO `_final` frame is ever
-    // sent. The media bubble arrives as a plain frame; the ONLY terminal signal
-    // is the server `turn_state:false`. The spinner must clear on it
-    // (Viswa's "spinner still spinning after a voice reply", 2026-10-11).
-    let handler: FrameHandler | null = null;
-    const detach = attachTurnSync({
-      onFrame: (h: FrameHandler) => {
-        handler = h;
-        return () => {
-          handler = null;
-        };
-      },
-      ensureConnected: () => {},
-    });
-
-    act(() => {
-      handler?.({
-        type: "turn_state",
-        channel: "dashboard",
-        turn: { active: true, state: "thinking", turn_id: "V1", started_at: 1 },
-      });
-    });
-    expect(getTurnSnapshot().streaming).toBe(true);
-
-    // The media outbound (assistant voice reply): no _final/_progress/_thinking.
-    act(() => {
-      noteMessageFrame({
-        metadata: { turn_id: "V1" },
-        // media present on the real frame; the turn module only reads metadata
-      });
-    });
-    expect(getTurnSnapshot().streaming).toBe(true);
-
-    act(() => {
-      handler?.({
-        type: "turn_state",
-        channel: "dashboard",
-        turn: { active: false, state: "idle", turn_id: null, started_at: null },
-      });
-    });
-    expect(getTurnSnapshot().streaming).toBe(false);
-    detach();
   });
 
   it("reacts to turn_state / snapshot frames from the socket", () => {

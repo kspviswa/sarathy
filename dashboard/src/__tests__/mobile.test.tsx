@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import React, { useEffect } from "react";
 
@@ -6,6 +6,7 @@ vi.mock("@/lib/api", () => ({
   api: {
     me: vi.fn().mockResolvedValue({ ok: true }),
     sendChat: vi.fn().mockResolvedValue({ ok: true }),
+    sendChatFull: vi.fn().mockResolvedValue({ ok: true }),
     sendChatWithMedia: vi.fn().mockResolvedValue({ ok: true }),
     stopChat: vi.fn().mockResolvedValue({ ok: true }),
     logout: vi.fn().mockResolvedValue({ ok: true }),
@@ -62,6 +63,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import MobileApp from "@/mobile/App";
+import { ChatView as MobileChatView } from "@/mobile/ChatView";
 import { api } from "@/lib/api";
 
 // Injectable history: lets tests feed messages directly into the mobile chat.
@@ -326,3 +328,123 @@ describe("Mobile app — bottom tab bar", () => {
     });
   });
 });
+
+/**
+ * Spec 126 §D + §F — quote-and-ask and notification-Reply, ported to the mobile
+ * SPA. Functionality lives in the shared `@/lib/quotes` + `@/components/QuoteAsk`
+ * modules; this only proves the mobile view binds them.
+ */
+describe("Mobile quote-and-ask (parity with desktop)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const baseProps = {
+    streaming: false,
+    onSend: vi.fn().mockResolvedValue(undefined),
+    onStop: vi.fn(),
+    onNewChat: vi.fn(),
+  };
+
+  function stubSelection(text: string, container: Element) {
+    const range = document.createRange();
+    range.selectNodeContents(container);
+    // jsdom's Range has no layout, so give it the one method the hook needs.
+    (range as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect =
+      () =>
+        ({
+          top: 120,
+          left: 40,
+          right: 200,
+          bottom: 140,
+          width: 160,
+          height: 20,
+          x: 40,
+          y: 120,
+          toJSON: () => ({}),
+        }) as DOMRect;
+    const selection = {
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => text,
+      getRangeAt: () => range,
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection;
+    vi.spyOn(window, "getSelection").mockReturnValue(selection);
+    return selection;
+  }
+
+  it("surfaces 'Add to follow-up' on an assistant selection and makes a chip", async () => {
+    render(
+      <MobileChatView
+        {...baseProps}
+        messages={[{ role: "assistant", content: "Hello from Sarathy" }]}
+      />,
+    );
+    const list = screen.getByTestId("mobile-message-list");
+    await act(async () => {
+      stubSelection("Hello from Sarathy", list);
+      document.dispatchEvent(new Event("selectionchange"));
+      await Promise.resolve();
+    });
+
+    const bar = await screen.findByTestId("quote-action-bar");
+    expect(bar).toHaveTextContent("Add to follow-up");
+
+    await act(async () => {
+      fireEvent.click(bar);
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("quote-chips")).toBeInTheDocument();
+    expect(screen.getByTestId("quote-chip")).toHaveTextContent("Hello from Sarathy");
+  });
+
+  it("travels with the next send as the `quotes` payload", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MobileChatView
+        {...baseProps}
+        onSend={onSend}
+        messages={[{ role: "assistant", content: "Hello from Sarathy" }]}
+      />,
+    );
+    const list = screen.getByTestId("mobile-message-list");
+    await act(async () => {
+      stubSelection("Hello from Sarathy", list);
+      document.dispatchEvent(new Event("selectionchange"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quote-action-bar"));
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("mobile-composer-input"), {
+        target: { value: "explain this" },
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mobile-send"));
+      await Promise.resolve();
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    const args = onSend.mock.calls[0];
+    expect(args[0]).toBe("explain this");
+    expect(args[4]).toEqual([{ source_role: "assistant", text: "Hello from Sarathy" }]);
+  });
+
+  it("seeds a quote chip from a notification Reply (followUpSeed)", async () => {
+    render(
+      <MobileChatView
+        {...baseProps}
+        messages={[]}
+        followUpSeed={{ text: "Job 126 finished", nonce: 1 }}
+      />,
+    );
+    const chip = await screen.findByTestId("quote-chip");
+    expect(chip).toHaveTextContent("Job 126 finished");
+  });
+});
+

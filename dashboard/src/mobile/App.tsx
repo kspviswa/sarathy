@@ -15,11 +15,12 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { Logo } from "@/components/logo";
 import { NotificationControls } from "@/components/NotificationControls";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
+import type { Quote } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
 import { ThemeProvider } from "@/lib/theme";
 import { useLastSession, resetLastSession, DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 import { useNotificationPref } from "@/lib/useNotificationPref";
-import { useNotifications } from "@/lib/useNotifications";
+import { useNotifications, type AppNotification } from "@/lib/useNotifications";
 import { DashboardSocket } from "@/lib/ws";
 import type { ChatMessage as ChatMessageT } from "@/views/ChatView";
 import { PairView } from "@/views/PairView";
@@ -50,6 +51,7 @@ function MobileAppInner() {
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [unread, setUnread] = useState<Partial<Record<Tab, number>>>({});
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [followUpSeed, setFollowUpSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [socket, setSocket] = useState<DashboardSocket | null>(null);
   const socketRef = useRef<DashboardSocket | null>(null);
@@ -108,7 +110,8 @@ function MobileAppInner() {
     setMessages,
   );
 
-  const { notifications, unreadIds, markAllRead, markRead } = useNotifications(socket, {
+  const { notifications, unreadIds, markAllRead, markRead, remove, clearAll } =
+    useNotifications(socket, {
     navigateTo: (tabId) => {
       const dest = TABS.find((t) => t.id === tabId);
       if (!dest) return;
@@ -230,18 +233,55 @@ function MobileAppInner() {
   }, [authed]);
 
   const handleSend = useCallback(
-    async (content: string, media?: string[], replyTo?: string | null, replyToContent?: string) => {
+    async (
+      content: string,
+      media?: string[],
+      replyTo?: string | null,
+      replyToContent?: string,
+      quotes?: Quote[],
+    ) => {
       lastUserMessageRef.current = content;
-      setMessages((prev) => [...prev, { role: "user", content, media, replyTo, replyToContent }]);
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content, media, replyTo, replyToContent, quotes },
+      ]);
       setStreaming(true);
-      if (media && media.length > 0) {
-        await api.sendChatWithMedia(content, media, replyTo);
-      } else {
-        await api.sendChat(content);
-      }
+      await api.sendChatFull({
+        content,
+        ...(media?.length ? { media } : {}),
+        replyTo: replyTo ?? null,
+        ...(quotes?.length ? { quotes } : {}),
+      });
     },
     [],
   );
+
+  /**
+   * "Reply" on a notification (spec 126 §D) — mobile parity with the desktop
+   * App. Starts a NEW session so the follow-up is a clean conversation, then
+   * seeds the composer with the notification as a quote chip. Nothing is sent
+   * on the user's behalf.
+   */
+  const handleNotificationReply = useCallback(async (n: AppNotification) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      await api.sessionNew(DASHBOARD_SESSION_KEY);
+      resetLastSession();
+      setMessages([]);
+      setStreaming(false);
+      setOpenFile(null);
+      setFollowUpSeed({
+        text: [n.title, n.body].filter(Boolean).join("\n"),
+        nonce: Date.now(),
+      });
+      setTab("chat");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to start a new session");
+    } finally {
+      busyRef.current = false;
+    }
+  }, []);
 
   const handleNewChat = useCallback(async () => {
     if (busyRef.current) return;
@@ -326,6 +366,10 @@ function MobileAppInner() {
             unreadIds={unreadIds}
             onMarkAllRead={markAllRead}
             onMarkRead={markRead}
+            onDelete={remove}
+            onClearAll={clearAll}
+            swipeToDismiss
+            onReply={(n) => void handleNotificationReply(n)}
             onNavigate={(tabId) => {
               const dest = TABS.find((t) => t.id === tabId);
               if (!dest) return;
@@ -360,6 +404,7 @@ function MobileAppInner() {
               onRegenerate={handleRegenerate}
               commands={commands}
               sessionKey={DASHBOARD_SESSION_KEY}
+              followUpSeed={followUpSeed}
             />
           </>
         )}

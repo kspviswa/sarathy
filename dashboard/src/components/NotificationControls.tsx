@@ -37,6 +37,9 @@ export function NotificationControls({
   onMarkRead,
   onNavigate,
   onReply,
+  onDelete,
+  onClearAll,
+  swipeToDismiss,
   className,
 }: {
   enabled: boolean | null;
@@ -48,6 +51,12 @@ export function NotificationControls({
   onNavigate: (tab: string) => void;
   /** Start a new chat seeded with this notification as prior context. */
   onReply?: (notification: AppNotification) => void;
+  /** Delete a single notification. Enables per-row delete controls. */
+  onDelete?: (id: string) => void;
+  /** Clear the whole notification list. */
+  onClearAll?: () => void;
+  /** Enable touch swipe-to-dismiss on notification rows. */
+  swipeToDismiss?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -128,6 +137,9 @@ export function NotificationControls({
           onMarkRead={onMarkRead}
           onNavigate={onNavigate}
           onReply={onReply}
+          onDelete={onDelete}
+          onClearAll={onClearAll}
+          swipeToDismiss={swipeToDismiss}
           notificationsEnabled={isOn}
           onNotificationsEnabledChange={(checked) => {
             if (checked) void enable();

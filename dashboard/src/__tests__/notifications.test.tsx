@@ -200,6 +200,24 @@ describe("useNotifications", () => {
     expect(navigator.clearAppBadge).toHaveBeenCalled();
     expect(navigateTo).toHaveBeenCalledWith("status");
   });
+
+  it("remove drops one notification; clearAll empties the list and the badge", () => {
+    const socket = makeSocket();
+    const { result } = renderHook(() => useNotifications(socket as never));
+
+    act(() => socket.emit(frame({ title: "One" })));
+    act(() => socket.emit(frame({ title: "Two", timestamp: "2026-08-28T00:00:01.000Z" })));
+    expect(result.current.notifications).toHaveLength(2);
+    expect(result.current.unreadCount).toBe(2);
+
+    act(() => result.current.remove(result.current.notifications[0].id));
+    expect(result.current.notifications).toHaveLength(1);
+    expect(result.current.unreadCount).toBe(1);
+
+    act(() => result.current.clearAll());
+    expect(result.current.notifications).toHaveLength(0);
+    expect(result.current.unreadCount).toBe(0);
+  });
 });
 
 /* ------------------------------------------------- §B controls: toggle + bell */
@@ -517,3 +535,62 @@ describe("NotificationCenter full message + Reply (spec 126 §D)", () => {
     expect(dismiss.className).not.toMatch(/bg-|backdrop-blur|opacity-/);
   });
 });
+
+/* ----------------------------- §E delete / clear-all / swipe (mobile opt-in) */
+
+/**
+ * Delete, clear-all and swipe are OPT-IN props on the shared panel. A surface
+ * that does not pass them (the desktop SPA) must render exactly as before —
+ * that is what keeps the desktop UI frozen while the mobile SPA gains the
+ * affordances.
+ */
+describe("NotificationCenter delete + clear all + swipe (opt-in)", () => {
+  afterEach(cleanup);
+
+  function renderPanel(over: Record<string, unknown> = {}) {
+    return render(
+      <NotificationCenter
+        notifications={[notif("1"), notif("2")]}
+        unreadIds={["1"]}
+        open
+        onOpenChange={vi.fn()}
+        onMarkAllRead={vi.fn()}
+        onMarkRead={vi.fn()}
+        onNavigate={vi.fn()}
+        {...over}
+      />,
+    );
+  }
+
+  it("adds no delete/clear/swipe affordance when the surface does not opt in (desktop unchanged)", () => {
+    renderPanel();
+    expect(screen.queryByTestId("notifications-delete")).toBeNull();
+    expect(screen.queryByTestId("notifications-clear-all")).toBeNull();
+    expect(screen.queryByTestId("swipe-row")).toBeNull();
+  });
+
+  it("renders a per-row delete control that removes that notification", () => {
+    const onDelete = vi.fn();
+    renderPanel({ onDelete, onClearAll: vi.fn() });
+
+    const deletes = screen.getAllByTestId("notifications-delete");
+    expect(deletes).toHaveLength(2);
+    fireEvent.click(deletes[0]);
+    expect(onDelete).toHaveBeenCalledWith("1");
+    // Deleting must not also trigger the row's mark-read/navigate.
+    expect(screen.getAllByTestId("notifications-item")).toHaveLength(2);
+  });
+
+  it("renders a Clear all control wired to onClearAll", () => {
+    const onClearAll = vi.fn();
+    renderPanel({ onDelete: vi.fn(), onClearAll });
+    fireEvent.click(screen.getByTestId("notifications-clear-all"));
+    expect(onClearAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("wraps each row in a swipe container only when swipeToDismiss is set", () => {
+    renderPanel({ onDelete: vi.fn(), swipeToDismiss: true });
+    expect(screen.getAllByTestId("swipe-row")).toHaveLength(2);
+  });
+});
+

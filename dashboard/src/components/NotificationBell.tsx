@@ -21,6 +21,9 @@ export function NotificationBell({
   onMarkRead,
   onNavigate,
   onReply,
+  onDelete,
+  onClearAll,
+  swipeToDismiss,
   notificationsEnabled = true,
   onNotificationsEnabledChange,
   className,
@@ -34,6 +37,12 @@ export function NotificationBell({
   onNavigate: (tab: string) => void;
   /** Forwarded to the panel's per-item Reply action. */
   onReply?: (notification: AppNotification) => void;
+  /** Forwarded to the panel's per-item delete action. */
+  onDelete?: (id: string) => void;
+  /** Forwarded to the panel's "Clear all" action. */
+  onClearAll?: () => void;
+  /** Forwarded to the panel — enable touch swipe-to-dismiss. */
+  swipeToDismiss?: boolean;
   /** Forwarded to the panel's secondary enable/disable switch. */
   notificationsEnabled?: boolean;
   onNotificationsEnabledChange?: (enabled: boolean) => void;
@@ -77,6 +86,9 @@ export function NotificationBell({
           onMarkRead={onMarkRead}
           onNavigate={onNavigate}
           onReply={onReply}
+          onDelete={onDelete}
+          onClearAll={onClearAll}
+          swipeToDismiss={swipeToDismiss}
           notificationsEnabled={notificationsEnabled}
           onNotificationsEnabledChange={onNotificationsEnabledChange}
         />

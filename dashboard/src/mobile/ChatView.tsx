@@ -13,6 +13,7 @@ import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
 import { Logo } from "@/components/logo";
+import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CodeBlock } from "@/components/CodeBlock";
@@ -24,6 +25,15 @@ import { api } from "@/lib/api";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
 import { SAFE_REHYPE_PLUGINS, SafeLink } from "@/lib/markdown";
 import { extractProse, hasOpenUIBlock, UIBlock } from "@/lib/uiBlocks";
+import {
+  addQuote,
+  buildQuotesPayload,
+  clearQuotes,
+  quoteFromSelection,
+  removeQuote,
+  type Quote,
+  type QuoteChip,
+} from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
 import type { ChatMessage } from "@/views/ChatView";
 import { DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
@@ -102,28 +112,67 @@ export function ChatView({
   onRegenerate,
   commands = [],
   sessionKey = DASHBOARD_SESSION_KEY,
+  followUpSeed = null,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
   loading?: boolean;
-  onSend: (content: string, media?: string[], replyTo?: string | null, replyToContent?: string) => Promise<void> | void;
+  onSend: (
+    content: string,
+    media?: string[],
+    replyTo?: string | null,
+    replyToContent?: string,
+    quotes?: Quote[],
+  ) => Promise<void> | void;
   onStop: () => Promise<void> | void;
   onNewChat: () => void;
   onOpenFile?: (path: string) => void;
   onRegenerate?: () => void;
   commands?: SlashCommand[];
   sessionKey?: string;
+  /** A notification-center "Reply" lands here as a pre-seeded quote chip. Keyed
+   *  on `nonce` so replying to the same notification twice re-seeds. */
+  followUpSeed?: { text: string; nonce: number } | null;
 }) {
   const [input, setInput] = useState("");
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
+  const [quoteChips, setQuoteChips] = useState<QuoteChip[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isNearBottomRef = useRef(true);
+
+  // Quote-and-ask (spec §F): selection inside the message list surfaces the
+  // "Add to follow-up" bar. Shared hook — the desktop ChatView uses the same
+  // one, so behavior stays in lockstep across both SPAs.
+  const selection = useTextSelection(messageListRef, !streaming);
+
+  const addSelectionAsQuote = useCallback(() => {
+    const quote = quoteFromSelection(window.getSelection(), { sourceRole: "assistant" });
+    if (!quote) return;
+    setQuoteChips((chips) => addQuote(chips, quote));
+    window.getSelection()?.removeAllRanges();
+    toast.success("Added to follow-up");
+  }, []);
+
+  // Notification "Reply" seeds the composer with a quote chip (parity with
+  // desktop App's followUpSeed handling).
+  useEffect(() => {
+    if (!followUpSeed?.text) return;
+    setQuoteChips((chips) =>
+      addQuote(chips, {
+        text: followUpSeed.text,
+        source_message_id: `notification-${followUpSeed.nonce}`,
+        source_role: "assistant",
+      }),
+    );
+    textareaRef.current?.focus();
+  }, [followUpSeed]);
 
   const checkNearBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -246,15 +295,23 @@ export function ChatView({
 
   async function send() {
     const content = input.trim();
-    if (!content && !mediaPaths.length) return;
+    if (!content && !mediaPaths.length && quoteChips.length === 0) return;
     if (!allUploaded) {
       toast.info("Waiting for uploads to finish…");
       return;
     }
+    const quotes = buildQuotesPayload(quoteChips);
     setInput("");
     setPendingMedia([]);
+    setQuoteChips(clearQuotes());
     try {
-      await onSend(content, mediaPaths.length ? mediaPaths : undefined);
+      await onSend(
+        content,
+        mediaPaths.length ? mediaPaths : undefined,
+        undefined,
+        undefined,
+        quotes.length ? quotes : undefined,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to send");
     }
@@ -291,7 +348,7 @@ export function ChatView({
             </div>
           )
         ) : null}
-        <div className="flex w-full flex-col gap-3">
+        <div ref={messageListRef} className="flex w-full flex-col gap-3" data-testid="mobile-message-list">
           {messages.map((m, i) => (
             <MobileMessage
               key={i}
@@ -320,6 +377,10 @@ export function ChatView({
             if (e.target.files?.length) addFiles(e.target.files);
             e.target.value = "";
           }}
+        />
+        <QuoteChips
+          chips={quoteChips}
+          onRemove={(id) => setQuoteChips((c) => removeQuote(c, id))}
         />
         {pendingMedia.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
@@ -428,7 +489,7 @@ export function ChatView({
                 size="icon"
                 className="size-11 shrink-0 rounded-full"
                 onClick={() => void send()}
-                disabled={!input.trim() && !mediaPaths.length}
+                disabled={!input.trim() && !mediaPaths.length && quoteChips.length === 0}
                 aria-label="Send"
                 data-testid="mobile-send"
               >
@@ -445,6 +506,12 @@ export function ChatView({
           className="mt-1.5"
         />
       </div>
+
+      <QuoteActionBar
+        visible={selection.visible}
+        rect={selection.rect}
+        onAdd={addSelectionAsQuote}
+      />
     </div>
   );
 }
@@ -502,6 +569,21 @@ function MobileMessage({
             )}
           >
             ↩ {message.replyToContent.slice(0, 80)}
+          </div>
+        )}
+        {message.quotes && message.quotes.length > 0 && (
+          <div
+            className={cn(
+              "mb-2 space-y-1 rounded-lg border px-2.5 py-1.5 text-xs opacity-80",
+              isUser ? "border-primary-foreground/30" : "border-border",
+            )}
+            data-testid="message-quotes"
+          >
+            {message.quotes.map((q, i) => (
+              <div key={i} className="border-l-2 border-current/30 pl-2 italic">
+                {q.text.length > 160 ? `${q.text.slice(0, 160)}…` : q.text}
+              </div>
+            ))}
           </div>
         )}
         {displayMedia.length > 0 && (

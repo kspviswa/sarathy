@@ -164,6 +164,18 @@ class MessageTool(Tool):
         if not channel or not chat_id:
             return "Error: No target channel/chat specified"
 
+        # Defense-in-depth: the session-topic machine marker (`<topic>{...}`) is
+        # a signal for the gateway, never for a human. The model is told to end
+        # its FINAL response with it, but it sometimes appends it to a message
+        # tool call too — which was shipped verbatim to the channel (Viswa saw
+        # the raw `{"set": null}` JSON on the dashboard after a voice reply,
+        # 2026-10-11). Strip it here so it can never leak on ANY channel.
+        # Imported lazily to avoid a circular import (loop.py imports this tool).
+        if isinstance(content, str) and "<topic>" in content:
+            from sarathy.agent.loop import strip_topic_marker
+
+            content, _ = strip_topic_marker(content)
+
         if not self._send_callback:
             return "Error: Message sending not configured"
 

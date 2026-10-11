@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Quote, X } from "lucide-react";
 
 import { chipLabel, type QuoteChip } from "@/lib/quotes";
@@ -80,9 +80,17 @@ export function QuoteChips({
 /**
  * Tracks the current text selection inside a container element.
  *
- * Returns whether a usable selection exists plus its viewport rect, so the
- * action bar can be positioned above it. Listens on `mouseup` and `selectionchange`
- * and clears on collapse so the bar never lingers.
+ * Returns whether a usable selection exists, its viewport rect, and the selected
+ * text itself (captured the moment the selection is made).
+ *
+ * Why all three:
+ * - Touch selections do NOT reliably fire `selectionchange` (iOS especially) and
+ *   never fire `mouseup`, so we also listen for `touchend` and `contextmenu`.
+ *   Without those the selection bar simply never appears on a phone.
+ * - Once shown, we hide on a short delay rather than instantly: tapping the bar
+ *   collapses the live selection first, and an immediate hide would unmount the
+ *   button before its click lands. The captured `text` is what the tap actually
+ *   quotes, so the quote survives the collapse.
  */
 export function useTextSelection(
   containerRef: React.RefObject<HTMLElement | null>,
@@ -90,43 +98,68 @@ export function useTextSelection(
 ) {
   const [visible, setVisible] = useState(false);
   const [rect, setRect] = useState<{ top: number; left: number } | null>(null);
+  const [text, setText] = useState("");
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!enabled) {
       setVisible(false);
+      setText("");
       return;
     }
+
+    const cancelHide = () => {
+      if (hideTimer.current) {
+        clearTimeout(hideTimer.current);
+        hideTimer.current = null;
+      }
+    };
 
     const update = () => {
       const selection = window.getSelection();
       const el = containerRef.current;
-      if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !el) {
-        setVisible(false);
+      const usable =
+        selection &&
+        !selection.isCollapsed &&
+        selection.rangeCount > 0 &&
+        el &&
+        el.contains(selection.getRangeAt(0).commonAncestorContainer);
+
+      const selected = usable
+        ? selection!.toString().replace(/\s+/g, " ").trim()
+        : "";
+
+      if (!usable || !selected) {
+        // Defer: a tap on the action bar collapses the selection first.
+        cancelHide();
+        hideTimer.current = setTimeout(() => {
+          setVisible(false);
+          setText("");
+        }, 300);
         return;
       }
-      const range = selection.getRangeAt(0);
-      // Only selections genuinely inside this container count.
-      if (!el.contains(range.commonAncestorContainer)) {
-        setVisible(false);
-        return;
-      }
-      const text = selection.toString().replace(/\s+/g, " ").trim();
-      if (!text) {
-        setVisible(false);
-        return;
-      }
-      const domRect = range.getBoundingClientRect();
+
+      cancelHide();
+      const domRect = selection!.getRangeAt(0).getBoundingClientRect();
       setRect({ top: domRect.top, left: domRect.left });
+      setText(selected);
       setVisible(true);
     };
 
-    document.addEventListener("selectionchange", update);
-    document.addEventListener("mouseup", update);
+    // selectionchange + mouseup: pointer/desktop. touchend + contextmenu: touch.
+    const events: Array<keyof DocumentEventMap> = [
+      "selectionchange",
+      "mouseup",
+      "touchend",
+      "contextmenu",
+      "keyup",
+    ];
+    events.forEach((e) => document.addEventListener(e, update));
     return () => {
-      document.removeEventListener("selectionchange", update);
-      document.removeEventListener("mouseup", update);
+      cancelHide();
+      events.forEach((e) => document.removeEventListener(e, update));
     };
   }, [containerRef, enabled]);
 
-  return { visible, rect };
+  return { visible, rect, text };
 }

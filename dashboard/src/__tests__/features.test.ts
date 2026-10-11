@@ -22,8 +22,10 @@ import {
   clearQuotes,
   hasQuotes,
   quoteFromSelection,
+  quoteFromText,
   removeQuote,
   MAX_QUOTES,
+  MAX_QUOTE_CHARS,
   __resetQuoteIds,
   type QuoteChip,
 } from "@/lib/quotes";
@@ -170,6 +172,16 @@ describe("quote-and-ask", () => {
     expect(quoteFromSelection(fakeSelection("x", true))).toBeNull();
     expect(quoteFromSelection(fakeSelection("   "))).toBeNull();
     expect(quoteFromSelection(null)).toBeNull();
+  });
+
+  it("builds a quote from captured text (the touch tap path)", () => {
+    // On touch the live selection is gone by the time the bar is tapped, so the
+    // bar quotes this captured string instead of re-reading getSelection().
+    const q = quoteFromText("  a\n\n  b  ", { sourceRole: "assistant" });
+    expect(q).toEqual({ text: "a b", source_role: "assistant" });
+    expect(quoteFromText("")).toBeNull();
+    expect(quoteFromText("   ")).toBeNull();
+    expect(quoteFromText("x".repeat(MAX_QUOTE_CHARS + 1))).toBeNull();
   });
 
   it("adds chips with stable, distinct ids", () => {

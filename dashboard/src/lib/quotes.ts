@@ -47,13 +47,28 @@ export function quoteFromSelection(
   opts: { sourceMessageId?: string; sourceRole?: "user" | "assistant" } = {},
 ): Quote | null {
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  return quoteFromText(selection.toString(), opts);
+}
 
-  const text = selection.toString().replace(/\s+/g, " ").trim();
-  if (!text) return null;
-  if (text.length > MAX_QUOTE_CHARS) return null;
+/**
+ * Build a Quote from an already-captured string.
+ *
+ * The action bar captures the selected text the moment the selection is made and
+ * hands it back here on tap. That matters on touch: tapping the bar collapses
+ * the live selection, so re-reading `window.getSelection()` at click time would
+ * quote nothing. Working from the captured text makes mouse and touch behave
+ * identically.
+ */
+export function quoteFromText(
+  text: string,
+  opts: { sourceMessageId?: string; sourceRole?: "user" | "assistant" } = {},
+): Quote | null {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  if (normalized.length > MAX_QUOTE_CHARS) return null;
 
   return {
-    text,
+    text: normalized,
     ...(opts.sourceMessageId ? { source_message_id: opts.sourceMessageId } : {}),
     ...(opts.sourceRole ? { source_role: opts.sourceRole } : {}),
   };

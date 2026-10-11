@@ -114,6 +114,7 @@ export function ChatView({
   commands = [],
   sessionKey = DASHBOARD_SESSION_KEY,
   followUpSeed = null,
+  onFollowUpSeedConsumed,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -134,6 +135,8 @@ export function ChatView({
   /** A notification-center "Reply" lands here as a pre-seeded quote chip. Keyed
    *  on `nonce` so replying to the same notification twice re-seeds. */
   followUpSeed?: { text: string; nonce: number } | null;
+  /** Called once a `followUpSeed` has been applied, so the owner can clear it. */
+  onFollowUpSeedConsumed?: () => void;
 }) {
   const [input, setInput] = useState("");
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
@@ -168,7 +171,10 @@ export function ChatView({
   // Notification "Reply" seeds the composer with a quote chip (parity with
   // desktop App's followUpSeed handling). The reply is a continuation of the
   // session already open, so a draft in the composer is preserved — the stub
-  // prompt is only prefilled when the box is empty.
+  // prompt is only prefilled when the box is empty. Keyed on `nonce` so
+  // replying to the same notification twice re-seeds; the seed is then CONSUMED
+  // (the owner clears it) so leaving the chat tab and returning does not
+  // re-inject a chip the user already removed.
   useEffect(() => {
     if (!followUpSeed?.text) return;
     setQuoteChips((chips) =>
@@ -180,7 +186,8 @@ export function ChatView({
     );
     setInput((prev) => prev.trim() || "Replying to this notification — ");
     textareaRef.current?.focus();
-  }, [followUpSeed]);
+    onFollowUpSeedConsumed?.();
+  }, [followUpSeed?.nonce, followUpSeed?.text, onFollowUpSeedConsumed]);
 
   const checkNearBottom = useCallback(() => {
     const el = scrollRef.current;

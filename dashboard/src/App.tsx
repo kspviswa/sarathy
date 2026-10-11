@@ -335,6 +335,9 @@ function AppInner() {
     [selectSection],
   );
 
+  /** The seed is one-shot: ChatView reports it applied so it can't re-inject. */
+  const clearFollowUpSeed = useCallback(() => setFollowUpSeed(null), []);
+
   const handleStop = useCallback(async () => {
     await api.stopChat();
     setStreaming(false);
@@ -567,6 +570,7 @@ function AppInner() {
                 }
                 messagesRef={messagesRef}
                 followUpSeed={followUpSeed}
+                onFollowUpSeedConsumed={clearFollowUpSeed}
               />
             </>
           )}

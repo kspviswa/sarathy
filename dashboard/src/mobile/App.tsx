@@ -230,6 +230,9 @@ function MobileAppInner() {
     setTab("chat");
   }, []);
 
+  /** The seed is one-shot: ChatView reports it applied so it can't re-inject. */
+  const clearFollowUpSeed = useCallback(() => setFollowUpSeed(null), []);
+
   const handleNewChat = useCallback(async () => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -352,6 +355,7 @@ function MobileAppInner() {
               commands={commands}
               sessionKey={DASHBOARD_SESSION_KEY}
               followUpSeed={followUpSeed}
+              onFollowUpSeedConsumed={clearFollowUpSeed}
             />
           </>
         )}

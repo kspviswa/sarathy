@@ -123,5 +123,22 @@ const [notifications, setNotifications] = useState<AppNotification[]>([]);
     setUnreadIds((prev) => prev.filter((x) => x !== id));
   }, []);
 
-  return { notifications, unreadCount, unreadIds, isUnread, markAllRead, markRead, remove };
+  /** Drop every notification (and the badge). Distinct from markAllRead, which
+   *  only clears the unread flags and keeps the list. */
+  const clearAll = useCallback(() => {
+    setNotifications([]);
+    setUnreadIds([]);
+    optionsRef.current?.onMarkAllRead?.();
+  }, []);
+
+  return {
+    notifications,
+    unreadCount,
+    unreadIds,
+    isUnread,
+    markAllRead,
+    markRead,
+    remove,
+    clearAll,
+  };
 }

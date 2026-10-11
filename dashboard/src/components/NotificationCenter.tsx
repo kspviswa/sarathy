@@ -1,9 +1,10 @@
-import { BellRing, CheckCheck, CornerDownRight, X } from "lucide-react";
+import { BellRing, CheckCheck, CornerDownRight, Trash2, X } from "lucide-react";
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { SwipeRow } from "@/components/SwipeRow";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { SAFE_REHYPE_PLUGINS, SafeLink } from "@/lib/markdown";
@@ -51,6 +52,9 @@ export function NotificationCenter({
   onMarkRead,
   onNavigate,
   onReply,
+  onDelete,
+  onClearAll,
+  swipeToDismiss,
   notificationsEnabled = true,
   onNotificationsEnabledChange,
   className,
@@ -64,6 +68,12 @@ export function NotificationCenter({
   onNavigate: (tab: string) => void;
   /** Start a new chat seeded with this notification as prior context. */
   onReply?: (notification: AppNotification) => void;
+  /** Delete one notification. When provided, each row shows a delete control. */
+  onDelete?: (id: string) => void;
+  /** Clear the whole list. When provided, the header shows a "Clear all". */
+  onClearAll?: () => void;
+  /** Add a left swipe-to-dismiss gesture to each row (touch surfaces). */
+  swipeToDismiss?: boolean;
   /** Present when the caller owns the single on/off notification control. */
   notificationsEnabled?: boolean;
   onNotificationsEnabledChange?: (enabled: boolean) => void;
@@ -115,6 +125,19 @@ export function NotificationCenter({
             <CheckCheck className="size-3.5" />
             <span className="text-xs">Mark all read</span>
           </Button>
+          {onClearAll && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onClearAll}
+              disabled={notifications.length === 0}
+              aria-label="Clear all notifications"
+              title="Clear all"
+              data-testid="notifications-clear-all"
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -163,7 +186,33 @@ export function NotificationCenter({
                     className="border-b border-border/60 last:border-b-0"
                     data-testid="notifications-row"
                   >
-                    <div className="flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left">
+                    <SwipeRow
+                      onDismiss={
+                        swipeToDismiss && onDelete ? () => onDelete(n.id) : undefined
+                      }
+                    >
+                    <div
+                      className={cn(
+                        "relative flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left",
+                        // Reserve room so the timestamp never sits under the X.
+                        onDelete && "pr-9",
+                      )}
+                    >
+                      {onDelete && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDelete(n.id);
+                          }}
+                          data-testid="notifications-delete"
+                          aria-label="Delete notification"
+                          title="Delete"
+                          className="absolute right-2 top-2.5 z-10 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -258,6 +307,7 @@ export function NotificationCenter({
                         </button>
                       )}
                     </div>
+                    </SwipeRow>
                   </li>
                 );
               })}

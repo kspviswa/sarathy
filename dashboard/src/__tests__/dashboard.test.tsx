@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import React from "react";
 
 vi.mock("@/lib/api", () => ({
@@ -257,6 +257,67 @@ describe("Markdown table — overflow-x-auto for horizontal scroll", () => {
     expect(mdContainer).toBeInTheDocument();
     const table = mdContainer!.querySelector("table");
     expect(table).toBeInTheDocument();
+  });
+});
+
+/**
+ * Parity: the image lightbox must behave identically in BOTH SPAs. The desktop
+ * `ChatView` and the mobile `ChatView` are different components, so this walks
+ * the real flow through each one rather than trusting that they share a module.
+ */
+describe("Image lightbox — desktop/mobile SPA parity", () => {
+  const imageMessage: ChatMessage = {
+    role: "assistant",
+    content: [
+      "Here is the picture.",
+      "```openui-lang",
+      "root = Stack([card])",
+      "card = Card([img])",
+      'img = ImageBlock("/api/media?path=/tmp/pic.jpg", "A diagram")',
+      "```",
+    ].join("\n"),
+  };
+
+  // The lightbox uses real pointer/click timing; fake timers would stall waitFor.
+  beforeEach(() => vi.useRealTimers());
+
+  const spAs: Array<[string, (props: typeof defaultProps) => React.ReactElement]> = [
+    ["desktop", (props) => <ChatView {...props} />],
+    ["mobile", (props) => <MobileChatView {...props} />],
+  ];
+
+  it.each(spAs)("%s SPA: tapping the image opens the lightbox", async (_name, renderSpa) => {
+    render(renderSpa({ ...defaultProps, messages: [imageMessage] }));
+
+    // The openUI runtime is a lazily-imported chunk; the first render in this
+    // file pays for the module load, so allow well beyond the 1s default.
+    const trigger = await screen.findByRole(
+      "button",
+      { name: /zoom image/i },
+      { timeout: 10_000 },
+    );
+    expect(trigger).toHaveAttribute("title", "Zoom: A diagram");
+
+    fireEvent.click(trigger);
+    const overlay = await screen.findByTestId("image-lightbox");
+    expect(overlay).toHaveAttribute("role", "dialog");
+
+    fireEvent.click(screen.getByTestId("lightbox-zoom-in"));
+    expect(screen.getByTestId("lightbox-zoom-level")).toHaveTextContent("140%");
+
+    fireEvent.click(screen.getByTestId("lightbox-close"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("image-lightbox")).not.toBeInTheDocument(),
+    );
+  });
+
+  it.each(spAs)("%s SPA: a plain reply renders no zoom affordance", async (_name, renderSpa) => {
+    render(
+      renderSpa({ ...defaultProps, messages: [{ role: "assistant", content: "Just prose." }] }),
+    );
+    // Markdown wraps the sentence in its own element, so match loosely.
+    await screen.findByText(/Just prose/, undefined, { timeout: 10_000 });
+    expect(screen.queryByRole("button", { name: /zoom image/i })).not.toBeInTheDocument();
   });
 });
 

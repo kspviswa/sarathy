@@ -28,18 +28,71 @@
 import "@openuidev/react-ui/index.css";
 import { createParser, Renderer, type Library, type ParseResult } from "@openuidev/react-lang";
 import { openuiLibrary } from "@openuidev/react-ui/genui-lib";
-import { ThemeProvider as OpenUIThemeProvider, type Theme } from "@openuidev/react-ui";
+import {
+  Image as OpenUIImage,
+  ImageBlock as OpenUIImageBlock,
+  ThemeProvider as OpenUIThemeProvider,
+  type Theme,
+} from "@openuidev/react-ui";
 import { useMemo } from "react";
 
+import { LightboxProvider, useZoomable } from "@/lib/lightbox";
 import { useTheme } from "@/lib/theme";
 import { extractUIBlocks, sanitizeUrl, OPEN_URL, type UIBlockProps } from "@/lib/uiBlocks";
 
 /** Component names in the catalog — derived from the library, never hand-listed. */
 export const UI_BLOCK_COMPONENTS: readonly string[] = Object.keys(openuiLibrary.components);
 
+/** `ImageBlock` with a zoom-on-tap affordance. */
+function ZoomableImageBlock({ props }: { props: { src: string; alt?: string } }) {
+  const zoom = useZoomable(props.src, props.alt);
+  return <OpenUIImageBlock src={props.src} alt={props.alt} {...zoom} />;
+}
+
+/** `Image` with a zoom-on-tap affordance. */
+function ZoomableImage({ props }: { props: { src?: string; alt: string } }) {
+  const src = props.src ?? "";
+  const zoom = useZoomable(src, props.alt);
+  return <OpenUIImage src={src} alt={props.alt} {...zoom} />;
+}
+
+/**
+ * The catalog the `<Renderer>` resolves against.
+ *
+ * Identical to the official library except that the two image components are
+ * swapped for zoomable versions (tap an image → fullscreen lightbox, see
+ * `lib/lightbox.tsx`). Names, prop schemas and descriptions are left untouched,
+ * so the generated system prompt (`openui_prompt.txt`, built from
+ * `openuiLibrary`) still describes exactly what renders — the model is never
+ * told about a component the UI cannot draw.
+ *
+ * `ImageGallery` keeps the library's own modal (it already enlarges on tap and
+ * adds prev/next navigation); wrapping it too would stack two overlays.
+ */
+const IMAGE_OVERRIDES = {
+  ImageBlock: ZoomableImageBlock,
+  Image: ZoomableImage,
+};
+
+/** Catalog components this app replaces with its own implementation. */
+export const UI_BLOCK_OVERRIDES: readonly string[] = Object.keys(IMAGE_OVERRIDES);
+
+const lightboxLibrary: Library = {
+  ...openuiLibrary,
+  components: {
+    ...openuiLibrary.components,
+    ...Object.fromEntries(
+      Object.entries(IMAGE_OVERRIDES).map(([name, component]) => [
+        name,
+        { ...openuiLibrary.components[name], component },
+      ]),
+    ),
+  },
+};
+
 /** The library instance. Exposed for tests; call sites use `<UIBlock>`. */
 export function uiLibrary(): Library {
-  return openuiLibrary;
+  return lightboxLibrary;
 }
 
 export type UIBlockParse =
@@ -155,14 +208,18 @@ export default function OpenUIBlock({
   const tokens = brandTokens();
   return (
     <OpenUIThemeProvider mode={resolved} lightTheme={tokens} darkTheme={tokens} cssSelector="body">
-      <div className="w-full" data-testid="ui-block">
-        <Renderer
-          response={extractUIBlocks(source) || source}
-          library={openuiLibrary}
-          isStreaming={isStreaming}
-          onAction={handleAction}
-        />
-      </div>
+      {/* The provider owns the zoom overlay; it portals to <body>, so it is not
+          clipped by the chat bubble. */}
+      <LightboxProvider>
+        <div className="w-full" data-testid="ui-block">
+          <Renderer
+            response={extractUIBlocks(source) || source}
+            library={lightboxLibrary}
+            isStreaming={isStreaming}
+            onAction={handleAction}
+          />
+        </div>
+      </LightboxProvider>
     </OpenUIThemeProvider>
   );
 }

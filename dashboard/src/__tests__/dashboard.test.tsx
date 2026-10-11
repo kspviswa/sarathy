@@ -321,6 +321,90 @@ describe("Image lightbox — desktop/mobile SPA parity", () => {
   });
 });
 
+/**
+ * Parity: a "visual explainer" reply — reference images plus YouTube video cards
+ * — must render and behave identically in BOTH SPAs. The video button is an
+ * `@OpenUrl` action, which the renderer turns into `window.open` (NOT an <a>),
+ * so this asserts the actual navigation call rather than an anchor.
+ */
+describe("Media cards — desktop/mobile SPA parity", () => {
+  const mediaMessage: ChatMessage = {
+    role: "assistant",
+    content: [
+      "Here are some references.",
+      "```openui-lang",
+      "root = Stack([gallery, vids])",
+      "gallery = ImageGallery(imgs)",
+      'i1 = { src: "/api/media?path=/tmp/a.jpg", alt: "Diagram A" }',
+      'i2 = { src: "/api/media?path=/tmp/b.jpg", alt: "Diagram B" }',
+      "imgs = [i1, i2]",
+      "vids = CompositeCardBlock([v1, v2])",
+      'v1 = CompositeCardItem("vid-a", h1, [b1], f1)',
+      'h1 = ImageTextLarge("/api/media?path=/tmp/t1.jpg", "Video A", "How It Works", "Channel A · 5:01", true)',
+      'b1 = Text("text", "A clear walkthrough.")',
+      'f1 = { button: Button("Watch on YouTube", Action([@OpenUrl("https://www.youtube.com/watch?v=aaa")]), "primary") }',
+      'v2 = CompositeCardItem("vid-b", h2, [b2], f2)',
+      'h2 = ImageTextLarge("/api/media?path=/tmp/t2.jpg", "Video B", "Deep Dive", "Channel B · 12:30", true)',
+      'b2 = Text("text", "The engineering detail.")',
+      'f2 = { button: Button("Watch on YouTube", Action([@OpenUrl("https://www.youtube.com/watch?v=bbb")]), "primary") }',
+      "```",
+    ].join("\n"),
+  };
+
+  beforeEach(() => vi.useRealTimers());
+
+  const spAs: Array<[string, (props: typeof defaultProps) => React.ReactElement]> = [
+    ["desktop", (props) => <ChatView {...props} />],
+    ["mobile", (props) => <MobileChatView {...props} />],
+  ];
+
+  it.each(spAs)("%s SPA: renders reference images and video cards", async (_name, renderSpa) => {
+    const { container } = render(renderSpa({ ...defaultProps, messages: [mediaMessage] }));
+
+    await screen.findByText(
+      /How It Works/,
+      undefined,
+      { timeout: 10_000 },
+    );
+
+    const srcs = Array.from(container.querySelectorAll("img")).map((i) => i.getAttribute("src"));
+    expect(srcs).toContain("/api/media?path=/tmp/a.jpg");
+    expect(srcs).toContain("/api/media?path=/tmp/b.jpg");
+    expect(srcs).toContain("/api/media?path=/tmp/t1.jpg");
+    expect(srcs).toContain("/api/media?path=/tmp/t2.jpg");
+
+    expect(screen.getAllByRole("button", { name: /watch on youtube/i })).toHaveLength(2);
+  });
+
+  it.each(spAs)("%s SPA: the video button opens the YouTube URL", async (_name, renderSpa) => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    try {
+      render(renderSpa({ ...defaultProps, messages: [mediaMessage] }));
+      const buttons = await screen.findAllByRole(
+        "button",
+        { name: /watch on youtube/i },
+        { timeout: 10_000 },
+      );
+
+      fireEvent.click(buttons[0]);
+      expect(open).toHaveBeenCalledWith(
+        "https://www.youtube.com/watch?v=aaa",
+        "_blank",
+        "noopener,noreferrer",
+      );
+
+      fireEvent.click(buttons[1]);
+      expect(open).toHaveBeenCalledWith(
+        "https://www.youtube.com/watch?v=bbb",
+        "_blank",
+        "noopener,noreferrer",
+      );
+    } finally {
+      open.mockRestore();
+    }
+  });
+});
+
 describe("Standalone viewport fix", () => {
   it("root container has standalone-fix class for PWA viewport height", () => {
     const { container } = render(<ChatView {...defaultProps} />);

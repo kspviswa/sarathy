@@ -60,6 +60,21 @@ describe("emoji icons", () => {
     expect(render("Done ✅")).toContain('aria-label="✅"');
   });
 
+  it("tags the icon with a semantic variant for theme-aware colour", () => {
+    expect(render("Done ✅")).toContain('data-variant="success"');
+    expect(render("Failed ❌")).toContain('data-variant="danger"');
+    expect(render("Careful ⚠️")).toContain('data-variant="warning"');
+    // An unmapped-for-colour emoji still inherits currentColor.
+    expect(render("Notes 📝")).toContain('data-variant="neutral"');
+  });
+
+  it("sizes the icon from CSS, not inline classes (so it can grow)", () => {
+    const html = render("Done ✅");
+    expect(html).toContain('class="emoji-icon"');
+    // No leftover inline sizing from the first cut.
+    expect(html).not.toContain("h-[1.1em]");
+  });
+
   it("leaves an unmapped emoji untouched", () => {
     const html = render("🦄 magic");
     expect(html).toContain("🦄");

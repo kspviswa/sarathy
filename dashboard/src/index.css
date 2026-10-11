@@ -228,3 +228,42 @@
     animation: none;
   }
 }
+/* Emoji → inline lucide icon (2026-10-11).
+   The agent's replies are emoji-heavy; the raw glyphs render inconsistently
+   across platforms. `EmojiIcon` swaps them for lucide SVGs — bigger than a
+   plain glyph, and coloured from theme tokens so they adapt to light/dark
+   rather than being a fixed colour. `neutral` inherits currentColor. */
+:root {
+  --emoji-success: oklch(0.55 0.15 150);
+  --emoji-danger: oklch(0.55 0.21 27);
+  --emoji-warning: oklch(0.6 0.15 70);
+  --emoji-info: oklch(0.52 0.19 293);
+}
+
+.dark {
+  --emoji-success: oklch(0.78 0.16 152);
+  --emoji-danger: oklch(0.72 0.18 22);
+  --emoji-warning: oklch(0.82 0.15 78);
+  --emoji-info: oklch(0.75 0.16 293);
+}
+
+.emoji-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35em;
+  line-height: 1;
+  vertical-align: -0.2em;
+  color: currentColor;
+}
+
+.emoji-icon > svg {
+  width: 1em;
+  height: 1em;
+  stroke-width: 2.25;
+}
+
+.emoji-icon[data-variant="success"] { color: var(--emoji-success); }
+.emoji-icon[data-variant="danger"]  { color: var(--emoji-danger); }
+.emoji-icon[data-variant="warning"] { color: var(--emoji-warning); }
+.emoji-icon[data-variant="info"]    { color: var(--emoji-info); }

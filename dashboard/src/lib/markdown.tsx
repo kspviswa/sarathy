@@ -165,16 +165,21 @@ export function rehypeEmojiIcons() {
 /**
  * Renders an `<emoji>` element as a lucide icon.
  *
- * Keeps the original glyph as the accessible name (`role="img"` +
- * `aria-label`) so the emoji still reads correctly to a screen reader, while
- * sizing the SVG to the surrounding text (`1.1em`, nudged onto the baseline).
+ * Sizing and colour live in `.emoji-icon` (index.css): the span sets the size
+ * relative to the surrounding text and the `data-variant` attribute picks a
+ * theme-aware colour token, so the icon is bigger than a plain glyph and adapts
+ * to light/dark instead of being a fixed colour.
+ *
+ * The original glyph is kept as the accessible name (`role="img"` +
+ * `aria-label`) so the emoji still reads correctly to a screen reader.
  */
 export function EmojiIcon({ name }: { name?: string }) {
-  const Icon = name ? emojiIcon(name) : null;
-  if (!Icon) return <span>{name}</span>;
+  const entry = name ? emojiIcon(name) : null;
+  if (!entry) return <span>{name}</span>;
+  const { icon: Icon, variant } = entry;
   return (
-    <span className="emoji-icon" role="img" aria-label={name}>
-      <Icon className="inline-block h-[1.1em] w-[1.1em] align-[-0.15em]" aria-hidden="true" />
+    <span className="emoji-icon" data-variant={variant} role="img" aria-label={name}>
+      <Icon aria-hidden="true" />
     </span>
   );
 }

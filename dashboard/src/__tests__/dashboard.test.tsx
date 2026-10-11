@@ -74,6 +74,23 @@ vi.mock("@/lib/useLastSession", () => ({
   DASHBOARD_SESSION_KEY: "dashboard:console",
 }));
 
+vi.mock("@/lib/useNotifications", () => ({
+  useNotifications: vi.fn().mockReturnValue({
+    notifications: [],
+    unreadCount: 0,
+    unreadIds: [],
+    isUnread: () => false,
+    markAllRead: vi.fn(),
+    markRead: vi.fn(),
+    remove: vi.fn(),
+    clearAll: vi.fn(),
+  }),
+}));
+
+vi.mock("@/lib/useNotificationPref", () => ({
+  useNotificationPref: vi.fn(() => ({ enabled: true, setEnabled: vi.fn() })),
+}));
+
 import { ChatView, type ChatMessage } from "@/views/ChatView";
 import { ChatView as MobileChatView } from "@/mobile/ChatView";
 import { ThinkingSection } from "@/components/ThinkingSection";
@@ -82,6 +99,7 @@ import DesktopApp from "@/App";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { resetLastSession } from "@/lib/useLastSession";
+import { useNotifications } from "@/lib/useNotifications";
 
 const defaultProps = {
   messages: [] as ChatMessage[],
@@ -397,4 +415,44 @@ describe("Composer — native label-for attach trigger", () => {
       expect(label?.querySelector("button")).toBeNull();
     });
   });
+
+describe("Notification Reply — quotes into the CURRENT session", () => {
+  it("desktop: does not archive the session and seeds a quote chip", async () => {
+    vi.mocked(useNotifications).mockReturnValue({
+      notifications: [
+        {
+          id: "n1",
+          title: "Job 126 completed",
+          body: "All suites green.",
+          tab: "jobs",
+          timestamp: "2026-10-11T00:00:00.000Z",
+        },
+      ],
+      unreadCount: 1,
+      unreadIds: ["n1"],
+      isUnread: () => true,
+      markAllRead: vi.fn(),
+      markRead: vi.fn(),
+      remove: vi.fn(),
+      clearAll: vi.fn(),
+    } as never);
+
+    render(<DesktopApp />);
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+
+    fireEvent.click(screen.getByTestId("notifications-bell"));
+    fireEvent.click(screen.getByTestId("notifications-reply"));
+    await act(async () => {
+      vi.advanceTimersByTime(0);
+    });
+
+    // The whole point: reply is a turn in the live session, never a new one.
+    expect(api.sessionNew).not.toHaveBeenCalled();
+    expect(resetLastSession).not.toHaveBeenCalled();
+    const chip = screen.getByTestId("quote-chip");
+    expect(chip).toHaveTextContent("Job 126 completed");
+  });
+});
 

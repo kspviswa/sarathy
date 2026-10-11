@@ -166,7 +166,9 @@ export function ChatView({
   }, [selection.text]);
 
   // Notification "Reply" seeds the composer with a quote chip (parity with
-  // desktop App's followUpSeed handling).
+  // desktop App's followUpSeed handling). The reply is a continuation of the
+  // session already open, so a draft in the composer is preserved — the stub
+  // prompt is only prefilled when the box is empty.
   useEffect(() => {
     if (!followUpSeed?.text) return;
     setQuoteChips((chips) =>
@@ -176,6 +178,7 @@ export function ChatView({
         source_role: "assistant",
       }),
     );
+    setInput((prev) => prev.trim() || "Replying to this notification — ");
     textareaRef.current?.focus();
   }, [followUpSeed]);
 

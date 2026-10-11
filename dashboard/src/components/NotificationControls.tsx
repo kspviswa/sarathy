@@ -49,7 +49,7 @@ export function NotificationControls({
   onMarkAllRead: () => void;
   onMarkRead: (id: string) => void;
   onNavigate: (tab: string) => void;
-  /** Start a new chat seeded with this notification as prior context. */
+  /** Quote this notification into the current chat as the next turn. */
   onReply?: (notification: AppNotification) => void;
   /** Delete a single notification. Enables per-row delete controls. */
   onDelete?: (id: string) => void;

@@ -38,10 +38,12 @@ import { cn } from "@/lib/utils";
  * pipeline as chat bubbles, so a job ping's bold header and deep link render
  * here exactly as they do on Telegram.
  *
- * Each item also offers "Reply", which starts a NEW session seeded with the
- * notification as prior context. Tapping the body keeps the pre-existing
- * mark-read + navigate behavior — the two are separate controls, so a stray tap
- * never silently throws away the current conversation.
+ * Each item also offers "Reply", which quotes the notification into the session
+ * already open (as a composer quote chip) so the follow-up is added as another
+ * turn of the live conversation rather than spinning up a new session. Tapping
+ * the body keeps the pre-existing mark-read + navigate behavior — the two are
+ * separate controls, so a stray tap never silently throws away the current
+ * conversation.
  */
 export function NotificationCenter({
   notifications,
@@ -66,7 +68,7 @@ export function NotificationCenter({
   onMarkAllRead: () => void;
   onMarkRead: (id: string) => void;
   onNavigate: (tab: string) => void;
-  /** Start a new chat seeded with this notification as prior context. */
+  /** Quote this notification into the current chat as the next turn. */
   onReply?: (notification: AppNotification) => void;
   /** Delete one notification. When provided, each row shows a delete control. */
   onDelete?: (id: string) => void;
@@ -300,7 +302,7 @@ export function NotificationCenter({
                             "transition-colors hover:bg-accent hover:text-foreground",
                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                           )}
-                          title="Start a new chat seeded with this notification"
+                          title="Quote this notification into the current chat"
                         >
                           <CornerDownRight className="size-3" aria-hidden="true" />
                           Reply

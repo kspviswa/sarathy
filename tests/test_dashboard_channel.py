@@ -796,3 +796,104 @@ async def test_jobs_detail_handles_missing_spec_result_files(tmp_path) -> None:
         assert data["spec_text"] is None
         assert data["result_text"] is None
 
+
+
+# ---------------------------------------------------------------------------
+# Media auth cookie (GET /api/media only)
+#
+# <img>/<audio> cannot send an Authorization header, so the dashboard mirrors
+# the token into a cookie. These tests pin the security boundary: the cookie
+# unlocks the read-only media route and NOTHING else.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pair_sets_media_cookie(tmp_path) -> None:
+    client, _ = await _authed_client(tmp_path)
+    async with client:
+        resp = await client.post(
+            "/api/auth/pair", json={"key": "test-key", "deviceName": "iphone"}
+        )
+        assert resp.status == 200
+        cookies = resp.cookies
+        assert "sarathy_media" in cookies
+        assert cookies["sarathy_media"].value
+
+
+@pytest.mark.asyncio
+async def test_media_get_accepts_cookie_without_auth_header(tmp_path, monkeypatch) -> None:
+    from sarathy.channels.dashboard import server as server_module
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    asset = media_dir / "diagram.svg"
+    asset.write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
+    monkeypatch.setattr(server_module, "_MEDIA_DIR", media_dir)
+
+    client, _ = await _authed_client(tmp_path)
+    async with client:
+        await _pair(client)  # sets the cookie in the client jar
+
+        # No Authorization header — the cookie alone must authenticate.
+        resp = await client.get("/api/media", params={"path": str(asset)})
+        assert resp.status == 200
+        assert "svg" in resp.headers.get("Content-Type", "")
+
+
+@pytest.mark.asyncio
+async def test_media_get_without_any_auth_is_401(tmp_path, monkeypatch) -> None:
+    from sarathy.channels.dashboard import server as server_module
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    asset = media_dir / "diagram.svg"
+    asset.write_text("<svg/>", encoding="utf-8")
+    monkeypatch.setattr(server_module, "_MEDIA_DIR", media_dir)
+
+    client, _ = await _authed_client(tmp_path)
+    async with client:
+        resp = await client.get("/api/media", params={"path": str(asset)})
+        assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_media_cookie_does_not_authorize_state_changing_requests(tmp_path) -> None:
+    """The cookie is scoped to GET /api/media — it must not authenticate POSTs."""
+    client, _ = await _authed_client(tmp_path)
+    async with client:
+        await _pair(client)  # cookie now in the jar
+
+        resp = await client.post("/api/session/new", json={})
+        assert resp.status == 401
+
+        resp = await client.post("/api/chat", json={"content": "hi"})
+        assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_media_cookie_rejected_for_outside_media_dir(tmp_path, monkeypatch) -> None:
+    """Even with a valid cookie, path traversal outside the media dir is 403."""
+    from sarathy.channels.dashboard import server as server_module
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("top secret", encoding="utf-8")
+    monkeypatch.setattr(server_module, "_MEDIA_DIR", media_dir)
+
+    client, _ = await _authed_client(tmp_path)
+    async with client:
+        await _pair(client)
+        resp = await client.get("/api/media", params={"path": str(secret)})
+        assert resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_logout_clears_media_cookie(tmp_path) -> None:
+    client, _ = await _authed_client(tmp_path)
+    async with client:
+        token = await _pair(client)
+        resp = await client.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status == 200
+        cleared = resp.cookies.get("sarathy_media")
+        assert cleared is not None and cleared.value == ""

@@ -43,6 +43,17 @@ _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_FAILURES = 10
 _MEDIA_DIR = Path.home() / ".sarathy" / "media"
 
+# Auth cookie that unlocks ONLY `GET /api/media`.
+#
+# Media is rendered by <img>/<audio>/<a> elements, which CANNOT attach an
+# Authorization header — so a token-in-localStorage scheme leaves every image
+# and audio clip 401ing in the dashboard. We therefore mirror the token into a
+# cookie (set on pair and refreshed on /api/auth/me) and accept it as a fallback
+# for this one read-only route. It is deliberately NOT accepted for any
+# state-changing request, and SameSite=Lax keeps it off cross-site subresource
+# loads, so it cannot be abused for CSRF.
+_MEDIA_COOKIE = "sarathy_media"
+
 # A "running" job with no heartbeat event for this long is reported as STALLED
 # so the Jobs view never claims work is live when it is not.
 JOB_STALE_MINUTES = 15
@@ -445,6 +456,23 @@ class DashboardChannel(BaseChannel):
             return request.query["token"].strip()
         return request.headers.get("X-Auth-Token", "").strip() or None
 
+    @staticmethod
+    def _set_media_cookie(resp: web.Response, request: web.Request, token: str) -> None:
+        """Mirror the auth token into a cookie so media elements can authenticate.
+
+        `secure` follows the request scheme (nginx terminates TLS and forwards
+        X-Forwarded-Proto), so plain-HTTP LAN access still stores the cookie.
+        """
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        resp.set_cookie(
+            _MEDIA_COOKIE,
+            token,
+            path="/",
+            httponly=True,
+            samesite="Lax",
+            secure=(scheme == "https"),
+            max_age=60 * 60 * 24 * 365,
+        )
     def _rate_limited(self, ip: str) -> bool:
         import time
 
@@ -468,6 +496,11 @@ class DashboardChannel(BaseChannel):
         if (path.startswith("/api/") or path == "/ws") and not public:
             token = self._extract_token(request)
             device_id = self._registry.validate(token) if token else None
+            if not device_id and path == "/api/media" and request.method == "GET":
+                # <img>/<audio> cannot send an Authorization header, so allow the
+                # auth cookie for this read-only route only (see _MEDIA_COOKIE).
+                cookie_token = request.cookies.get(_MEDIA_COOKIE, "")
+                device_id = self._registry.validate(cookie_token) if cookie_token else None
             if not device_id:
                 return self._with_security_headers(
                     web.json_response({"error": "unauthorized"}, status=401)
@@ -663,7 +696,9 @@ class DashboardChannel(BaseChannel):
         name = (data.get("deviceName") or "").strip()
         token, device_id = self._registry.register(key, name)
         logger.info("Dashboard device paired: {}", device_id)
-        return web.json_response({"token": token, "deviceId": device_id})
+        resp = web.json_response({"token": token, "deviceId": device_id})
+        self._set_media_cookie(resp, request, token)
+        return resp
 
     async def _api_me(self, request: web.Request) -> web.Response:
         from sarathy import __version__
@@ -672,19 +707,28 @@ class DashboardChannel(BaseChannel):
         device = next(
             (d for d in self._registry.list_devices() if d.get("id") == device_id), None
         )
-        return web.json_response(
+        resp = web.json_response(
             {
                 "deviceId": device_id,
                 "deviceName": (device or {}).get("name", ""),
                 "version": __version__,
             }
         )
+        # Refresh the media cookie for already-paired devices (they hold their
+        # token in localStorage and never re-pair), so images start working on
+        # the next app load without a manual re-pair.
+        token = self._extract_token(request)
+        if token:
+            self._set_media_cookie(resp, request, token)
+        return resp
 
     async def _api_logout(self, request: web.Request) -> web.Response:
         device_id = request.get("device_id", "")
         if device_id:
             self._registry.remove_device(device_id)
-        return web.json_response({"ok": True})
+        resp = web.json_response({"ok": True})
+        resp.del_cookie(_MEDIA_COOKIE, path="/")
+        return resp
 
     # ------------------------------------------------------------------ chat api
 

@@ -59,6 +59,11 @@ export interface ChatMessage {
   toolHints?: string[];
   thinkingContent?: string;
   messageId?: string;
+  /**
+   * Server turn id (spec 127 §C.4): all frames of one turn carry the same id
+   * and fold into a single bubble keyed by it.
+   */
+  turnId?: string;
   media?: string[];
   replyTo?: string | null;
   replyToContent?: string;
@@ -917,7 +922,7 @@ export function ChatView({
 
           {messages.map((m, i) => (
             <MessageRow
-              key={i}
+              key={m.turnId ?? m.messageId ?? i}
               message={m}
               streaming={streaming}
               onOpenFile={onOpenFile}

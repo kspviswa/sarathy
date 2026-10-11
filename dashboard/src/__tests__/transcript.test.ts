@@ -145,3 +145,60 @@ describe("applyOutbound — unchanged streaming behaviour", () => {
     expect(msgs[1].content).toBe("first second");
   });
 });
+
+/**
+ * Spec 127 §C.4 — bubbles are keyed by the server `turn_id`, so all frames of
+ * one turn fold into ONE bubble regardless of reconnect timing, and a turn
+ * never merges into a neighbouring turn's bubble.
+ */
+describe("applyOutbound — turn_id keying (spec 127 §C.4)", () => {
+  it("folds every frame of one turn_id into a single bubble", () => {
+    let msgs = applyOutbound([user("hi")], frame("a", { _progress: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("ab", { _progress: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("abc", { _final: true, turn_id: "T" }));
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]).toMatchObject({ content: "abc", progress: false, turnId: "T" });
+  });
+
+  it("keeps two different turns in separate bubbles", () => {
+    let msgs = applyOutbound([user("q1")], frame("A", { _progress: true, turn_id: "T1" }));
+    msgs = applyOutbound(msgs, frame("A done", { _final: true, turn_id: "T1" }));
+    // User turns are appended directly by the SPA, not through the frame reducer.
+    msgs = [...msgs, user("q2")];
+    msgs = applyOutbound(msgs, frame("B", { _progress: true, turn_id: "T2" }));
+
+    expect(msgs.map((m) => m.content)).toEqual(["q1", "A done", "q2", "B"]);
+    expect(msgs[1].turnId).toBe("T1");
+    expect(msgs[3].turnId).toBe("T2");
+  });
+
+  it("a _thinking frame after _final does NOT create a second bubble", () => {
+    let msgs = applyOutbound([user("hi")], frame("answer", { _final: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("late thought", { _thinking: true, turn_id: "T" }));
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]).toMatchObject({ content: "answer", thinkingContent: "late thought" });
+  });
+
+  it("a _thinking frame after _final (no turn_id) still folds", () => {
+    let msgs = applyOutbound([user("hi")], frame("answer", { _final: true }));
+    msgs = applyOutbound(msgs, frame("late thought", { _thinking: true }));
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1].thinkingContent).toBe("late thought");
+  });
+
+  it("attaches a media outbound to its turn's streaming bubble", () => {
+    const mediaFrame: OutboundMessage = {
+      type: "message",
+      channel: "dashboard",
+      chatId: "console",
+      content: "here is your note",
+      media: ["/home/u/.sarathy/media/a.mp3"],
+      replyTo: null,
+      metadata: { turn_id: "T" },
+    };
+    let msgs = applyOutbound([user("say it")], frame("", { _progress: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, mediaFrame);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]).toMatchObject({ turnId: "T", media: ["/home/u/.sarathy/media/a.mp3"] });
+  });
+});

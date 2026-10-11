@@ -266,6 +266,7 @@ async def run_gateway(port: int = 18790, verbose: bool = False):
         command_manager=command_manager,
         session_manager=session_manager,
         runtime=runtime,
+        agent=agent,
     )
 
     def _pick_heartbeat_target() -> tuple[str, str]:

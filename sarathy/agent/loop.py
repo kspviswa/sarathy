@@ -7,6 +7,7 @@ import base64
 import json
 import mimetypes
 import re
+import time
 import uuid
 from contextlib import AsyncExitStack
 from datetime import datetime, timezone
@@ -221,6 +222,12 @@ class AgentLoop:
         self._session_semaphore = asyncio.Semaphore(max_concurrent)
         self._active_main_turns: set[str] = set()  # session keys with a running main turn
         self._active_btw_turns: set[str] = set()  # session keys with a running /btw side turn
+        # Authoritative per-session turn registry (spec 127 §A). Keyed by
+        # session key; each entry is {active, state, turn_id, started_at}.
+        # Dashboard clients render from this instead of guessing from the
+        # best-effort WS stream, so a missed terminal frame can no longer strand
+        # the UI. Popped at turn end.
+        self._turn_registry: dict[str, dict[str, Any]] = {}
 
         self._register_default_tools()
 
@@ -518,8 +525,6 @@ class AgentLoop:
         session_key: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], dict]:
         """Run the agent iteration loop. Returns (final_content, tools_used, messages, stats)."""
-        import time
-
         streaming_enabled = False
         session_streaming = session_metadata.get("streaming", False) if session_metadata else False
 
@@ -1085,6 +1090,73 @@ class AgentLoop:
             return False
         return bool(self.runtime.apply_to(self))
 
+    # ------------------------------------------------------------------ turn registry
+
+    def _begin_turn(self, key: str) -> dict[str, Any]:
+        """Mint and register a fresh turn for ``key``; return its registry entry."""
+        turn = {
+            "active": True,
+            "state": "thinking",
+            "turn_id": uuid.uuid4().hex,
+            "started_at": time.time(),
+        }
+        self._turn_registry[key] = turn
+        return turn
+
+    def _end_turn(self, key: str) -> None:
+        """Drop the turn entry so ``turn_state`` reports idle."""
+        self._turn_registry.pop(key, None)
+
+    def _set_turn_phase(self, key: str, state: str) -> None:
+        """Update the live phase (thinking/streaming/tool) of an active turn."""
+        turn = self._turn_registry.get(key)
+        if turn is not None and turn.get("active"):
+            turn["state"] = state
+
+    def turn_state(self, key: str) -> dict[str, Any]:
+        """Return the authoritative turn block for ``session_key``.
+
+        Idle sessions return ``active: False`` with a null ``turn_id``.
+        """
+        turn = self._turn_registry.get(key)
+        if turn and turn.get("active"):
+            return dict(turn)
+        return {"active": False, "state": "idle", "turn_id": None, "started_at": None}
+
+    def is_turn_active(self, key: str) -> bool:
+        """True while a main turn is running for ``session_key``."""
+        return key in self._active_main_turns
+
+    async def _emit_turn_state(
+        self, channel: str, chat_id: str, key: str, active: bool
+    ) -> None:
+        """Publish a ``turn_state`` frame over the bus (spec 127 §A.2).
+
+        The frame is routed by the dashboard channel to ``type:"turn_state"``.
+        ``_turn_state`` marks it for the outbound dispatcher, which sends it
+        only to the dashboard (never to Telegram). The body is carried in
+        ``metadata.turn``. Turn-end (``active:false``) is always emitted —
+        including error and stop paths — because callers invoke it from a
+        ``finally``.
+        """
+        try:
+            block = self.turn_state(key) if active else {
+                "active": False,
+                "state": "idle",
+                "turn_id": None,
+                "started_at": None,
+            }
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content="",
+                    metadata={"_turn_state": True, "turn": block},
+                )
+            )
+        except Exception as e:  # never let telemetry break the turn
+            logger.debug("turn_state emit failed for {}: {}", key, e)
+
     async def _process_message(
         self,
         msg: InboundMessage,
@@ -1093,14 +1165,22 @@ class AgentLoop:
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response.
 
-        Records the session as an active main turn so /steer can target it.
+        Records the session as an active main turn so /steer can target it, and
+        brackets the turn with ``turn_state`` frames so the dashboard can render
+        server-owned state (spec 127 §A).
         """
         key = session_key or msg.session_key
         self._active_main_turns.add(key)
+        turn = self._begin_turn(key)
+        await self._emit_turn_state(msg.channel, msg.chat_id, key, active=True)
         try:
-            return await self._process_message_inner(msg, session_key, on_progress)
+            return await self._process_message_inner(
+                msg, session_key, on_progress, turn_id=turn["turn_id"]
+            )
         finally:
             self._active_main_turns.discard(key)
+            self._end_turn(key)
+            await self._emit_turn_state(msg.channel, msg.chat_id, key, active=False)
 
     def _maybe_stamp_provider(
         self, content: str | None, role: str, provider: Any
@@ -1184,8 +1264,14 @@ class AgentLoop:
         msg: InboundMessage,
         session_key: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
+        turn_id: str | None = None,
     ) -> OutboundMessage | None:
-        """Process a single inbound message and return the response."""
+        """Process a single inbound message and return the response.
+
+        ``turn_id`` is the stable id minted by :meth:`_process_message`; it is
+        stamped onto every streamed frame so the dashboard can key all frames of
+        a turn to one bubble (spec 127 §C.4).
+        """
 
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
@@ -1308,6 +1394,9 @@ class AgentLoop:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
             meta["_tool_hint"] = tool_hint
+            if turn_id:
+                meta["turn_id"] = turn_id
+            self._set_turn_phase(key, "tool" if tool_hint else "streaming")
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -1326,6 +1415,9 @@ class AgentLoop:
                 return
             meta = dict(msg.metadata or {})
             meta["_thinking"] = True
+            if turn_id:
+                meta["turn_id"] = turn_id
+            self._set_turn_phase(key, "thinking")
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -1380,6 +1472,7 @@ class AgentLoop:
                     channel=msg.channel,
                     chat_id=msg.chat_id,
                     content=final_content or "Background task completed.",
+                    metadata=({"turn_id": turn_id} if turn_id else {}),
                 )
         final_content, _, all_msgs, stats = await self._run_agent_loop(
             initial_messages,
@@ -1443,6 +1536,8 @@ class AgentLoop:
         metadata = dict(msg.metadata or {})
         metadata["_stats"] = stats
         metadata["_verbose"] = verbose_flag
+        if turn_id:
+            metadata["turn_id"] = turn_id
 
         # Only suppress final reply if message tool sent to SAME target
         # within THIS session's turn. The MessageTool is shared across

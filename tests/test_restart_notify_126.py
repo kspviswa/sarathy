@@ -396,6 +396,9 @@ class TestRestartPingOverRealSocket:
 
         # A browser now reconnects.
         ws = await client.ws_connect(f"/ws?token={token}")
+        # Spec 127 §A.5: the snapshot frame is sent first on every connect.
+        snap = json.loads(await asyncio.wait_for(ws.receive_str(), timeout=5))
+        assert snap["type"] == "snapshot"
         frame = json.loads(await asyncio.wait_for(ws.receive_str(), timeout=5))
 
         assert frame["type"] == "notification"
@@ -414,11 +417,18 @@ class TestRestartPingOverRealSocket:
 
         first = await client.ws_connect(f"/ws?token={token}")
         assert json.loads(await asyncio.wait_for(first.receive_str(), timeout=5))["type"] == (
+            "snapshot"
+        )
+        assert json.loads(await asyncio.wait_for(first.receive_str(), timeout=5))["type"] == (
             "notification"
         )
 
         second = await client.ws_connect(f"/ws?token={token}")
-        # No buffered frame left, so the second tab waits rather than getting a
+        # Spec 127 §A.5: the second tab still gets its own snapshot...
+        assert json.loads(await asyncio.wait_for(second.receive_str(), timeout=5))["type"] == (
+            "snapshot"
+        )
+        # ...but no buffered ping is left, so it waits rather than getting a
         # duplicate. A ping over the wire proves it is NOT silent.
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(second.receive_str(), timeout=1.0)

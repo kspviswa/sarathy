@@ -33,10 +33,31 @@ export interface SessionInfo {
   messageCount?: number;
 }
 
+export interface SessionMessage {
+  role: string;
+  content: string;
+  timestamp?: string;
+  name?: string;
+  /** Attachments persisted with this message (assistant voice replies etc.). */
+  media?: string[];
+  /** The turn this message belongs to, when known. */
+  turn_id?: string;
+}
+
+/** Authoritative per-session turn block (spec 127 §A). */
+export interface TurnBlock {
+  active: boolean;
+  state: "idle" | "thinking" | "streaming" | "tool" | string;
+  turn_id: string | null;
+  started_at: number | null;
+}
+
 export interface SessionDetail {
   key: string;
   createdAt: string;
-  messages: Array<{ role: string; content: string; timestamp?: string; name?: string }>;
+  messages: SessionMessage[];
+  /** Additive live turn state (spec 127 §A.5); absent on older gateways. */
+  turn?: TurnBlock;
 }
 
 export interface FileNode {

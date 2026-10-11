@@ -30,6 +30,13 @@ import {
   type ReactionState,
 } from "@/lib/reactions";
 import { applyOutbound } from "@/lib/transcript";
+import {
+  attachTurnSync,
+  beginOptimisticTurn,
+  endTurnLocal,
+  noteMessageFrame,
+  useTurn,
+} from "@/lib/turn";
 import { ThemeProvider } from "@/lib/theme";
 import type { SessionInfo } from "@/lib/types";
 import { DASHBOARD_SESSION_KEY, resetLastSession, useLastSession } from "@/lib/useLastSession";
@@ -83,7 +90,10 @@ function AppInner() {
     text: string;
     nonce: number;
   } | null>(null);
-  const [streaming, setStreaming] = useState(false);
+  // `streaming` is DERIVED from the server-owned turn state (spec 127 §C.1) —
+  // both SPAs read it from the shared module so a missed terminal frame can no
+  // longer strand the spinner/Stop button.
+  const { streaming } = useTurn();
   const [reaction, setReaction] = useState<ReactionState>("done");
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [unread, setUnread] = useState<Partial<Record<Section, number>>>({});
@@ -221,40 +231,36 @@ function AppInner() {
 
       const md = (m.metadata || {}) as Record<string, unknown>;
 
+      // Keep the shared turn state in lockstep with the transcript: this is
+      // what derives `streaming` (spec 127 §C.1).
+      noteMessageFrame(m);
+
       // Fold every streamed frame into the reaction state machine.
       const frame = reactionFrameFrom(m.metadata);
-      if (frame) {
-        setReaction((prev) => nextReaction(prev, frame));
-        if (frame.kind === "final") setStreaming(false);
-        else setStreaming(true);
-      }
+      if (frame) setReaction((prev) => nextReaction(prev, frame));
 
       // Out-of-band command acks (/stop, /steer, /btw) are their own message and
-      // must not disturb the running turn's streaming state or bubble.
+      // must not disturb the running turn's bubble.
       if (md._notice) {
         setMessages((prev) => applyOutbound(prev, m));
         return;
       }
 
       if (md._final) {
-        setStreaming(false);
         setMessages((prev) => applyOutbound(prev, m));
         refreshSessions();
         return;
       }
 
-      if (md._progress || md._thinking || md._tool_hint) {
-        setStreaming(true);
-        setMessages((prev) => applyOutbound(prev, m));
-        return;
-      }
-
-      setStreaming(false);
       setMessages((prev) => applyOutbound(prev, m));
     });
 
+    // Reconcile server turn state on (re)connect and on tab resume (spec §C.2/§C.3).
+    const detachTurn = attachTurnSync(socket);
+
     socket.connect();
     return () => {
+      detachTurn();
       unsubNotif();
       unsubscribe();
       socket.disconnect();
@@ -262,6 +268,17 @@ function AppInner() {
       setSocket(null);
     };
   }, [authed, refreshSessions]);
+
+  // A missed `_final` no longer strands the reaction chip either: whenever the
+  // server says the turn is not streaming, drop a live reaction to done.
+  useEffect(() => {
+    if (streaming) return;
+    setReaction((prev) =>
+      prev === "queued" || prev === "working" || prev === "thinking" || prev === "tool"
+        ? "done"
+        : prev,
+    );
+  }, [streaming]);
 
   const handleSend = useCallback(
     async (
@@ -277,7 +294,7 @@ function AppInner() {
         { role: "user", content, media, replyTo, replyToContent, quotes },
       ]);
       // Optimistic: show live state immediately, before the first frame lands.
-      setStreaming(true);
+      beginOptimisticTurn();
       setReaction(startTurn());
       await api.sendChatFull({
         content,
@@ -296,7 +313,7 @@ function AppInner() {
       await api.sessionNew(DASHBOARD_SESSION_KEY);
       resetLastSession();
       setMessages([]);
-      setStreaming(false);
+      endTurnLocal();
       setReaction("done");
       setOpenFile(null);
       setTranscriptKey(null);
@@ -340,7 +357,7 @@ function AppInner() {
 
   const handleStop = useCallback(async () => {
     await api.stopChat();
-    setStreaming(false);
+    endTurnLocal();
     setReaction("done");
   }, []);
 
@@ -356,7 +373,7 @@ function AppInner() {
     const lastUserMsg = lastUserMessageRef.current;
     if (!lastUserMsg || streaming) return;
     setMessages((prev) => [...prev, { role: "user", content: lastUserMsg }]);
-    setStreaming(true);
+    beginOptimisticTurn();
     setReaction(startTurn());
     await api.sendChat(lastUserMsg);
   }, [streaming]);

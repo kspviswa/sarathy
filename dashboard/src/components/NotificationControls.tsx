@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import {
   describePushSupport,
   detectPushSupport,
+  getRegistration,
   subscribeToPush,
   unsubscribeFromPush,
 } from "@/lib/push";
@@ -77,8 +78,9 @@ export function NotificationControls({
           } else {
             const result = await subscribeToPush(publicKey);
             if (result.ok) {
-              const registration = await navigator.serviceWorker.ready;
-              const subscription = await registration.pushManager.getSubscription();
+              // Bounded readiness: never block the toggle on a cold SW (spec 127 §D.3).
+              const registration = await getRegistration();
+              const subscription = await registration?.pushManager.getSubscription();
               const payload = subscription?.toJSON();
               if (payload) await api.pushSubscribe(payload);
             } else if (result.reason) {

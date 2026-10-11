@@ -261,8 +261,9 @@ async def test_btw_concurrent_early_delivery(tmp_path):
     # Fire /btw while the main turn is still running.
     await loop._handle_btw(_user_msg("test:c1", content="/btw what is 2+2?"))
 
-    ack = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
-    assert "BTW noted" in ack.content
+    # Skip the main turn's spec-127 §A turn_state frames; we want the /btw ack.
+    ack = await _consume_final(bus, lambda o: "BTW noted" in (o.content or ""))
+    assert ack is not None and "BTW noted" in ack.content
 
     # The btw final is delivered even though the main turn is still blocked.
     btw_final = await _consume_final(

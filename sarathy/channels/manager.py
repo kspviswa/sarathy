@@ -22,12 +22,16 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus, command_manager=None, session_manager=None, runtime=None):
+    def __init__(self, config: Config, bus: MessageBus, command_manager=None, session_manager=None, runtime=None, agent=None):
         self.config = config
         self.bus = bus
         self.command_manager = command_manager
         self.session_manager = session_manager
         self.runtime = runtime
+        # Agent handle (spec 127 §A): handed to the dashboard channel so it can
+        # read the authoritative turn registry. Optional — the dispatcher and
+        # non-dashboard channels never need it.
+        self.agent = agent
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
 
@@ -84,6 +88,7 @@ class ChannelManager:
                     self.bus,
                     session_manager=self.session_manager,
                     runtime=self.runtime,
+                    agent=self.agent,
                 )
                 logger.info("Dashboard channel enabled")
             except ImportError as e:
@@ -163,6 +168,19 @@ class ChannelManager:
                         and not self.config.channels.send_progress
                     ):
                         continue
+
+                # Server-owned turn frames (spec 127 §A.2) are dashboard-only
+                # telemetry: route them to the dashboard channel even when their
+                # target channel differs, and never deliver them as a chat
+                # message on Telegram/Discord/Email (no-flood constraint).
+                if msg.metadata.get("_turn_state"):
+                    dashboard = self.channels.get("dashboard")
+                    if dashboard is not None:
+                        try:
+                            await dashboard.send(msg)
+                        except Exception as e:
+                            logger.error("Error sending turn_state to dashboard: {}", e)
+                    continue
 
                 channel = self.channels.get(msg.channel)
                 if channel:

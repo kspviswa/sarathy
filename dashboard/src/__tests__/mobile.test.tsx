@@ -229,6 +229,11 @@ describe("Mobile app — bottom tab bar", () => {
       expect(within(block).getByText("3.6")).toBeInTheDocument();
       // The raw openui-lang source must not leak as a code block.
       expect(screen.queryByText(/root = Stack\(/)).not.toBeInTheDocument();
+      // A widget needs room: the bubble must widen to the available width
+      // instead of collapsing to ~186px and crushing the table (desktop
+      // MessageRow does the same).
+      const bubble = block.closest(".rounded-2xl");
+      expect(bubble?.className).toContain("w-full");
     });
 
     it("shows the commands trigger and opens the palette", async () => {

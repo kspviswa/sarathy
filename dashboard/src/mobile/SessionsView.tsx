@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { channelIcon } from "@/lib/channelIcons";
 import { cleanRenderedContent } from "@/lib/messageText";
-import { SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
+import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 import {
   formatDateKey,
   groupByChannel,
@@ -112,7 +112,11 @@ export function SessionsView() {
               >
                   {m.role === "assistant" ? (
                     <div className="md">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={SAFE_REHYPE_PLUGINS}>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={SAFE_REHYPE_PLUGINS}
+                        components={MD_COMPONENTS}
+                      >
                         {cleanRenderedContent(m.content)}
                       </ReactMarkdown>
                     </div>

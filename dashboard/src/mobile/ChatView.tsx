@@ -28,7 +28,7 @@ import { UsageFooter } from "@/components/UsageFooter";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
-import { SAFE_REHYPE_PLUGINS, SafeLink } from "@/lib/markdown";
+import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 import { extractProse, hasOpenUIBlock, UIBlock } from "@/lib/uiBlocks";
 import {
   addQuote,
@@ -752,7 +752,7 @@ function AssistantBody({
           remarkPlugins={[remarkGfm]}
           rehypePlugins={SAFE_REHYPE_PLUGINS}
           components={{
-            a: SafeLink,
+            ...MD_COMPONENTS,
             code: ({ children, className, ...props }) => {
               const isBlock = className?.startsWith("language-");
               if (isBlock) {

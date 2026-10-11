@@ -1,6 +1,10 @@
+import type { Content, Element, Root, Text } from "hast";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
+
+import { EMOJI_KEYS, emojiIcon, normalizeEmoji } from "@/lib/emojiIcons";
 
 /**
  * Shared markdown pipeline for the dashboard (spec 126 §C).
@@ -69,7 +73,123 @@ export const SAFE_HTML_SCHEMA = {
 export const SAFE_REHYPE_PLUGINS: PluggableList = [
   rehypeRaw,
   [rehypeSanitize, SAFE_HTML_SCHEMA],
+  rehypeEmojiIcons,
 ];
+
+/**
+ * Emoji → inline lucide icon (2026-10-11).
+ *
+ * The agent's replies are emoji-heavy and the raw OS glyphs render
+ * inconsistently across platforms. Every emoji in `EMOJI_ICONS` is replaced with
+ * a custom `<emoji name="…">` element that `EmojiIcon` renders as a lucide SVG.
+ *
+ * Runs AFTER `rehypeSanitize`: the elements it inserts are ours, not the
+ * untrusted input's, so they must not be handed to the sanitizer (which would
+ * strip the unknown tag). Nothing from the source survives this step — only the
+ * matched emoji characters are swapped, and the map is a fixed allowlist.
+ *
+ * `code` and `pre` are skipped: an emoji inside a fenced block is content, and
+ * swapping it would corrupt the snippet.
+ */
+const SKIP_EMOJI_TAGS = new Set(["code", "pre", "script", "style"]);
+
+/** Escape a single character for use inside a RegExp. */
+function escapeRegExp(char: string): string {
+  return char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * One alternation of every known emoji, each key's code points followed by an
+ * optional U+FE0F so a single entry matches both `⚠` and `⚠️`. `u` keeps
+ * astral-plane code points intact.
+ */
+const EMOJI_RE = new RegExp(
+  EMOJI_KEYS.map((key) =>
+    Array.from(key)
+      .map((char) => `${escapeRegExp(char)}\\uFE0F?`)
+      .join(""),
+  ).join("|"),
+  "gu",
+);
+
+/** Split a text node into text/`emoji` element nodes. */
+function splitEmoji(node: Text): Content[] {
+  const value = node.value;
+  const out: Content[] = [];
+  let last = 0;
+  EMOJI_RE.lastIndex = 0;
+
+  for (let match = EMOJI_RE.exec(value); match; match = EMOJI_RE.exec(value)) {
+    if (match.index > last) {
+      out.push({ type: "text", value: value.slice(last, match.index) });
+    }
+    out.push({
+      type: "element",
+      tagName: "emoji",
+      properties: { name: normalizeEmoji(match[0]) },
+      children: [{ type: "text", value: match[0] }],
+    });
+    last = match.index + match[0].length;
+  }
+
+  if (last < value.length) {
+    out.push({ type: "text", value: value.slice(last) });
+  }
+  return out;
+}
+
+function walkEmoji(node: Root | Element, skip: boolean): void {
+  const children = node.children as Content[] | undefined;
+  if (!children?.length) return;
+
+  const inSkip = skip || (node.type === "element" && SKIP_EMOJI_TAGS.has(node.tagName));
+  const next: Content[] = [];
+
+  for (const child of children) {
+    if (child.type === "text" && !inSkip) {
+      next.push(...splitEmoji(child));
+      continue;
+    }
+    if (child.type === "element") walkEmoji(child, inSkip);
+    next.push(child);
+  }
+
+  node.children = next as typeof node.children;
+}
+
+/** rehype plugin: replace known emoji with `<emoji name="…">` elements. */
+export function rehypeEmojiIcons() {
+  return (tree: Root): void => walkEmoji(tree, false);
+}
+
+/**
+ * Renders an `<emoji>` element as a lucide icon.
+ *
+ * Keeps the original glyph as the accessible name (`role="img"` +
+ * `aria-label`) so the emoji still reads correctly to a screen reader, while
+ * sizing the SVG to the surrounding text (`1.1em`, nudged onto the baseline).
+ */
+export function EmojiIcon({ name }: { name?: string }) {
+  const Icon = name ? emojiIcon(name) : null;
+  if (!Icon) return <span>{name}</span>;
+  return (
+    <span className="emoji-icon" role="img" aria-label={name}>
+      <Icon className="inline-block h-[1.1em] w-[1.1em] align-[-0.15em]" aria-hidden="true" />
+    </span>
+  );
+}
+
+/**
+ * Shared `components` for every `<ReactMarkdown>` in the dashboard.
+ *
+ * Both SPAs and both transcript surfaces spread this so the link and emoji
+ * renderers can never drift; a surface with extra needs (the chat bubbles'
+ * fenced-code renderer) spreads it and adds its own key on top.
+ */
+export const MD_COMPONENTS = {
+  a: SafeLink,
+  emoji: EmojiIcon,
+} as Components;
 
 /**
  * Custom renderer for links inside markdown/HTML content.

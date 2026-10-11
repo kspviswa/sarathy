@@ -27,7 +27,7 @@ import { CodeBlock } from "@/components/CodeBlock";
 import { GreetingState, DEFAULT_SUGGESTIONS, type Suggestion } from "@/components/GreetingState";
 import { PresenceIndicator, ReactionChip } from "@/components/Presence";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
-import { SAFE_REHYPE_PLUGINS, SafeLink } from "@/lib/markdown";
+import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { SlashAutocomplete } from "@/components/CommandPalette";
@@ -254,7 +254,7 @@ function MessageBody({
           remarkPlugins={[remarkGfm]}
           rehypePlugins={SAFE_REHYPE_PLUGINS}
           components={{
-            a: SafeLink,
+            ...MD_COMPONENTS,
             code: ({ children, className, ...props }) => {
               const isBlock = className?.startsWith("language-");
               if (isBlock) {

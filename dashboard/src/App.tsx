@@ -482,7 +482,7 @@ function AppInner() {
           <div className="flex min-w-0 flex-col">
             <span className="truncate text-lg font-bold tracking-tight">Sarathy</span>
             <span className="truncate text-[11px] text-muted-foreground">
-              Local-first AI assistant
+              Viswa's AI assistant
             </span>
           </div>
         </div>

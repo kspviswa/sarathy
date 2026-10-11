@@ -41,6 +41,7 @@ import {
   buildQuotesPayload,
   clearQuotes,
   quoteFromSelection,
+  quoteFromText,
   removeQuote,
   type Quote,
   type QuoteChip,
@@ -590,14 +591,16 @@ export function ChatView({
   }, [input, mediaPaths, quoteChips, allUploaded, replyToMsg, onSend]);
 
   const addSelectionAsQuote = useCallback(() => {
-    const quote = quoteFromSelection(window.getSelection(), {
-      sourceRole: "assistant",
-    });
+    // Prefer the text captured when the selection was made: on touch the live
+    // selection is already gone by the time the tap lands.
+    const quote = selection.text
+      ? quoteFromText(selection.text, { sourceRole: "assistant" })
+      : quoteFromSelection(window.getSelection(), { sourceRole: "assistant" });
     if (!quote) return;
     setQuoteChips((chips) => addQuote(chips, quote));
     window.getSelection()?.removeAllRanges();
     toast.success("Added to follow-up");
-  }, []);
+  }, [selection.text]);
 
   /**
    * Seed the composer from a notification-center "Reply" (spec 126 §D).

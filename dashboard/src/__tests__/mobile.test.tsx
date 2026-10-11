@@ -446,5 +446,52 @@ describe("Mobile quote-and-ask (parity with desktop)", () => {
     const chip = await screen.findByTestId("quote-chip");
     expect(chip).toHaveTextContent("Job 126 finished");
   });
+
+  it("shows the bar from a touch selection (touchend) where selectionchange never fires", async () => {
+    render(
+      <MobileChatView
+        {...baseProps}
+        messages={[{ role: "assistant", content: "Hello from Sarathy" }]}
+      />,
+    );
+    const list = screen.getByTestId("mobile-message-list");
+    await act(async () => {
+      stubSelection("Hello from Sarathy", list);
+      // Deliberately NO selectionchange — this is the iOS behaviour.
+      document.dispatchEvent(new Event("touchend", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(await screen.findByTestId("quote-action-bar")).toBeInTheDocument();
+  });
+
+  it("still quotes the selection text after the tap collapses it (touch safety)", async () => {
+    render(
+      <MobileChatView
+        {...baseProps}
+        messages={[{ role: "assistant", content: "Hello from Sarathy" }]}
+      />,
+    );
+    const list = screen.getByTestId("mobile-message-list");
+    await act(async () => {
+      stubSelection("Hello from Sarathy", list);
+      document.dispatchEvent(new Event("touchend", { bubbles: true }));
+      await Promise.resolve();
+    });
+    const bar = await screen.findByTestId("quote-action-bar");
+
+    // Tapping the bar collapses the live selection before the click handler runs.
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => "",
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection);
+    await act(async () => {
+      fireEvent.click(bar);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("quote-chip")).toHaveTextContent("Hello from Sarathy");
+  });
 });
 

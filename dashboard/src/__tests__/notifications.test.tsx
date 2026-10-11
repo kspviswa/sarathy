@@ -489,7 +489,8 @@ describe("NotificationCenter full message + Reply (spec 126 §D)", () => {
 
     fireEvent.click(reply);
     expect(onReply).toHaveBeenCalledTimes(1);
-    // It hands over the notification itself, so the caller can seed a session.
+    // It hands over the notification itself, so the caller can quote it into
+    // the current chat.
     expect(onReply.mock.calls[0][0]).toMatchObject({
       title: LONG_TITLE,
       body: LONG_BODY,
@@ -502,7 +503,7 @@ describe("NotificationCenter full message + Reply (spec 126 §D)", () => {
     expect(screen.queryByTestId("notifications-reply")).toBeNull();
   });
 
-  it("Reply does NOT mark read or navigate — it seeds a new session instead", () => {
+  it("Reply does NOT mark read or navigate — it quotes into the current chat", () => {
     const onMarkRead = vi.fn();
     const onNavigate = vi.fn();
     const onOpenChange = vi.fn();

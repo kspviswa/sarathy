@@ -613,9 +613,10 @@ export function ChatView({
    *
    * The notification lands as a quote chip — the same channel selection-based
    * quoting already uses — so it travels with the next send as `quotes` and the
-   * model reads it as genuine prior context. Nothing is auto-sent: the chip is
-   * placed, a short stub prompt is prefilled for editing, and the textarea takes
-   * focus so the user can just start typing.
+   * model reads it as genuine prior context. The reply is a turn in the session
+   * already open (the App no longer archives it), so an in-progress draft in the
+   * composer is preserved: the stub prompt is only prefilled when the box is
+   * empty. Nothing is auto-sent; the textarea takes focus so the user can type.
    *
    * Keyed on `nonce`, not the text, so replying to the same notification twice
    * re-seeds rather than being dropped as an unchanged prop.
@@ -629,7 +630,7 @@ export function ChatView({
         source_role: "assistant",
       }),
     );
-    setInput("Replying to this notification — ");
+    setInput((prev) => prev.trim() || "Replying to this notification — ");
     textareaRef.current?.focus();
   }, [followUpSeed?.nonce, followUpSeed?.text]);
 

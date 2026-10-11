@@ -312,43 +312,27 @@ function AppInner() {
   /**
    * "Reply" on a notification (spec 126 §D).
    *
-   * Starts a NEW session so the follow-up is a clean conversation rather than a
-   * fork of whatever the console was doing, then hands the notification to the
-   * composer as a quote chip — the existing quote-and-ask channel, which
-   * already travels with the next message as `quotes`. The notification is
-   * therefore genuine prior context the model can read, not just text sitting
-   * in an input the user still has to send.
+   * Quotes the notification into the CURRENT console session: the item lands as
+   * a quote chip on the composer and the reply is added as the next turn of the
+   * conversation already open. The quote travels with the next message as
+   * `quotes`, so the notification is genuine prior context the model can read.
+   *
+   * It deliberately does NOT archive the session or start a new one — replying
+   * is a continuation of what the user was doing, and silently throwing the
+   * live session away (the old behavior) lost that context.
    *
    * Nothing is sent on the user's behalf: the chip is placed and the composer
    * focused, so they write the actual question.
    */
   const handleNotificationReply = useCallback(
-    async (n: AppNotification) => {
-      if (busyRef.current) return;
-      busyRef.current = true;
-      try {
-        await api.sessionNew(DASHBOARD_SESSION_KEY);
-        resetLastSession();
-        setMessages([]);
-        setStreaming(false);
-        setReaction("done");
-        setOpenFile(null);
-        setTranscriptKey(null);
-        refreshSessions();
-        setFollowUpSeed({
-          text: [n.title, n.body].filter(Boolean).join("\n"),
-          nonce: Date.now(),
-        });
-        selectSection("chat");
-      } catch (err) {
-        toast.error(
-          err instanceof Error ? err.message : "Failed to start a new session",
-        );
-      } finally {
-        busyRef.current = false;
-      }
+    (n: AppNotification) => {
+      setFollowUpSeed({
+        text: [n.title, n.body].filter(Boolean).join("\n"),
+        nonce: Date.now(),
+      });
+      selectSection("chat");
     },
-    [refreshSessions, selectSection],
+    [selectSection],
   );
 
   const handleStop = useCallback(async () => {

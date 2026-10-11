@@ -217,29 +217,17 @@ function MobileAppInner() {
 
   /**
    * "Reply" on a notification (spec 126 §D) — mobile parity with the desktop
-   * App. Starts a NEW session so the follow-up is a clean conversation, then
-   * seeds the composer with the notification as a quote chip. Nothing is sent
-   * on the user's behalf.
+   * App. Quotes the notification into the CURRENT console session (the item
+   * becomes a quote chip on the composer and the reply is added as the next
+   * turn of the open conversation); it does NOT archive the session or start a
+   * new one. Nothing is sent on the user's behalf.
    */
-  const handleNotificationReply = useCallback(async (n: AppNotification) => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    try {
-      await api.sessionNew(DASHBOARD_SESSION_KEY);
-      resetLastSession();
-      setMessages([]);
-      setStreaming(false);
-      setOpenFile(null);
-      setFollowUpSeed({
-        text: [n.title, n.body].filter(Boolean).join("\n"),
-        nonce: Date.now(),
-      });
-      setTab("chat");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to start a new session");
-    } finally {
-      busyRef.current = false;
-    }
+  const handleNotificationReply = useCallback((n: AppNotification) => {
+    setFollowUpSeed({
+      text: [n.title, n.body].filter(Boolean).join("\n"),
+      nonce: Date.now(),
+    });
+    setTab("chat");
   }, []);
 
   const handleNewChat = useCallback(async () => {

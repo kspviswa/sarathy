@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DevicesPanel } from "@/components/DevicesPanel";
 import { api } from "@/lib/api";
@@ -25,6 +25,10 @@ vi.mock("@/lib/api", () => ({
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 const DEVICES: DeviceInfo[] = [
   {
@@ -129,5 +133,39 @@ describe("DevicesPanel", () => {
     );
     expect(reloaded).toBe(true);
     vi.unstubAllGlobals();
+  });
+
+  it("selects and deselects all non-current devices (current has no checkbox)", async () => {
+    vi.mocked(api.devices.list).mockResolvedValue({ devices: DEVICES });
+    render(<DevicesPanel />);
+
+    await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
+    // The current device is excluded from bulk selection.
+    expect(screen.queryByTestId("device-select-bbbbbb")).toBeNull();
+
+    await userEvent.click(screen.getByTestId("devices-select-all"));
+    expect(screen.getByTestId("device-select-aaaaaa")).toBeChecked();
+    expect(screen.getByTestId("device-select-cccccc")).toBeChecked();
+    expect(screen.getByTestId("devices-select-all")).toHaveTextContent("Deselect all");
+
+    await userEvent.click(screen.getByTestId("devices-select-all"));
+    expect(screen.getByTestId("device-select-aaaaaa")).not.toBeChecked();
+    expect(screen.getByTestId("device-select-cccccc")).not.toBeChecked();
+    expect(screen.getByTestId("devices-select-all")).toHaveTextContent("Select all");
+  });
+
+  it("bulk revokes every selected device without the force flag", async () => {
+    vi.mocked(api.devices.list).mockResolvedValue({ devices: DEVICES });
+    vi.mocked(api.devices.remove).mockResolvedValue({ ok: true, removed: "x" });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<DevicesPanel />);
+
+    await waitFor(() => expect(screen.getByText("Laptop")).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId("devices-select-all"));
+    await userEvent.click(screen.getByTestId("devices-bulk-revoke"));
+
+    await waitFor(() => expect(api.devices.remove).toHaveBeenCalledTimes(2));
+    expect(api.devices.remove).toHaveBeenCalledWith("aaaaaaaaaaaa", false);
+    expect(api.devices.remove).toHaveBeenCalledWith("cccccccccccc", false);
   });
 });

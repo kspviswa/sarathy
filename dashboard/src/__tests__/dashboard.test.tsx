@@ -137,7 +137,7 @@ describe("ChatView — New chat button", () => {
   });
 });
 
-describe("ThinkingSection — thinking indicator stops + shows elapsed time", () => {
+describe("ThinkingSection — the turn's ONE collapse header (spec 135 §A)", () => {
   it("shows an animated 'Thinking' indicator while the turn runs", () => {
     render(
       <ThinkingSection
@@ -157,6 +157,22 @@ describe("ThinkingSection — thinking indicator stops + shows elapsed time", ()
     expect(screen.getByText("Thinking")).toHaveClass("thinking-shimmer");
   });
 
+  it("renders nothing at all when there is nothing to show", () => {
+    // The pre-135 bug was an empty bubble: header + big placeholder + chip for a
+    // turn with no content and no live state. Nothing to expand, nothing live.
+    const { container } = render(<ThinkingSection toolHints={[]} thinkingContent="" done />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows the one slim row for a live turn that has said nothing yet", () => {
+    // `alwaysShow` is what keeps the empty state a single row instead of an
+    // empty bubble (spec 135 §A).
+    render(<ThinkingSection toolHints={[]} thinkingContent="" done={false} alwaysShow />);
+    expect(screen.getByTestId("thinking-toggle")).toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    expect(screen.queryByTestId("assistant-turn-segments")).toBeNull();
+  });
+
   it("stops the indicator once the turn is done", () => {
     render(
       <ThinkingSection
@@ -169,7 +185,7 @@ describe("ThinkingSection — thinking indicator stops + shows elapsed time", ()
     expect(document.querySelector(".thinking-shimmer")).toBeNull();
   });
 
-  it("shows 'Thought for Ns' with Check icon when done", () => {
+  it("shows a Check icon and the frozen duration when done", () => {
     render(
       <ThinkingSection
         toolHints={[]}
@@ -177,11 +193,13 @@ describe("ThinkingSection — thinking indicator stops + shows elapsed time", ()
         done={true}
       />,
     );
-    expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
-    const elapsed = screen.getByText(/Thought for \d+s/);
-    expect(elapsed).toBeInTheDocument();
-    const checkIcon = document.querySelector(".text-green-500");
-    expect(checkIcon).toBeInTheDocument();
+    // The label stays "Thinking" — the row is the turn's toggle, not a status
+    // sentence. What changes when the turn ends is the live affordance: the
+    // shimmer stops and the dots become a Check.
+    expect(screen.getByText("Thinking")).not.toHaveClass("thinking-shimmer");
+    expect(document.querySelector(".text-green-500")).toBeInTheDocument();
+    // Spec 135 §A: the elapsed time lives in the header's meta row.
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent(/^\d+s$/);
   });
 
   it("shows elapsed time counting up while streaming, then freezes when done", () => {
@@ -207,23 +225,46 @@ describe("ThinkingSection — thinking indicator stops + shows elapsed time", ()
       );
     });
 
-    expect(screen.getByText("Thought for 3s")).toBeInTheDocument();
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("3s");
 
     act(() => {
       vi.advanceTimersByTime(5000);
     });
-    expect(screen.getByText("Thought for 3s")).toBeInTheDocument();
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("3s");
   });
 
-  it("shows tool call count badge when toolHints provided", () => {
+  it("counts steps in the header and renders tool calls as chips", () => {
     render(
       <ThinkingSection
-        toolHints={["read_file /foo", "write_file /bar"]}
+        toolHints={["read_file /foo", 'memory_log("tea")']}
         thinkingContent="reasoning..."
         done={false}
       />,
     );
-    expect(screen.getByText("2 tool calls")).toBeInTheDocument();
+    // Spec 135 §A: "6 steps · 2m 14s", not a raw mono line per call. The chips
+    // themselves live in the collapsed body (asserted below).
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("2 steps ·");
+  });
+
+  it("keeps reasoning + chips inside the collapsed body", () => {
+    render(
+      <ThinkingSection
+        toolHints={['exec("ls")', 'read_file("a.py")']}
+        thinkingContent="I should list the files."
+        done={true}
+      />,
+    );
+    expect(screen.queryByTestId("thinking-body")).toBeNull();
+    fireEvent.click(screen.getByTestId("thinking-toggle"));
+    expect(screen.getByTestId("thinking-body")).toBeInTheDocument();
+    expect(screen.getByText(/list the files/)).toBeInTheDocument();
+    // One chip per tool call: name + one-line summary, not a mono blob.
+    const chips = screen.getAllByTestId("tool-chip");
+    expect(chips).toHaveLength(2);
+    expect(chips[0]).toHaveTextContent("exec");
+    expect(chips[0]).toHaveTextContent("ls");
+    expect(chips[1]).toHaveTextContent("read_file");
+    expect(chips[1]).toHaveTextContent("a.py");
   });
 });
 

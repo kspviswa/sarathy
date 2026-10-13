@@ -27,12 +27,12 @@ import { CodeBlock } from "@/components/CodeBlock";
 import { GreetingState, DEFAULT_SUGGESTIONS, type Suggestion } from "@/components/GreetingState";
 import { LiveStatus } from "@/components/LiveStatus";
 import { MarkdownBubble } from "@/components/MarkdownBubble";
-import { PresenceIndicator, ReactionChip } from "@/components/Presence";
+import { PresenceIndicator } from "@/components/Presence";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
 import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
 import { ThinkingSection } from "@/components/ThinkingSection";
-import { ThinkingIndicator } from "@/components/ThinkingIndicator";
+import { TurnSegments } from "@/components/AssistantTurn";
 import { SlashAutocomplete } from "@/components/CommandPalette";
 import { UsageFooter } from "@/components/UsageFooter";
 import { Button } from "@/components/ui/button";
@@ -49,7 +49,7 @@ import {
   type Quote,
   type QuoteChip,
 } from "@/lib/quotes";
-import { deriveLiveTurnStatus } from "@/lib/transcript";
+import { deriveLiveTurnStatus, turnSegments, type TurnSegment } from "@/lib/transcript";
 import type { SlashCommand } from "@/lib/palette";
 import type { ReactionState } from "@/lib/reactions";
 import { UIBlock, extractProse, hasOpenUIBlock } from "@/lib/uiBlocks";
@@ -80,13 +80,21 @@ export interface ChatMessage {
   notice?: boolean;
   /**
    * Genuine prose the turn committed to alongside a tool call (spec 131 §C).
-   * A sealed bubble is never overwritten by a later frame: the turn's final
-   * answer opens a fresh bubble beside it.
+   * On the bubble this means "this turn has already committed a segment" — the
+   * turn itself still continues in the SAME bubble (spec 135 §A).
    */
   sealed?: boolean;
   /**
-   * `turnId` + sub-index. A turn can own several bubbles (sealed reply + the
-   * follow-up final), so this — not `turnId` — is the unique React key.
+   * The turn's ordered prose (spec 135 §A): one bubble, N segments, a hairline
+   * trail divider between them. `content` mirrors these joined, so every
+   * consumer that predates segments (copy, media extraction, the session
+   * viewer) keeps working. Absent on messages loaded from a session archive —
+   * `turnSegments()` treats those as a single sealed segment.
+   */
+  segments?: TurnSegment[];
+  /**
+   * `turnId` + sub-index — the unique React key. A turn is ONE bubble, so the
+   * sub-index only ever distinguishes legacy turns that arrived without one.
    */
   bubbleId?: string;
 }
@@ -755,37 +763,48 @@ export function ChatView({
             }}
           />
 
+          {/* Composer row (spec 135 §B). The three controls used to sit at
+              three different sizes — attach/mic `size-9` (36px), send
+              `Button size="icon"` = `size-10` (40px) — on an `items-end` row,
+              so the rocket was the tallest thing in the composer and read as
+              floating next to the input. All three are now 36px squares with
+              the input box's radius, ghost-clustered left with send alone on
+              the right, and they share the input's accent so the row reads as
+              one control instead of four unrelated ones. */}
           <div className="flex items-end gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <label
-                  htmlFor="attach-file-input"
-                  className="inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                  title="Attach file"
-                  aria-label="Attach file"
-                  role="button"
-                >
-                  <Paperclip className="size-4" />
-                </label>
-              </TooltipTrigger>
-              <TooltipContent side="top">Attach file</TooltipContent>
-            </Tooltip>
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <label
+                    htmlFor="attach-file-input"
+                    className="inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    title="Attach file"
+                    aria-label="Attach file"
+                    role="button"
+                  >
+                    <Paperclip className="size-4" />
+                  </label>
+                </TooltipTrigger>
+                <TooltipContent side="top">Attach file</TooltipContent>
+              </Tooltip>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={isRecording ? "destructive" : "ghost"}
-                  size="icon"
-                  className="size-9 shrink-0"
-                  onClick={isRecording ? stopRecording : () => void startRecording()}
-                >
-                  {isRecording ? <Square className="size-4" /> : <Mic className="size-4" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                {isRecording ? "Stop recording" : "Record voice"}
-              </TooltipContent>
-            </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={isRecording ? "destructive" : "ghost"}
+                    size="icon"
+                    className="size-9 shrink-0 rounded-lg"
+                    onClick={isRecording ? stopRecording : () => void startRecording()}
+                    aria-label={isRecording ? "Stop recording" : "Record voice"}
+                  >
+                    {isRecording ? <Square className="size-4" /> : <Mic className="size-4" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {isRecording ? "Stop recording" : "Record voice"}
+                </TooltipContent>
+              </Tooltip>
+            </div>
 
             <Textarea
               ref={textareaRef}
@@ -823,7 +842,11 @@ export function ChatView({
               onPaste={handlePaste}
               placeholder="Message Sarathy…  ·  Enter = newline, Ctrl+Enter = send"
               style={{ height: composerHeight }}
-              className="flex-1 resize-none overflow-y-auto"
+              /* Symmetric vertical padding: the first line starts where the
+                 36px controls start, whether the box holds one line or ten.
+                 The focus ring takes the send button's accent (primary), so the
+                 whole composer reads as one unit when it lights up. */
+              className="flex-1 resize-none overflow-y-auto rounded-lg px-3.5 py-3 focus-visible:border-primary/40 focus-visible:ring-primary/40"
               rows={1}
             />
 
@@ -831,6 +854,7 @@ export function ChatView({
               <TooltipTrigger asChild>
                 <Button
                   size="icon"
+                  className="size-9 shrink-0 rounded-lg"
                   onClick={() => void send()}
                   disabled={!input.trim() && !mediaPaths.length && quoteChips.length === 0}
                   aria-label="Send"
@@ -993,10 +1017,21 @@ function MessageRow({
 }) {
   const isUser = message.role === "user";
   const isNotice = !isUser && Boolean(message.notice);
-  const hasContent = (message.content?.length ?? 0) > 0;
-  const showThinking =
-    !isUser && !isNotice && ((message.toolHints?.length ?? 0) + (message.thinkingContent?.length ?? 0) > 0);
+  const segments = useMemo(() => (isUser || isNotice ? [] : turnSegments(message)), [message, isUser, isNotice]);
+  const hasContent = segments.length > 0;
   const live = !isUser && !isNotice && (streaming || Boolean(message.progress));
+
+  // The collapse header is the turn's only status row (spec 135 §A). It renders
+  // whenever the turn has something to show — prose, a tool call, reasoning —
+  // and also while the turn is live with nothing yet, so the empty state is
+  // that one slim row rather than a bubble with a placeholder in it.
+  const showThinking =
+    !isUser &&
+    !isNotice &&
+    (hasContent ||
+      (message.toolHints?.length ?? 0) > 0 ||
+      (message.thinkingContent?.length ?? 0) > 0 ||
+      live);
 
   // Shared render-layer cleanup (spec 126 §B): the same text the chat bubble
   // shows is what the session viewer shows — no preamble, no machine lines.
@@ -1055,10 +1090,15 @@ function MessageRow({
         )}
 
         {showThinking && (
+          /* ONE header per turn: chevron · Thinking · "6 steps · 2m 14s", with
+             the live pulse in this row. The old stack — this header, then a big
+             ThinkingIndicator placeholder, then a `working` ReactionChip — was
+             three indicators for one turn (spec 135 §A). */
           <ThinkingSection
             toolHints={message.toolHints || []}
             thinkingContent={message.thinkingContent || ""}
             done={!live}
+            alwaysShow
             onOpenFile={onOpenFile}
           />
         )}
@@ -1086,18 +1126,21 @@ function MessageRow({
              ones (job 132 §D) — backticks, fences, lists and links used to
              print literally. Markdown only: no openUI block renderer. */
           <MarkdownBubble content={cleanContent} onPrimary />
-        ) : hasContent ? (
-          <MessageBody content={cleanContent} streaming={message.progress} onOpenFile={onOpenFile} onSend={onSend} />
-        ) : live ? (
-          <div className="text-muted-foreground">
-            <ThinkingIndicator label="Thinking…" />
-          </div>
-        ) : null}
-
-        {!isUser && live && (
-          <div className="mt-1.5">
-            <ReactionChip state="working" />
-          </div>
+        ) : isNotice ? (
+          /* Out-of-band acks (`/stop`, `/steer`, `/btw`) are standalone
+             messages, not turn segments: they carry their own `content` and no
+             segments, so they keep the plain body renderer. */
+          <MessageBody content={cleanContent} onOpenFile={onOpenFile} onSend={onSend} />
+        ) : (
+          /* Every segment of the turn, in order, separated by the trail
+             divider (spec 135 §A). Shared with mobile — the frame around the
+             prose is identical on both surfaces; only the body renderer is not. */
+          <TurnSegments
+            segments={segments}
+            renderSegment={(text, isStreaming) => (
+              <MessageBody content={cleanRenderedContent(text)} streaming={isStreaming} onOpenFile={onOpenFile} onSend={onSend} />
+            )}
+          />
         )}
 
         {!isUser && !isNotice && hasContent && (

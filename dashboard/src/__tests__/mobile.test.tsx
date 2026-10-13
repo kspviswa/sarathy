@@ -14,6 +14,11 @@ vi.mock("@/lib/api", () => ({
     status: vi.fn().mockResolvedValue({ version: "0.5.0", gateway: { running: true } }),
     sessions: vi.fn().mockResolvedValue({ sessions: [] }),
     session: vi.fn().mockResolvedValue({ key: "", createdAt: "", messages: [] }),
+    // The Sessions tab browses archives (job 132 §C).
+    sessionsArchive: vi.fn().mockResolvedValue({ sessions: [] }),
+    sessionArchive: vi
+      .fn()
+      .mockResolvedValue({ id: "", key: "", channel: "", createdAt: "", messages: [] }),
     sessionNew: vi.fn().mockResolvedValue({ ok: true }),
     workspaceTree: vi.fn().mockResolvedValue({ root: "/ws", tree: [] }),
     getConfig: vi.fn().mockResolvedValue({}),
@@ -131,15 +136,38 @@ describe("Mobile app — bottom tab bar", () => {
     const todayKey = `${now.getFullYear()}-${`${now.getMonth() + 1}`.padStart(2, "0")}-${`${now.getDate()}`.padStart(2, "0")}`;
     const iso = now.toISOString();
 
-    vi.mocked(api.sessions).mockResolvedValue({
+    vi.mocked(api.sessionsArchive).mockResolvedValue({
       sessions: [
-        { key: "telegram:1", channel: "telegram", topic: "alpha", messageCount: 2, updated_at: iso },
-        { key: "telegram:2", channel: "telegram", topic: "beta", messageCount: 3, updated_at: iso },
-        { key: "email:7", channel: "email", topic: "digest", messageCount: 1, updated_at: iso },
+        {
+          id: "session-2026-10-13T09-00.jsonl",
+          key: "telegram:1",
+          channel: "telegram",
+          topic: "alpha",
+          messageCount: 2,
+          updated_at: iso,
+        },
+        {
+          id: "session-2026-10-13T09-30.jsonl",
+          key: "telegram:2",
+          channel: "telegram",
+          topic: "beta",
+          messageCount: 3,
+          updated_at: iso,
+        },
+        {
+          id: "session-2026-10-13T11-00.jsonl",
+          key: "email:7",
+          channel: "email",
+          topic: "digest",
+          messageCount: 1,
+          updated_at: iso,
+        },
       ],
     });
-    vi.mocked(api.session).mockResolvedValue({
+    vi.mocked(api.sessionArchive).mockResolvedValue({
+      id: "session-2026-10-13T09-00.jsonl",
       key: "telegram:1",
+      channel: "telegram",
       createdAt: iso,
       messages: [{ role: "user", content: "ping" }],
     } as never);

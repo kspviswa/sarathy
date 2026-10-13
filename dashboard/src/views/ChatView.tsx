@@ -25,6 +25,7 @@ import { toast } from "sonner";
 
 import { CodeBlock } from "@/components/CodeBlock";
 import { GreetingState, DEFAULT_SUGGESTIONS, type Suggestion } from "@/components/GreetingState";
+import { MarkdownBubble } from "@/components/MarkdownBubble";
 import { PresenceIndicator, ReactionChip } from "@/components/Presence";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
 import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
@@ -937,6 +938,10 @@ export function ChatView({
               key={m.bubbleId ?? m.turnId ?? m.messageId ?? i}
               message={m}
               streaming={streaming}
+              /* Only the NEWEST bubble animates in (job 132 §E): the class is
+                 on a stable keyed node, so it fires once on mount and a
+                 streaming reply does not re-trigger it frame by frame. */
+              animate={i === messages.length - 1}
               onOpenFile={onOpenFile}
               onRegenerate={m.role === "assistant" && !streaming ? onRegenerate : undefined}
               onReply={() => setReplyToMsg(m)}
@@ -965,6 +970,7 @@ export function ChatView({
 function MessageRow({
   message,
   streaming,
+  animate = false,
   onOpenFile,
   onRegenerate,
   onReply,
@@ -972,6 +978,8 @@ function MessageRow({
 }: {
   message: ChatMessage;
   streaming: boolean;
+  /** Fade the bubble in on mount (job 132 §E). */
+  animate?: boolean;
   onOpenFile?: (path: string) => void;
   onRegenerate?: () => void;
   onReply?: () => void;
@@ -1004,7 +1012,14 @@ function MessageRow({
   }, [message.media, message.content]);
 
   return (
-    <div className={cn("group flex", isUser ? "justify-end" : "justify-start")}>
+    <div
+      className={cn(
+        "group flex",
+        isUser ? "justify-end" : "justify-start",
+        animate && "bubble-in",
+      )}
+      data-testid={isUser ? "message-row-user" : "message-row-assistant"}
+    >
       <div
         className={cn(
           "max-w-[85%] rounded-2xl px-4 text-[15px] leading-relaxed",
@@ -1061,7 +1076,10 @@ function MessageRow({
         )}
 
         {isUser ? (
-          <div className="whitespace-pre-wrap break-words">{cleanContent}</div>
+          /* User turns go through the same markdown pipeline as assistant
+             ones (job 132 §D) — backticks, fences, lists and links used to
+             print literally. Markdown only: no openUI block renderer. */
+          <MarkdownBubble content={cleanContent} onPrimary />
         ) : hasContent ? (
           <MessageBody content={cleanContent} streaming={message.progress} onOpenFile={onOpenFile} onSend={onSend} />
         ) : live ? (

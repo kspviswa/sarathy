@@ -167,12 +167,21 @@ class Session:
             logger.debug("Failed to update sessions index for {}: {}", self.key, e)
 
     def _get_archive_dir(self) -> str:
-        """Get the archived sessions directory path."""
-        if hasattr(self, "_manager") and self._manager is not None:
-            workspace = Path(self._manager.config.agents.defaults.workspace).expanduser()
-        else:
+        """Get the archived sessions directory path.
+
+        The MANAGER's own workspace, never the config default. `SessionManager`
+        accepts an explicit `workspace=`, and reading
+        `config.agents.defaults.workspace` instead wrote every archive into the
+        real `~/.sarathy/workspace/archived_sessions` — so any test (or any
+        second workspace) that passed its own `workspace=` littered the live
+        workspace with probe sessions. `~/.sarathy/workspace` remains the
+        fallback only for a detached session with no manager at all.
+        """
+        manager = getattr(self, "_manager", None)
+        workspace = getattr(manager, "workspace", None) if manager is not None else None
+        if not workspace:
             workspace = Path("~/.sarathy/workspace").expanduser()
-        return str(workspace / "archived_sessions")
+        return str(Path(workspace).expanduser() / "archived_sessions")
 
 
 class SessionManager:

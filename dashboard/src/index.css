@@ -195,6 +195,75 @@
   @apply my-2 max-h-64 rounded-lg;
 }
 
+/* Markdown inside a PRIMARY-filled (user) bubble.
+   The `.md` rules above assume a card background and set `text-foreground` /
+   `bg-muted` explicitly, so on the primary fill an inline code span rendered
+   dark-on-primary and links lost their affordance. These re-point them at the
+   bubble's own colour. Doubled class (`.md.md-on-primary`) so it outranks the
+   single-class `.md code` rules above regardless of source order. */
+.md.md-on-primary {
+  color: inherit;
+}
+.md.md-on-primary a {
+  @apply text-inherit underline underline-offset-2;
+}
+.md.md-on-primary code,
+.md.md-on-primary pre,
+.md.md-on-primary pre code {
+  @apply bg-primary-foreground/15 text-inherit;
+}
+
+/* Section + bubble motion (job 132 §E).
+   Both are short, one-shot keyframes: the content area fades/slides in when the
+   selected tab changes, and a newly arriving bubble fades up into place. The
+   bubble class sits on a keyed element that is NOT remounted as a reply
+   streams, so the animation fires once on mount and never per frame.
+
+   Fill mode is `backwards`, NOT `both`: a finished `both` animation keeps its
+   final `transform`, and a leftover transform turns the element into the
+   containing block for any `position: fixed` descendant — which would drag the
+   chat's (non-portalled) quote action bar out of viewport coordinates. `none`
+   is deliberate: after 180ms the element is in its natural state, transform
+   included. */
+@keyframes section-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.section-in {
+  animation: section-in 180ms ease-out backwards;
+}
+
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bubble-in {
+  animation: bubble-in 200ms ease-out backwards;
+}
+
+/* Reduced motion: keep the state changes, drop the movement. Neither animation
+   carries information, so turning them off is lossless. */
+@media (prefers-reduced-motion: reduce) {
+  .section-in,
+  .bubble-in {
+    animation: none;
+  }
+}
+
 @keyframes blink {
   0%, 50% { opacity: 1; }
   51%, 100% { opacity: 0; }

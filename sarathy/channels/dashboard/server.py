@@ -34,6 +34,7 @@ from sarathy.channels.dashboard.auth import (
     redact_config,
 )
 from sarathy.config.schema import DashboardConfig
+from sarathy.session.manager import channel_for_key
 
 DASHBOARD_SESSION_KEY = "dashboard:console"
 MAX_FILE_BYTES = 2 * 1024 * 1024  # Workspace file read/write cap
@@ -95,6 +96,16 @@ _MOBILE_UA_RE = re.compile(
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 _AUDIO_EXTS = {".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"}
+
+# Archived transcripts are named `session-YYYY-MM-DDTHH-MM.jsonl` by
+# `Session.archive_session`. `/api/session/archive` takes one of those names
+# verbatim, so the name is validated against this pattern BEFORE it is joined to
+# the archive directory — a `/`, a `..` or any other shape is a 400, never a
+# filesystem lookup. Guards the read-only archive directory against traversal.
+_ARCHIVE_NAME_RE = re.compile(r"^session-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2})\.jsonl$")
+
+# Preview length for the archive browser's list rows.
+_ARCHIVE_PREVIEW_CHARS = 280
 
 
 def _media_type_from_path(path: str) -> str:
@@ -236,6 +247,26 @@ def split_quotes(content: str) -> tuple[list[dict[str, str]], str]:
             quotes.append({"text": text, "source_role": role})
 
     return quotes, body.strip()
+
+
+def message_text(raw: object) -> str:
+    """Flatten a stored message's content to plain text.
+
+    Multipart (vision) content is persisted as a list of blocks rather than a
+    string; joining the text blocks keeps the transcript readable instead of
+    raising inside `split_quotes`.
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, list):
+        return " ".join(
+            str(block.get("text", ""))
+            for block in raw
+            if isinstance(block, dict) and block.get("text")
+        )
+    if isinstance(raw, str):
+        return raw
+    return str(raw)
 
 
 # Notifications render a two-line body at most; a runaway relay reply must not
@@ -908,7 +939,9 @@ class DashboardChannel(BaseChannel):
         app.router.add_post("/api/runtime", self._api_runtime_set)
         app.router.add_post("/api/restart", self._api_restart)
         app.router.add_get("/api/sessions", self._api_sessions)
+        app.router.add_get("/api/sessions/archive", self._api_sessions_archive)
         app.router.add_get("/api/session", self._api_session_messages)
+        app.router.add_get("/api/session/archive", self._api_session_archive)
         app.router.add_get("/api/turn", self._api_turn)
         app.router.add_post("/api/session/new", self._api_session_new)
         app.router.add_post("/api/session/delete", self._api_session_delete)
@@ -1493,13 +1526,105 @@ class DashboardChannel(BaseChannel):
 
     # ------------------------------------------------------------------ sessions api
 
+    def _archive_dir(self) -> Path:
+        """Directory the session manager archives transcripts into.
+
+        Prefers the MANAGER's workspace over the config default, because that
+        is where `Session._get_archive_dir` writes: listing a different
+        directory would show an empty archive even when files exist.
+        """
+        workspace = getattr(self.session_manager, "workspace", None)
+        root = Path(workspace) if workspace else self._workspace_root()
+        return root / "archived_sessions"
+
+    @staticmethod
+    def _read_archive_file(path: Path) -> tuple[dict, list[dict]]:
+        """Parse one archived JSONL transcript into (metadata, message records).
+
+        Tolerant by design: a truncated or hand-mangled line is skipped rather
+        than failing the whole file, so one bad archive can never blank the
+        browser's list or a transcript.
+        """
+        metadata: dict = {}
+        messages: list[dict] = []
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                if data.get("_type") == "metadata":
+                    if not metadata:
+                        metadata = data
+                    continue
+                messages.append(data)
+        return metadata, messages
+
+    def _transcript_entry(self, m: dict) -> dict | None:
+        """One client-facing transcript entry, or ``None`` to drop the record.
+
+        Only real conversation reaches a client: `tool` results are machinery
+        the transcript must not show, and an assistant tool-call record carries
+        no prose — so rendering it produced an empty bubble. User and assistant
+        messages are cleaned exactly as the chat bubble cleans them (quotes
+        split out, session-topic marker stripped from assistant bodies, media
+        and timestamps preserved).
+        """
+        # Strip the session-topic machine marker on read. Transcripts persisted
+        # before the marker was stripped at save-time still carry it, and it
+        # must never reach a client — it leaked into the mobile history view
+        # (KB #456). Stripping here covers legacy data and every client.
+        from sarathy.agent.loop import strip_topic_marker
+
+        role = m.get("role", "")
+        if role not in ("user", "assistant"):
+            return None
+
+        # Assistant tool-call records carry content=None (the message tool turn
+        # writes one); tolerate that instead of 500ing the history load.
+        raw_content = m.get("content")
+        quotes, body = split_quotes(message_text(raw_content))
+        if role == "assistant":
+            body, _ = strip_topic_marker(body)
+        media = m.get("media")
+
+        # An empty bubble is never worth rendering. Media-only and quote-only
+        # turns still carry meaning, so they survive.
+        if not body.strip() and not quotes and not media:
+            return None
+
+        entry = {
+            "role": role,
+            "content": body,
+            "timestamp": m.get("timestamp"),
+            "name": m.get("name"),
+        }
+        if quotes:
+            entry["quotes"] = quotes
+        # Attachments persisted for this turn (spec 127 §B) — surfaced so a
+        # reload reconstructs media bubbles the live stream may have missed.
+        if media:
+            entry["media"] = media
+        if m.get("turn_id"):
+            entry["turn_id"] = m["turn_id"]
+        return entry
+
     async def _api_sessions(self, request: web.Request) -> web.Response:
-        """GET /api/sessions — the archive browser's list.
+        """GET /api/sessions — the ACTIVE sessions list.
 
         Enriches each entry with the first user-message preview and message
-        count so the browser can render a real archive list instead of empty
-        cards. Enrichment is best-effort per session: one unreadable
-        transcript must not blank the whole list.
+        count so the browser can render a real list instead of empty cards.
+        Enrichment is best-effort per session: one unreadable transcript must
+        not blank the whole list.
+
+        This is the LIVE-chat resolution path (`useLastSession`, `App`), so its
+        shape is frozen — the archive browser reads `/api/sessions/archive`
+        instead.
         """
         if not self.session_manager:
             return web.json_response({"error": "sessions unavailable"}, status=503)
@@ -1521,14 +1646,9 @@ class DashboardChannel(BaseChannel):
             info["messageCount"] = len(messages)
             for m in messages:
                 if m.get("role") == "user":
-                    content = m.get("content", "")
                     # Multipart content arrives as a list of blocks; keep the
                     # text blocks only (media/attachments have no text).
-                    if isinstance(content, list):
-                        content = " ".join(
-                            str(b.get("text", "")) for b in content if isinstance(b, dict)
-                        )
-                    _, body = split_quotes(str(content))
+                    _, body = split_quotes(message_text(m.get("content", "")))
                     body = " ".join(body.split())
                     if body:
                         info["preview"] = body[:280]
@@ -1536,7 +1656,143 @@ class DashboardChannel(BaseChannel):
 
         return web.json_response({"sessions": sessions})
 
+    async def _api_sessions_archive(self, request: web.Request) -> web.Response:
+        """GET /api/sessions/archive — the archive browser's list.
+
+        Scans `<workspace>/archived_sessions/*.jsonl` — the PAST conversation,
+        every channel — and returns one entry per file, newest first. The active
+        sessions (`/api/sessions`) are the handful currently live; this is the
+        history those sessions roll into on `/new`.
+
+        Read-only, and best-effort per file: an unreadable archive is skipped,
+        never fatal.
+        """
+        if not self.session_manager:
+            return web.json_response({"error": "sessions unavailable"}, status=503)
+
+        archive_dir = self._archive_dir()
+        try:
+            paths = sorted(archive_dir.glob("session-*.jsonl"))
+        except OSError as e:
+            logger.warning("Could not list {}: {}", archive_dir, e)
+            return web.json_response({"sessions": []})
+
+        sessions: list[dict] = []
+        for path in paths:
+            try:
+                metadata, messages = self._read_archive_file(path)
+            except OSError as e:
+                logger.warning("Skipping unreadable archive {}: {}", path.name, e)
+                continue
+
+            key = str(metadata.get("key") or path.stem)
+            # Fall back to the filename stamp when the metadata line is missing
+            # or truncated — the file name always carries the archive time.
+            fallback_ts = self._archive_timestamp(path.name)
+            entries = [e for e in (self._transcript_entry(m) for m in messages) if e is not None]
+
+            sessions.append(
+                {
+                    "id": path.name,
+                    "key": key,
+                    "channel": channel_for_key(key),
+                    "topic": (metadata.get("metadata") or {}).get("topic") or None,
+                    "created_at": metadata.get("created_at") or fallback_ts,
+                    "updated_at": metadata.get("updated_at") or fallback_ts,
+                    "preview": self._archive_preview(entries),
+                    # Counted from the FILTERED entries, so the number matches
+                    # what the opened transcript actually shows.
+                    "messageCount": len(entries),
+                }
+            )
+
+        sessions.sort(key=lambda s: (s.get("updated_at") or "", s.get("id") or ""), reverse=True)
+        return web.json_response({"sessions": sessions})
+
+    @staticmethod
+    def _archive_timestamp(name: str) -> str | None:
+        """ISO timestamp encoded in an archive file name, or None.
+
+        `Session.archive_session` stamps names with minute precision, so the
+        fallback is coarser than the metadata line's — it only matters when the
+        metadata line is missing or truncated.
+        """
+        match = _ARCHIVE_NAME_RE.match(name)
+        if not match:
+            return None
+        try:
+            stamp = datetime.strptime(match.group(1), "%Y-%m-%dT%H-%M")
+        except ValueError:
+            return None
+        return stamp.isoformat()
+
+    @staticmethod
+    def _archive_preview(entries: list[dict]) -> str | None:
+        """First non-empty user message, quote-stripped and whitespace-collapsed."""
+        for entry in entries:
+            if entry.get("role") != "user":
+                continue
+            body = " ".join(str(entry.get("content", "")).split())
+            if body:
+                return body[:_ARCHIVE_PREVIEW_CHARS]
+        return None
+
+    async def _api_session_archive(self, request: web.Request) -> web.Response:
+        """GET /api/session/archive?file=<name> — one archived transcript.
+
+        `file` is a bare archive file name. Anything carrying a path separator
+        or `..`, and anything not shaped like `session-*.jsonl`, is a 400 —
+        checked before any path is built. The resolved path is additionally
+        confirmed to sit directly inside the archive directory, so a
+        symlink cannot widen the blast radius.
+        """
+        if not self.session_manager:
+            return web.json_response({"error": "sessions unavailable"}, status=503)
+
+        name = (request.query.get("file") or "").strip()
+        if (
+            not name
+            or "/" in name
+            or "\\" in name
+            or ".." in name
+            or not _ARCHIVE_NAME_RE.match(name)
+        ):
+            return web.json_response({"error": "invalid archive file"}, status=400)
+
+        archive_dir = self._archive_dir()
+        path = archive_dir / name
+        try:
+            if not path.is_file() or path.parent.resolve() != archive_dir.resolve():
+                return web.json_response({"error": "archive not found"}, status=404)
+        except OSError:
+            return web.json_response({"error": "archive not found"}, status=404)
+
+        try:
+            metadata, messages = self._read_archive_file(path)
+        except OSError as e:
+            logger.warning("Could not read archive {}: {}", name, e)
+            return web.json_response({"error": "archive not found"}, status=404)
+
+        key = str(metadata.get("key") or path.stem)
+        entries = [e for e in (self._transcript_entry(m) for m in messages) if e is not None]
+        return web.json_response(
+            {
+                "id": name,
+                "key": key,
+                "channel": channel_for_key(key),
+                "createdAt": metadata.get("created_at") or self._archive_timestamp(name),
+                "updatedAt": metadata.get("updated_at") or self._archive_timestamp(name),
+                "messages": entries,
+            }
+        )
+
     async def _api_session_messages(self, request: web.Request) -> web.Response:
+        """GET /api/session?key= — the ACTIVE session's transcript.
+
+        Same filtered view as the archive browser: user messages and assistant
+        messages that actually have text. Tool results and empty assistant
+        tool-call records are dropped here, so no client has to filter them.
+        """
         if not self.session_manager:
             return web.json_response({"error": "sessions unavailable"}, status=503)
         key = request.query.get("key", "")
@@ -1546,35 +1802,7 @@ class DashboardChannel(BaseChannel):
         if session is None:
             return web.json_response({"error": "session not found"}, status=404)
 
-        # Strip the session-topic machine marker on read. Transcripts persisted
-        # before the marker was stripped at save-time still carry it, and it
-        # must never reach a client — it leaked into the mobile history view
-        # (KB #456). Stripping here covers legacy data and every client.
-        from sarathy.agent.loop import strip_topic_marker
-
-        messages = []
-        for m in session.messages:
-            # Assistant tool-call records carry content=None (the message tool
-            # turn writes one); tolerate it instead of 500ing the history load.
-            raw_content = m.get("content") or ""
-            quotes, body = split_quotes(raw_content)
-            if m.get("role") == "assistant":
-                body, _ = strip_topic_marker(body)
-            entry = {
-                "role": m.get("role", ""),
-                "content": body,
-                "timestamp": m.get("timestamp"),
-                "name": m.get("name"),
-            }
-            if quotes:
-                entry["quotes"] = quotes
-            # Attachments persisted for this turn (spec 127 §B) — surfaced so a
-            # reload reconstructs media bubbles the live stream may have missed.
-            if m.get("media"):
-                entry["media"] = m["media"]
-            if m.get("turn_id"):
-                entry["turn_id"] = m["turn_id"]
-            messages.append(entry)
+        messages = [e for e in (self._transcript_entry(m) for m in session.messages) if e]
         return web.json_response(
             {
                 "key": key,

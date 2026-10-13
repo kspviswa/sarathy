@@ -12,6 +12,7 @@ import type {
   RoleStatusResponse,
   RuntimeSetResponse,
   SessionDetail,
+  SessionArchiveDetail,
   SessionFooter,
   SessionInfo,
   StatusResponse,
@@ -168,6 +169,17 @@ export const api = {
   restart: () => request<{ ok: boolean }>("/api/restart", { method: "POST" }),
 
   sessions: () => request<{ sessions: SessionInfo[] }>("/api/sessions"),
+
+  /**
+   * ARCHIVED sessions, newest first — what the Sessions tab browses (job 132
+   * §A). `/api/sessions` stays the LIVE-chat resolution path, so it is not
+   * repointed at archives.
+   */
+  sessionsArchive: () => request<{ sessions: SessionInfo[] }>("/api/sessions/archive"),
+
+  /** One archived transcript, addressed by its archive file name. */
+  sessionArchive: (file: string) =>
+    request<SessionArchiveDetail>(`/api/session/archive?file=${encodeURIComponent(file)}`),
 
   sessionNew: (key: string) =>
     request<{ ok: boolean }>("/api/session/new", {

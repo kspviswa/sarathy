@@ -1,24 +1,25 @@
-import { ArrowLeft, Clock, Loader2, Lock, MessageSquareText } from "lucide-react";
+import { ArrowLeft, Clock, Copy, Loader2, Lock, MessageSquareText, SquarePen } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
+import { MarkdownBubble } from "@/components/MarkdownBubble";
 import { SessionCalendar } from "@/components/SessionCalendar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { channelIcon } from "@/lib/channelIcons";
 import { cleanRenderedContent } from "@/lib/messageText";
-import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 import {
   formatDateKey,
   groupByChannel,
   sessionDayKeys,
+  sessionIdentity,
   sessionTitle,
   sessionsOnDate,
   type MonthCursor,
 } from "@/lib/sessions";
-import type { SessionDetail, SessionInfo } from "@/lib/types";
+import { visibleTranscriptMessages } from "@/lib/transcript";
+import type { SessionArchiveDetail, SessionInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function sessionTime(s: SessionInfo): string {
@@ -34,14 +35,33 @@ function thisMonth(): MonthCursor {
   return { year: now.getFullYear(), month: now.getMonth() };
 }
 
+/** Plain-text rendering of a transcript, for the clipboard. */
+function transcriptText(detail: SessionArchiveDetail): string {
+  return detail.messages
+    .map((m) => {
+      const body = cleanRenderedContent(m.content);
+      return body ? `${m.role === "user" ? "You" : "Sarathy"}: ${body}` : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 /**
- * Mobile Sessions drill-down (spec §C): one screen at a time —
+ * Mobile Sessions drill-down (job 132 §C): one screen at a time —
  * calendar → day channels → channel list → transcript — with a back affordance
  * at every level, mirroring the desktop flow.
+ *
+ * Like the desktop tab, it browses ARCHIVED conversations
+ * (`/api/sessions/archive`), which is what `/new` leaves behind.
  */
-export function SessionsView() {
+export function SessionsView({
+  onOpenThread,
+}: {
+  /** Hand the last user message back to the shell (see desktop SessionsView). */
+  onOpenThread?: (text: string) => void;
+} = {}) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [detail, setDetail] = useState<SessionArchiveDetail | null>(null);
   const [loadingList, setLoadingList] = useState(true);
   const [cursor, setCursor] = useState<MonthCursor>(thisMonth);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
@@ -49,16 +69,16 @@ export function SessionsView() {
 
   useEffect(() => {
     api
-      .sessions()
-      .then((res) => setSessions(res.sessions))
+      .sessionsArchive()
+      .then((res) => setSessions(res.sessions ?? []))
       .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load sessions"))
       .finally(() => setLoadingList(false));
   }, []);
 
-  async function open(key: string) {
+  async function open(id: string) {
     setDetail(null);
     try {
-      setDetail(await api.session(key));
+      setDetail(await api.sessionArchive(id));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load session");
     }
@@ -81,6 +101,20 @@ export function SessionsView() {
     [dayChannels, selectedChannel],
   );
 
+  const visible = useMemo(
+    () => visibleTranscriptMessages(detail?.messages ?? []),
+    [detail],
+  );
+
+  const lastUserMessage = useMemo(() => {
+    for (let i = visible.length - 1; i >= 0; i -= 1) {
+      if (visible[i].role !== "user") continue;
+      const body = cleanRenderedContent(visible[i].content);
+      if (body) return body;
+    }
+    return "";
+  }, [visible]);
+
   if (detail) {
     return (
       <div className="flex h-full flex-col" data-testid="mobile-sessions">
@@ -95,14 +129,41 @@ export function SessionsView() {
           <span className="text-xs text-muted-foreground">Transcript</span>
         </div>
         <div className="flex-1 overflow-y-auto p-3">
-          <div className="mb-3 flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
             <Clock className="size-4" />
             <span className="truncate font-mono text-xs">{detail.key}</span>
+            <span className="flex-1" />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                void navigator.clipboard
+                  ?.writeText(transcriptText(detail))
+                  .then(() => toast.success("Transcript copied"))
+                  .catch(() => toast.error("Could not copy transcript"));
+              }}
+              data-testid="session-copy"
+            >
+              <Copy className="size-3.5" />
+              Copy
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onOpenThread?.(lastUserMessage)}
+              disabled={!lastUserMessage}
+              data-testid="session-open-thread"
+            >
+              <SquarePen className="size-3.5" />
+              New thread
+            </Button>
           </div>
-          <div className="flex flex-col gap-3">
-            {detail.messages.map((m, i) => (
+          {/* Keyed so opening another archive re-runs the fade (job 132 §E). */}
+          <div key={detail.id} className="section-in flex flex-col gap-3">
+            {visible.map((m, i) => (
               <div
                 key={i}
+                data-testid={m.role === "user" ? "transcript-user" : "transcript-assistant"}
                 className={cn(
                   "rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
                   m.role === "user"
@@ -110,25 +171,12 @@ export function SessionsView() {
                     : "self-start max-w-[88%] border border-border bg-card",
                 )}
               >
-                  {m.role === "assistant" ? (
-                    <div className="md">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        rehypePlugins={SAFE_REHYPE_PLUGINS}
-                        components={MD_COMPONENTS}
-                      >
-                        {cleanRenderedContent(m.content)}
-                      </ReactMarkdown>
-                    </div>
-                  ) : (
-                    /* Same render-layer cleanup the chat bubble uses
-                       (spec 126 §B) — the session viewer used to print the
-                       raw stored turn, leaking the [Runtime Context …]
-                       preamble and [image: /path] machine lines. */
-                    <div className="whitespace-pre-wrap break-words">
-                      {cleanRenderedContent(m.content)}
-                    </div>
-                  )}
+                {/* Markdown on BOTH sides (job 132 §D), cleaned like the chat
+                    bubble (spec 126 §B). */}
+                <MarkdownBubble
+                  content={cleanRenderedContent(m.content)}
+                  onPrimary={m.role === "user"}
+                />
               </div>
             ))}
           </div>
@@ -167,7 +215,9 @@ export function SessionsView() {
             <Loader2 className="size-4 animate-spin" /> Loading…
           </div>
         ) : sessions.length === 0 ? (
-          <p className="p-3 text-sm text-muted-foreground">No sessions yet</p>
+          <p className="p-3 text-sm text-muted-foreground" data-testid="sessions-empty">
+            No archived sessions yet
+          </p>
         ) : !selectedDay ? (
           <SessionCalendar
             cursor={cursor}
@@ -206,31 +256,36 @@ export function SessionsView() {
           </ul>
         ) : (
           <ul className="space-y-0.5" data-testid="mobile-sessions-channel">
-            {channelSessions.map((s) => (
-              <li key={s.key}>
-                <button
-                  onClick={() => void open(s.key)}
-                  className="flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-base transition-colors hover:bg-accent"
-                >
-                  <MessageSquareText className="size-5 shrink-0" />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5">
-                      <span className="truncate">{sessionTitle(s)}</span>
-                      {s.topic_user_set && (
-                        <Lock
-                          className="size-3.5 shrink-0 opacity-70"
-                          aria-label="Topic locked"
-                          data-testid="topic-lock"
-                        />
-                      )}
+            {channelSessions.map((s) => {
+              const id = sessionIdentity(s);
+              return (
+                <li key={id}>
+                  <button
+                    onClick={() => void open(id)}
+                    data-testid="archive-row"
+                    data-archive-id={id}
+                    className="flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-base transition-colors hover:bg-accent"
+                  >
+                    <MessageSquareText className="size-5 shrink-0" />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate">{sessionTitle(s)}</span>
+                        {s.topic_user_set && (
+                          <Lock
+                            className="size-3.5 shrink-0 opacity-70"
+                            aria-label="Topic locked"
+                            data-testid="topic-lock"
+                          />
+                        )}
+                      </span>
+                      <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                        {sessionTime(s)}
+                      </span>
                     </span>
-                    <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                      {sessionTime(s)}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            ))}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

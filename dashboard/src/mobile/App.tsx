@@ -236,6 +236,17 @@ function MobileAppInner() {
   /** The seed is one-shot: ChatView reports it applied so it can't re-inject. */
   const clearFollowUpSeed = useCallback(() => setFollowUpSeed(null), []);
 
+  /**
+   * "Open as new thread" from the Sessions tab (job 132 §C) — carries a past
+   * conversation's last question into the composer as a quote chip, exactly as
+   * a notification "Reply" does. Nothing is sent on the user's behalf.
+   */
+  const handleOpenThread = useCallback((text: string) => {
+    if (!text.trim()) return;
+    setFollowUpSeed({ text, nonce: Date.now() });
+    setTab("chat");
+  }, []);
+
   const handleNewChat = useCallback(async () => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -335,7 +346,9 @@ function MobileAppInner() {
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      {/* `key` re-mounts the content area per tab so the entry transition
+          (job 132 §E) runs on every switch, not only the first paint. */}
+      <main key={tab} className="section-in min-h-0 flex-1 overflow-y-auto">
         {tab === "chat" && (
           <>
             {historyError && (
@@ -364,7 +377,7 @@ function MobileAppInner() {
           </>
         )}
         {tab === "files" && <FilesView initialFile={openFile} />}
-        {tab === "sessions" && <SessionsView />}
+        {tab === "sessions" && <SessionsView onOpenThread={handleOpenThread} />}
         {tab === "jobs" && <JobsView />}
         {tab === "config" && <ConfigView />}
         {tab === "status" && <StatusView onLoggedOut={logout} />}
@@ -382,10 +395,13 @@ function MobileAppInner() {
               setTab(id);
               setUnread((prev) => ({ ...prev, [id]: 0 }));
             }}
+            /* Job 132 §E: the selected tab eases into place (the icon
+               scales, the label fades up); reduced-motion aware. */
             className={cn(
-              "relative flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-2",
+              "relative flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-2 transition-colors duration-200 ease-out motion-reduce:transition-none",
               tab === id ? "text-primary" : "text-muted-foreground",
             )}
+            data-testid={`mobile-tab-${id}`}
           >
             <span className="relative">
               {unread[id] ? (
@@ -393,9 +409,21 @@ function MobileAppInner() {
                   {unread[id]}
                 </span>
               ) : null}
-              <Icon className="size-6" />
+              <Icon
+                className={cn(
+                  "size-6 transition-transform duration-200 ease-out motion-reduce:transition-none",
+                  tab === id && "scale-110",
+                )}
+              />
             </span>
-            <span className="text-[10px] font-medium">{label}</span>
+            <span
+              className={cn(
+                "text-[10px] font-medium transition-opacity duration-200 ease-out motion-reduce:transition-none",
+                tab === id ? "opacity-100" : "opacity-70",
+              )}
+            >
+              {label}
+            </span>
           </button>
         ))}
       </nav>

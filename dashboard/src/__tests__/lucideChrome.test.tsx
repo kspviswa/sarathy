@@ -15,6 +15,8 @@ vi.mock("@/lib/api", () => ({
     sessionFooter: vi.fn(),
     sessions: vi.fn(),
     session: vi.fn(),
+    sessionsArchive: vi.fn(),
+    sessionArchive: vi.fn(),
     me: vi.fn().mockResolvedValue({ ok: true }),
     status: vi.fn().mockResolvedValue({ version: "0.16.4", gateway: { running: true } }),
   },
@@ -157,7 +159,9 @@ describe("SessionsView — topic lock is a lucide icon", () => {
   const dayKey = `${today.getFullYear()}-${`${today.getMonth() + 1}`.padStart(2, "0")}-${`${today.getDate()}`.padStart(2, "0")}`;
   const stamp = today.toISOString();
 
+  // Archived sessions carry the archive file name as their id (job 132 §C).
   const locked = {
+    id: "session-2026-10-13T20-31.jsonl",
     key: "dashboard:console",
     channel: "dashboard",
     topic: "locked topic",
@@ -167,9 +171,11 @@ describe("SessionsView — topic lock is a lucide icon", () => {
   };
 
   beforeEach(() => {
-    vi.mocked(api.sessions).mockResolvedValue({ sessions: [locked] } as never);
-    vi.mocked(api.session).mockResolvedValue({
+    vi.mocked(api.sessionsArchive).mockResolvedValue({ sessions: [locked] } as never);
+    vi.mocked(api.sessionArchive).mockResolvedValue({
+      id: locked.id,
       key: locked.key,
+      channel: locked.channel,
       createdAt: locked.created_at,
       messages: [],
     } as never);
@@ -177,8 +183,8 @@ describe("SessionsView — topic lock is a lucide icon", () => {
 
   afterEach(() => {
     cleanup();
-    vi.mocked(api.sessions).mockReset();
-    vi.mocked(api.session).mockReset();
+    vi.mocked(api.sessionsArchive).mockReset();
+    vi.mocked(api.sessionArchive).mockReset();
   });
 
   /** Walk calendar → day → channel so the session list is on screen. */

@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
 import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
+import { EmojiText } from "@/lib/emojiIcons";
 import { extractProse, hasOpenUIBlock, UIBlock } from "@/lib/uiBlocks";
 import {
   addQuote,
@@ -431,7 +432,7 @@ export function ChatView({
             data-testid="reply-preview"
           >
             <span className="mt-0.5 shrink-0 opacity-60">↩</span>
-            <span className="flex-1 truncate">{replyToMsg.content}</span>
+            <span className="flex-1 truncate"><EmojiText text={replyToMsg.content} /></span>
             <button onClick={() => setReplyToMsg(null)} aria-label="Cancel reply">
               <X className="size-3.5" />
             </button>

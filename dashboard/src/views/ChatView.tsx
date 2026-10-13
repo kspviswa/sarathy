@@ -30,6 +30,7 @@ import { MarkdownBubble } from "@/components/MarkdownBubble";
 import { PresenceIndicator } from "@/components/Presence";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
 import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
+import { EmojiText } from "@/lib/emojiIcons";
 import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { TurnSegments } from "@/components/AssistantTurn";
@@ -716,7 +717,7 @@ export function ChatView({
             {replyToMsg && (
               <div className="flex items-start gap-2 rounded-t-xl text-xs text-muted-foreground">
                 <span className="mt-0.5 shrink-0 opacity-60">↩</span>
-                <span className="flex-1 truncate">{replyToMsg.content}</span>
+                <span className="flex-1 truncate"><EmojiText text={replyToMsg.content} /></span>
                 <button onClick={() => setReplyToMsg(null)} aria-label="Cancel reply">
                   <X className="size-3" />
                 </button>

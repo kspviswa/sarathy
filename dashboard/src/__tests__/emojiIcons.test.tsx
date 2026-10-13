@@ -16,6 +16,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { cleanRenderedContent } from "@/lib/messageText";
+import { EmojiText } from "@/lib/emojiIcons";
 import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 
 /** Visible text only — drops tags so an emoji in `aria-label` is not counted. */
@@ -115,5 +116,31 @@ describe("emoji icons", () => {
     const html = render('<emoji name="🗣"></emoji>');
     expect(html).not.toContain("emoji-icon");
     expect(html).not.toContain("<svg");
+  });
+});
+
+describe("EmojiText — plain-string surfaces", () => {
+  const renderText = (text: string) => renderToStaticMarkup(<EmojiText text={text} />);
+
+  it("swaps a known emoji for its icon and keeps the accessible name", () => {
+    const html = renderText("🔍 Sending image to VLM…");
+    expect(html).toContain("emoji-icon");
+    expect(html).toContain('aria-label="🔍"');
+    expect(html).toContain("Sending image to VLM…");
+    // The raw glyph is gone from the visible text (it survives only as the
+    // aria-label).
+    expect(html).not.toContain(">🔍");
+  });
+
+  it("handles the variation-selector form (🖼️) and multiple emoji", () => {
+    const html = renderText("🖼️ Preparing image… ✅ done");
+    expect(html).toContain('aria-label="🖼"');
+    expect(html).toContain('aria-label="✅"');
+    expect(html).not.toContain("🖼️");
+  });
+
+  it("passes unknown text through untouched", () => {
+    const html = renderText("no emoji here");
+    expect(html).toBe("no emoji here");
   });
 });

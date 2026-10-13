@@ -23,10 +23,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CodeBlock } from "@/components/CodeBlock";
 import { LiveStatus } from "@/components/LiveStatus";
-import { ReactionChip } from "@/components/Presence";
 import { SlashAutocomplete } from "@/components/CommandPalette";
 import { ThinkingSection } from "@/components/ThinkingSection";
-import { ThinkingIndicator } from "@/components/ThinkingIndicator";
+import { TurnSegments } from "@/components/AssistantTurn";
 import { UsageFooter } from "@/components/UsageFooter";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -44,7 +43,7 @@ import {
   type QuoteChip,
 } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
-import { deriveLiveTurnStatus } from "@/lib/transcript";
+import { deriveLiveTurnStatus, turnSegments } from "@/lib/transcript";
 import type { ChatMessage } from "@/views/ChatView";
 import { DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 
@@ -515,16 +514,24 @@ export function ChatView({
                 }
               }}
               placeholder="Message Sarathy…"
-              className="w-full !min-h-16 max-h-[200px] resize-none overflow-y-auto text-base"
+              /* Same accent + symmetric vertical padding as desktop (spec
+                 135 §B): the input and the send button light up together, and
+                 the first line starts where the controls do. */
+              className="w-full !min-h-16 max-h-[200px] resize-none overflow-y-auto rounded-lg px-3.5 py-3 text-base focus-visible:border-primary/40 focus-visible:ring-primary/40"
               rows={1}
               aria-label="Message input"
               data-testid="mobile-composer-input"
             />
+            {/* Controls: a tight ghost cluster on the left, send alone on the
+                right. Every control is the SAME square with the input's radius
+                — the send button used to be a circle among rounded squares,
+                which is what made the row look unresolved. Footprint stays
+                44px here (spec 126 §F touch target); desktop is 36px. */}
             <div className="flex items-center justify-between gap-2" data-testid="mobile-composer-actions">
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-0.5">
                 <label
                   htmlFor="attach-file-input"
-                  className="inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   aria-label="Attach file"
                   role="button"
                 >
@@ -533,7 +540,7 @@ export function ChatView({
                 <Button
                   variant={isRecording ? "destructive" : "ghost"}
                   size="icon"
-                  className="size-11 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+                  className="size-11 shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
                   onClick={isRecording ? stopRecording : startRecording}
                   aria-label={isRecording ? "Stop recording" : "Record voice"}
                   data-testid="mobile-mic"
@@ -543,7 +550,7 @@ export function ChatView({
               </div>
               <Button
                 size="icon"
-                className="size-11 shrink-0 rounded-full"
+                className="size-11 shrink-0 rounded-lg"
                 onClick={() => void send()}
                 disabled={!input.trim() && !mediaPaths.length && quoteChips.length === 0}
                 aria-label="Send"
@@ -614,18 +621,36 @@ function MobileMessage({
   // bubbles (desktop MessageRow does the same) so ordinary chat stays compact.
   const hasUI = useMemo(() => hasOpenUIBlock(cleanContent), [cleanContent]);
 
-  const showThinking =
-    !isUser && !isNotice && (message.toolHints?.length || 0) + (message.thinkingContent?.length || 0) > 0;
+  // The turn's ordered prose (spec 135 §A) — ONE bubble per turn, with the
+  // desktop rendering the same `segments` through the same `TurnSegments`.
+  const segments = useMemo(() => (isUser || isNotice ? [] : turnSegments(message)), [message, isUser, isNotice]);
+  const hasContent = segments.length > 0;
+
   // Parity with the desktop MessageRow. The thinking strip's live state must
   // track the *turn*, not just `message.progress`: reasoning/tool-hint frames
   // never set `progress`, so keying off `progress` alone made mobile claim a
   // finished "Thought for 0s ✓" while the turn was still reasoning, whereas
   // desktop shows the live "Thinking ⟳". `streaming` is the App-level turn flag.
   const live = !isUser && !isNotice && (streaming || Boolean(message.progress));
-  const hasContent = (message.content?.length ?? 0) > 0;
+
+  // The collapse header is the turn's only status row: it shows whenever the
+  // turn has anything to reveal, and also while a live turn has said nothing
+  // yet — that empty state is one slim row, not a placeholder + a chip.
+  const showThinking =
+    !isUser &&
+    !isNotice &&
+    (hasContent ||
+      (message.toolHints?.length || 0) > 0 ||
+      (message.thinkingContent?.length || 0) > 0 ||
+      live);
 
   return (
-    <div className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}>
+    <div
+      className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}
+      /* Same row testids as desktop MessageRow, so a parity assertion (and any
+         e2e selector) works against either SPA (spec 135 §A). */
+      data-testid={isUser ? "message-row-user" : "message-row-assistant"}
+    >
       <div
         className={cn(
           "max-w-[88%] rounded-2xl px-4 py-2.5 text-base leading-relaxed",
@@ -639,10 +664,14 @@ function MobileMessage({
         data-testid={isNotice ? "command-notice" : undefined}
       >
         {showThinking && (
+          /* ONE header per turn, identical to desktop (spec 135 §A): the live
+             pulse sits in this row, and the separate placeholder + working chip
+             that used to stack under it are gone. */
           <ThinkingSection
             toolHints={message.toolHints || []}
             thinkingContent={message.thinkingContent || ""}
             done={!live}
+            alwaysShow
             onOpenFile={onOpenFile}
           />
         )}
@@ -680,17 +709,24 @@ function MobileMessage({
           /* Parity with the desktop MessageRow (job 132 §D): user turns render
              as markdown, not literal backticks. Markdown only — no openUI. */
           <MarkdownBubble content={cleanContent} onPrimary />
-        ) : hasContent ? (
-          <AssistantBody content={cleanContent} onOpenFile={onOpenFile} streaming={message.progress} onSend={onSend} />
-        ) : live ? (
-          <div className="text-muted-foreground">
-            <ThinkingIndicator label="Thinking…" />
-          </div>
-        ) : null}
-        {!isUser && !isNotice && live && (
-          <div className="mt-1.5">
-            <ReactionChip state="working" />
-          </div>
+        ) : isNotice ? (
+          /* Out-of-band acks are standalone messages carrying their own
+             `content` (no segments) — same plain body as before spec 135. */
+          <AssistantBody content={cleanContent} onOpenFile={onOpenFile} onSend={onSend} />
+        ) : (
+          /* The turn's prose, segment by segment, with the trail divider between
+             them — the same shared component desktop renders (spec 135 §A). */
+          <TurnSegments
+            segments={segments}
+            renderSegment={(text, isStreaming) => (
+              <AssistantBody
+                content={cleanRenderedContent(text)}
+                onOpenFile={onOpenFile}
+                streaming={isStreaming}
+                onSend={onSend}
+              />
+            )}
+          />
         )}
         {!isNotice && hasContent && (
           <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">

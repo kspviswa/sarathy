@@ -12,7 +12,7 @@
  * proves each surface actually renders it.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import React from "react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -48,7 +48,11 @@ vi.mock("@/components/logo", () => ({
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children, ...props }: any) => React.cloneElement(children, props),
+  /* `asChild` is consumed by the real Radix trigger and must NOT reach the
+     child: a `Button` that receives it flips to Slot mode and renders its
+     icon in place of the button element. */
+  TooltipTrigger: ({ children, asChild: _asChild, ...props }: any) =>
+    React.cloneElement(children, props),
   TooltipContent: () => null,
 }));
 
@@ -107,11 +111,6 @@ describe.each([
     expect(screen.getByTestId("reaction-chip")).toHaveAttribute("data-state", "working");
   });
 
-  it("does not duplicate the working chip — the live bubble already has one", () => {
-    render(<View {...props} streaming messages={describing("🔍 Sending image to VLM…")} />);
-    expect(screen.getAllByTestId("reaction-chip")).toHaveLength(1);
-  });
-
   it("keeps the collapsed Thinking history intact while narrating live", () => {
     render(
       <View
@@ -132,7 +131,8 @@ describe.each([
       "🔍 Sending image to VLM…",
     );
     expect(screen.getByRole("button", { name: /thinking/i })).toBeInTheDocument();
-    expect(screen.getByText("2 tool calls")).toBeInTheDocument();
+    // Spec 135 §A: the step count moved into that one header.
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("2 steps");
   });
 
   it("shows no strip once the turn has ended", () => {
@@ -144,6 +144,51 @@ describe.each([
       />,
     );
     expect(screen.queryByTestId("live-status")).toBeNull();
+  });
+});
+
+/**
+ * Spec 135 §A — the turn has exactly ONE status row.
+ *
+ * Job 134 shipped the narration with a `working` ReactionChip in the live
+ * bubble, on top of the collapse header AND a big ThinkingIndicator
+ * placeholder: three indicators stacked for one turn, which is what Viswa
+ * flagged. The live pulse now lives INSIDE the header row and the chip is
+ * gone; the strip still narrates, but it no longer doubles the bubble up.
+ */
+describe.each([
+  ["desktop", DesktopChatView as React.ComponentType<any>],
+  ["mobile", MobileChatView as React.ComponentType<any>],
+])("%s — one status row per turn (spec 135 §A)", (_name, View) => {
+  const live = (extra: Record<string, unknown> = {}): ChatMessage[] => [
+    { role: "user", content: "what's in this photo?" },
+    {
+      role: "assistant",
+      content: "",
+      turnId: "T",
+      bubbleId: "T#1",
+      toolHints: ["🔍 Sending image to VLM…"],
+      ...extra,
+    },
+  ];
+
+  it("puts the live pulse INSIDE the single header row", () => {
+    render(<View {...props} streaming messages={live()} />);
+    const header = screen.getByTestId("thinking-toggle");
+    // The travelling dots are the header's own live affordance…
+    expect(within(header).getByTestId("thinking-indicator")).toBeInTheDocument();
+    // …and they are the ONLY indicator on screen.
+    expect(screen.getAllByTestId("thinking-indicator")).toHaveLength(1);
+  });
+
+  it("drops the separate working chip and the big placeholder", () => {
+    render(<View {...props} streaming messages={live()} />);
+    // No `working` ReactionChip anywhere: the header is the status row.
+    expect(screen.queryAllByTestId("reaction-chip")).toHaveLength(0);
+    // No standalone "Thinking…" placeholder paragraph either.
+    expect(screen.queryByText("Thinking…")).toBeNull();
+    // The bubble is the header row and nothing else (no prose yet).
+    expect(screen.queryByTestId("assistant-turn-segments")).toBeNull();
   });
 });
 

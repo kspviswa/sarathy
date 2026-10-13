@@ -597,6 +597,11 @@ describe("Mobile — notification Reply quotes into the CURRENT session", () => 
  * keying off `progress` alone made mobile render a finished "Thought for 0s ✓"
  * while the turn was still reasoning — desktop (which uses `streaming ||
  * progress`) showed the live "Thinking ⟳". This locks the parity.
+ *
+ * Spec 135 §A then rewrote that strip as the turn's ONE header
+ * (`chevron · Thinking · steps · duration`), so "live" now means the shimmer +
+ * dot pulse in that row and "done" means the Check + frozen duration — and the
+ * redundant per-bubble `working` chip is gone from both surfaces.
  */
 describe("Mobile — thinking strip tracks the live turn (parity with desktop)", () => {
   const props = {
@@ -612,17 +617,18 @@ describe("Mobile — thinking strip tracks the live turn (parity with desktop)",
     toolHints: ["read_file(dashboard/src/App.tsx)"],
   };
 
-  it("shows the live 'Thinking' state (not a finished 'Thought for') while streaming", () => {
+  it("shows the live 'Thinking' state (not a finished one) while streaming", () => {
     render(<MobileChatView {...props} streaming messages={[threaded]} />);
 
-    const strip = screen.getByRole("button", { name: /thinking/i });
-    expect(strip).toHaveTextContent(/thinking/i);
-    expect(strip).not.toHaveTextContent(/thought for/i);
-    // Per-message live indicator, matching the desktop MessageRow.
-    expect(screen.getByTestId("reaction-chip")).toHaveAttribute("data-state", "working");
+    const header = screen.getByRole("button", { name: /thinking/i });
+    expect(header).toHaveTextContent(/thinking/i);
+    expect(header).toHaveTextContent("1 step");
+    // The live pulse IS the header row's affordance — no separate chip (135 §A).
+    expect(within(header).getByTestId("thinking-indicator")).toBeInTheDocument();
+    expect(screen.queryAllByTestId("reaction-chip")).toHaveLength(0);
   });
 
-  it("collapses to 'Thought for …' once the turn finishes", () => {
+  it("collapses to the frozen done state once the turn finishes", () => {
     render(
       <MobileChatView
         {...props}
@@ -631,8 +637,9 @@ describe("Mobile — thinking strip tracks the live turn (parity with desktop)",
       />,
     );
 
-    expect(screen.getByRole("button", { name: /thought for/i })).toBeInTheDocument();
-    expect(screen.queryByTestId("reaction-chip")).toBeNull();
+    expect(screen.getByRole("button", { name: /thinking/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("thinking-indicator")).toBeNull();
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent(/1 step · \d+s/);
   });
 });
 

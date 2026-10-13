@@ -18,10 +18,29 @@
  * `toolHints` into the one label both SPAs show while a turn is live (spec
  * 134 §B), so the image→VLM pipeline is narrated in the open instead of only
  * inside the collapsed Thinking section.
+ *
+ * Spec 135 §A changed the shape of a turn: a turn is ONE assistant bubble
+ * holding an ordered `segments[]`. Every frame of a turn folds into that one
+ * bubble — `_seal` COMMITS the streaming segment instead of closing the bubble,
+ * and the turn's `_final` is the last segment, never a second bubble. Before
+ * this, a turn with three tool calls rendered as three bubbles, which is what
+ * Viswa called out ("I don't want a second bubble").
  */
 import { cleanRenderedContent } from "@/lib/messageText";
 import type { OutboundMessage, SessionMessage } from "@/lib/types";
 import type { ChatMessage } from "@/views/ChatView";
+
+/**
+ * One piece of assistant prose inside a turn's single bubble (spec 135 §A).
+ *
+ * `sealed` means the loop committed this segment — `_seal` (prose shipped with
+ * a tool call) or `_final` (the turn's answer). The one trailing `false` is the
+ * streaming segment, and it is where the caret rides.
+ */
+export interface TurnSegment {
+  text: string;
+  sealed: boolean;
+}
 
 /** True when a streaming frame may be folded into `last`. */
 function isMergeable(last: ChatMessage | undefined): last is ChatMessage {
@@ -30,8 +49,8 @@ function isMergeable(last: ChatMessage | undefined): last is ChatMessage {
     // A notice is a completed, standalone message: streaming frames start a
     // fresh bubble rather than overwriting it.
     !last.notice &&
-    // A sealed bubble is genuine prose the turn has already committed to
-    // (spec 131 §C). Streaming frames must never merge into it either.
+    // Legacy frames carry no turn_id, so the sealed flag is all that keeps a
+    // committed reply from being overwritten by a turn-less frame (spec 131 §C).
     !last.sealed
   );
 }
@@ -47,34 +66,16 @@ function replaceAt(prev: ChatMessage[], idx: number, patch: Partial<ChatMessage>
 }
 
 /**
- * Index of the turn's live content bubble, or -1.
+ * Index of the turn's ONE bubble, or -1.
  *
- * A sealed bubble is skipped on purpose: it is already committed prose, so the
- * next frame of the same turn opens a fresh bubble beside it instead of
- * overwriting it (spec 131 §D).
+ * Spec 135 §A: a turn owns exactly one assistant bubble, so prose, reasoning
+ * and tool hints all resolve to the same index. `sealed` is deliberately NOT
+ * part of the match — it marks that the turn committed a segment, not that the
+ * bubble is closed. (Before this, `_seal` closed the bubble and the next frame
+ * minted a new one, so a turn with three tool calls fragmented into three
+ * bubbles.)
  */
-function findTurnIndex(prev: ChatMessage[], turnId: string): number {
-  for (let i = prev.length - 1; i >= 0; i -= 1) {
-    if (
-      prev[i].turnId === turnId &&
-      prev[i].role === "assistant" &&
-      !prev[i].notice &&
-      !prev[i].sealed
-    ) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-/**
- * Index of the turn's last bubble of any kind (sealed included), or -1.
- *
- * Reasoning and tool hints fold into this. They must never mint a bubble of
- * their own: a late `_thinking` after a sealed reply would otherwise be the
- * third bubble of a two-bubble turn.
- */
-function findHostIndex(prev: ChatMessage[], turnId: string): number {
+function findTurnBubbleIndex(prev: ChatMessage[], turnId: string): number {
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     if (prev[i].turnId === turnId && prev[i].role === "assistant" && !prev[i].notice) {
       return i;
@@ -84,15 +85,84 @@ function findHostIndex(prev: ChatMessage[], turnId: string): number {
 }
 
 /**
- * Stable per-bubble key. One turn can own several bubbles (a sealed reply plus
- * the follow-up final), so `turnId` alone is not a unique React key — the
- * sub-index makes it one.
+ * Stable per-bubble key. `turnId` alone is not guaranteed unique across turns
+ * that arrive without one (legacy frames), so the sub-index makes it one.
  */
 function nextBubbleId(prev: ChatMessage[], turnId: string | undefined): string {
   const base = turnId ?? "";
   let n = 0;
   for (const m of prev) if ((m.turnId ?? "") === base) n += 1;
   return `${base}#${n}`;
+}
+
+// ---------------------------------------------------------------------------
+// Segments — one turn, one bubble, several prose segments (spec 135 §A)
+// ---------------------------------------------------------------------------
+
+/** Segments are paragraphed: the trail divider needs something to sit between. */
+const SEGMENT_JOIN = "\n\n";
+
+/**
+ * The bubble's segments, tolerating transcripts that predate them.
+ *
+ * A message loaded from the session archive (or replayed by an older gateway)
+ * carries only `content`, which is one finished segment.
+ */
+function bubbleSegments(m: ChatMessage): TurnSegment[] {
+  if (m.segments) return m.segments;
+  const text = m.content ?? "";
+  return text ? [{ text, sealed: true }] : [];
+}
+
+/**
+ * `content` stays the mirror of the prose so every existing consumer keeps
+ * working (copy action, media extraction, `deriveLiveTurnStatus`, the session
+ * viewer). `segments` is the ordered truth the bubble renders.
+ */
+function segmentsPatch(segments: TurnSegment[]): Pick<ChatMessage, "segments" | "content"> {
+  const kept = segments.filter((s) => s.text.length > 0);
+  return { segments: kept, content: kept.map((s) => s.text).join(SEGMENT_JOIN) };
+}
+
+/** Index of the segment still being written, or -1 when all are committed. */
+function openSegmentIndex(segments: TurnSegment[]): number {
+  for (let i = segments.length - 1; i >= 0; i -= 1) if (!segments[i].sealed) return i;
+  return -1;
+}
+
+/**
+ * Streamed prose: rewrite the open segment in place (`_progress` frames carry
+ * the whole draft of the current iteration, not a delta). Once the segment is
+ * sealed the next iteration opens a NEW segment of the SAME bubble.
+ */
+function withStreamedProse(target: ChatMessage, text: string): Pick<ChatMessage, "segments" | "content"> {
+  const segments = [...bubbleSegments(target)];
+  const open = openSegmentIndex(segments);
+  if (open >= 0) segments[open] = { text, sealed: false };
+  else segments.push({ text, sealed: false });
+  return segmentsPatch(segments);
+}
+
+/**
+ * Committed prose (`_seal` / `_final`): seal the open segment, or open-and-seal
+ * a new one when every earlier segment is already committed. Either way the
+ * turn stays in ONE bubble.
+ */
+function withCommittedProse(target: ChatMessage, text: string): Pick<ChatMessage, "segments" | "content"> {
+  const segments = [...bubbleSegments(target)];
+  const open = openSegmentIndex(segments);
+  if (open >= 0) segments[open] = { text: text || segments[open].text, sealed: true };
+  else segments.push({ text, sealed: true });
+  return segmentsPatch(segments);
+}
+
+/** A plain follow-up frame extends the trailing segment's text. */
+function withAppendedProse(target: ChatMessage, text: string): Pick<ChatMessage, "segments" | "content"> {
+  const segments = [...bubbleSegments(target)];
+  const last = segments.length - 1;
+  if (last < 0) return segmentsPatch([{ text, sealed: false }]);
+  segments[last] = { ...segments[last], text: segments[last].text + text };
+  return segmentsPatch(segments);
 }
 
 /**
@@ -123,27 +193,32 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
   // into the SAME bubble no matter how many reconnects happened in between, and
   // a turn never merges into a neighbouring turn's bubble.
   const turnId = typeof md.turn_id === "string" ? md.turn_id : undefined;
-  const matchIdx = turnId ? findTurnIndex(prev, turnId) : -1;
-  const hostIdx = turnId ? findHostIndex(prev, turnId) : -1;
+  const turnIdx = turnId ? findTurnBubbleIndex(prev, turnId) : -1;
 
   const last = prev[prev.length - 1];
   const mergeable = isMergeable(last);
 
-  // ---- sealed prose (spec 131 §C) -------------------------------------------
+  // ---- sealed prose (spec 131 §C, spec 135 §A) ------------------------------
   // The loop publishes this when a tool-call iteration carried genuine reply
-  // text ("Noted — I'll remember that." + memory write). The prose already
-  // streamed into the turn's live bubble, so sealing it IN PLACE is what keeps
-  // the answer on screen when the turn's `_final` follows; with nothing live
-  // (non-streaming turn) it appends its own sealed bubble.
+  // text ("Noted — I'll remember that." + memory write). It COMMITS the segment
+  // that was streaming into the turn's bubble; it never mints a second one.
+  // The next iteration's prose opens a new segment beside it, and the trail
+  // divider between them is what shows the turn's shape.
   if (md._seal) {
-    if (matchIdx >= 0) {
-      return replaceAt(prev, matchIdx, { content: m.content, progress: false, sealed: true });
+    if (turnIdx >= 0) {
+      const target = prev[turnIdx];
+      return replaceAt(prev, turnIdx, {
+        ...withCommittedProse(target, m.content),
+        media: m.media?.length ? m.media : target.media,
+        progress: false,
+        sealed: true,
+      });
     }
     return [
       ...prev,
       {
         role: "assistant",
-        content: m.content,
+        ...segmentsPatch([{ text: m.content, sealed: true }]),
         progress: false,
         sealed: true,
         media: m.media?.length ? m.media : undefined,
@@ -156,17 +231,16 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
 
   // ---- attachment folds into its turn's bubble ----------------------------
   // A media outbound (assistant voice reply) is a plain frame: attach it to the
-  // already-streaming bubble for the same turn, or start one if this is the
-  // turn's first frame.
+  // turn's bubble, or start one if this is the turn's first frame.
   if (m.media?.length && !md._final && !md._progress && !md._thinking && !md._tool_hint) {
-    if (matchIdx >= 0) {
-      return replaceAt(prev, matchIdx, { media: m.media, progress: false });
+    if (turnIdx >= 0) {
+      return replaceAt(prev, turnIdx, { media: m.media, progress: false });
     }
     return [
       ...prev,
       {
         role: "assistant",
-        content: m.content,
+        ...segmentsPatch([{ text: m.content, sealed: false }]),
         media: m.media,
         replyTo: m.replyTo,
         turnId,
@@ -176,11 +250,14 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
   }
 
   // ---- final reply of a turn ----------------------------------------------
+  // The final answer is the LAST SEGMENT of the turn's bubble, never a bubble
+  // of its own (spec 135 §A): "Noted — I'll remember that." + "Anything else?"
+  // is one assistant response with a divider through it.
   if (md._final) {
-    if (matchIdx >= 0) {
-      const target = prev[matchIdx];
-      return replaceAt(prev, matchIdx, {
-        content: m.content,
+    if (turnIdx >= 0) {
+      const target = prev[turnIdx];
+      return replaceAt(prev, turnIdx, {
+        ...withCommittedProse(target, m.content),
         progress: false,
         media: m.media?.length ? m.media : target.media,
         replyTo: m.replyTo ?? target.replyTo,
@@ -188,7 +265,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     }
     if (!turnId && mergeable && last.progress) {
       return replaceLast(prev, {
-        content: m.content,
+        ...withStreamedProse(last, m.content),
         progress: false,
         media: m.media?.length ? m.media : last.media,
         replyTo: m.replyTo ?? last.replyTo,
@@ -196,20 +273,17 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     }
     if (!turnId && mergeable && !last.progress) {
       return replaceLast(prev, {
-        content: last.content + m.content,
+        ...withCommittedProse(last, m.content),
         progress: false,
         media: m.media?.length ? m.media : last.media,
         replyTo: m.replyTo ?? last.replyTo,
       });
     }
-    // Sealed prose already exists for this turn, so the final answer is a
-    // SECOND bubble — exactly two for "answer + memory write", never one per
-    // tool call (spec 131 §C).
     return [
       ...prev,
       {
         role: "assistant",
-        content: m.content,
+        ...segmentsPatch([{ text: m.content, sealed: true }]),
         media: m.media,
         replyTo: m.replyTo,
         turnId,
@@ -223,18 +297,17 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
   // `_progress` too, so testing `_progress` first used to swallow a tool hint
   // into the message text and mint a bubble for it.
   //
-  // Neither is EVER a message: they only fill the thinking collapse, and they
-  // attach to whatever bubble the turn already has (sealed included) instead of
-  // minting one of their own — a late monologue must not inflate a two-bubble
-  // turn into three.
+  // Neither is EVER a message: they only fill the one collapse header, and they
+  // attach to the turn's bubble (which may not exist yet — then they open it
+  // with zero segments, so the header renders in its slim empty state).
   if (md._thinking) {
-    const host = hostIdx >= 0 ? hostIdx : turnId ? -1 : mergeable ? prev.length - 1 : -1;
+    const host = turnIdx >= 0 ? turnIdx : !turnId && mergeable ? prev.length - 1 : -1;
     if (host >= 0) return replaceAt(prev, host, { thinkingContent: m.content });
     return [
       ...prev,
       {
         role: "assistant",
-        content: "",
+        ...segmentsPatch([]),
         thinkingContent: m.content,
         turnId,
         bubbleId: nextBubbleId(prev, turnId),
@@ -246,7 +319,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     // The loop sends `_tool_hint: true` with the hint TEXT in `content`
     // (`_tool_hint` as a string is tolerated for older senders).
     const hint = typeof md._tool_hint === "string" ? md._tool_hint : m.content;
-    const host = hostIdx >= 0 ? hostIdx : turnId ? -1 : mergeable ? prev.length - 1 : -1;
+    const host = turnIdx >= 0 ? turnIdx : !turnId && mergeable ? prev.length - 1 : -1;
     const patch = { toolHint: hint };
     if (host >= 0) {
       return replaceAt(prev, host, {
@@ -258,7 +331,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
-        content: "",
+        ...segmentsPatch([]),
         toolHint: hint,
         toolHints: [hint],
         turnId,
@@ -267,17 +340,20 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     ];
   }
 
-  // ---- streamed progress replaces the live bubble's text ------------------
+  // ---- streamed progress rewrites the open segment ------------------------
   if (md._progress) {
-    if (matchIdx >= 0) return replaceAt(prev, matchIdx, { content: m.content, progress: true });
-    if (!turnId && mergeable) return replaceLast(prev, { content: m.content, progress: true });
-    // The turn already committed a sealed reply: this frame opens a fresh
-    // bubble next to it rather than rewriting it.
+    if (turnIdx >= 0) {
+      return replaceAt(prev, turnIdx, {
+        ...withStreamedProse(prev[turnIdx], m.content),
+        progress: true,
+      });
+    }
+    if (!turnId && mergeable) return replaceLast(prev, { ...withStreamedProse(last, m.content), progress: true });
     return [
       ...prev,
       {
         role: "assistant",
-        content: m.content,
+        ...segmentsPatch([{ text: m.content, sealed: false }]),
         progress: true,
         turnId,
         bubbleId: nextBubbleId(prev, turnId),
@@ -286,17 +362,17 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
   }
 
   // ---- plain message with no streaming flags ------------------------------
-  if (matchIdx >= 0) {
-    const target = prev[matchIdx];
-    return replaceAt(prev, matchIdx, {
-      content: target.content + m.content,
+  if (turnIdx >= 0) {
+    const target = prev[turnIdx];
+    return replaceAt(prev, turnIdx, {
+      ...withAppendedProse(target, m.content),
       media: m.media?.length ? m.media : target.media,
       replyTo: m.replyTo ?? target.replyTo,
     });
   }
   if (!turnId && mergeable && !last.progress) {
     return replaceLast(prev, {
-      content: last.content + m.content,
+      ...withAppendedProse(last, m.content),
       media: m.media?.length ? m.media : last.media,
       replyTo: m.replyTo ?? last.replyTo,
     });
@@ -305,7 +381,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     ...prev,
     {
       role: "assistant",
-      content: m.content,
+      ...segmentsPatch([{ text: m.content, sealed: false }]),
       media: m.media,
       replyTo: m.replyTo,
       turnId,
@@ -388,4 +464,79 @@ export function deriveLiveTurnStatus(messages: ChatMessage[]): LiveTurnStatus | 
     return { label: hint, showChip: false };
   }
   return null;
+}
+
+/**
+ * The turn's ordered prose (spec 135 §A).
+ *
+ * A turn is ONE bubble holding N segments, so this is the only thing a bubble
+ * needs to render its body: the divider between entries IS the turn's trail.
+ * The streaming caret rides the trailing unsealed segment.
+ *
+ * Read side, shared by both SPAs for the same reason the write side is: a
+ * desktop/mobile disagreement about where a turn's prose ends would show up as
+ * one of them dropping or duplicating an answer.
+ */
+export function turnSegments(m: ChatMessage): TurnSegment[] {
+  return bubbleSegments(m).filter((s) => s.text.trim().length > 0);
+}
+
+/**
+ * Steps shown in the collapse header. A tool call is a step; the reasoning pass
+ * that produced it is not (reasoning is what the steps are FOR).
+ */
+export function turnStepCount(m: ChatMessage): number {
+  return (m.toolHints ?? []).filter((h) => h && h.trim().length > 0).length;
+}
+
+/** `2m 14s` / `14s` — the duration half of the header's step count. */
+export function formatTurnDuration(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return `${total}s`;
+  return `${Math.floor(total / 60)}m ${total % 60}s`;
+}
+
+/** One tool call, split out of a `_tool_hint` frame for the header's chips. */
+export interface ToolChip {
+  /** `read_file` — empty for a narrated phase that is not a tool call. */
+  name: string;
+  /** `dashboard/src/App.tsx` — one line, never the raw argument blob. */
+  summary: string;
+  /** The hint as published, for the chip's tooltip. */
+  hint: string;
+}
+
+const TOOL_CALL_RE = /([A-Za-z_][\w.-]*)\s*\(([^()]*)\)/g;
+
+/**
+ * Split a `_tool_hint` frame into one chip per tool call (spec 135 §A).
+ *
+ * The loop publishes `'read_file("a.py"), memory_log("tea")'` — one string for
+ * the whole batch (`AgentLoop._tool_hint`). Rendering that raw is what made the
+ * collapse read as a wall of mono text; as chips it reads as a list of steps.
+ *
+ * A hint that matches no call shape (a narrated phase such as "🖼️ Preparing
+ * image…", or a format added later) degrades to one unnamed chip holding the
+ * whole string — never dropped, never rendered as broken markup.
+ */
+export function summarizeToolHint(hint: string): ToolChip[] {
+  const trimmed = (hint ?? "").trim();
+  if (!trimmed) return [];
+  const chips: ToolChip[] = [];
+  for (const match of trimmed.matchAll(TOOL_CALL_RE)) {
+    const summary = match[2].trim().replace(/^["']|["']$/g, "").replace(/\s+/g, " ").trim();
+    chips.push({
+      name: match[1],
+      summary: summary.length > 48 ? `${summary.slice(0, 48)}…` : summary,
+      hint: trimmed,
+    });
+  }
+  if (chips.length) return chips;
+  return [
+    {
+      name: "",
+      summary: trimmed.length > 64 ? `${trimmed.slice(0, 64)}…` : trimmed,
+      hint: trimmed,
+    },
+  ];
 }

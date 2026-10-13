@@ -4,7 +4,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
 
-import { EMOJI_KEYS, emojiIcon, normalizeEmoji } from "@/lib/emojiIcons";
+import { EMOJI_KEYS, EmojiIcon, normalizeEmoji } from "@/lib/emojiIcons";
 
 /**
  * Shared markdown pipeline for the dashboard (spec 126 §C).
@@ -165,24 +165,12 @@ export function rehypeEmojiIcons() {
 /**
  * Renders an `<emoji>` element as a lucide icon.
  *
- * Sizing and colour live in `.emoji-icon` (index.css): the span sets the size
- * relative to the surrounding text and the `data-variant` attribute picks a
- * theme-aware colour token, so the icon is bigger than a plain glyph and adapts
- * to light/dark instead of being a fixed colour.
- *
- * The original glyph is kept as the accessible name (`role="img"` +
- * `aria-label`) so the emoji still reads correctly to a screen reader.
+ * The implementation moved to `lib/emojiIcons.tsx` (its natural home, next to
+ * the map) so non-markdown surfaces — the live-status strip — can reuse it.
+ * Re-exported here because this module is where the markdown `components` map
+ * references it.
  */
-export function EmojiIcon({ name }: { name?: string }) {
-  const entry = name ? emojiIcon(name) : null;
-  if (!entry) return <span>{name}</span>;
-  const { icon: Icon, variant } = entry;
-  return (
-    <span className="emoji-icon" data-variant={variant} role="img" aria-label={name}>
-      <Icon aria-hidden="true" />
-    </span>
-  );
-}
+export { EmojiIcon };
 
 /**
  * Shared `components` for every `<ReactMarkdown>` in the dashboard.

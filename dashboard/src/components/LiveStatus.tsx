@@ -1,4 +1,5 @@
 import { ReactionChip } from "@/components/Presence";
+import { EmojiText } from "@/lib/emojiIcons";
 import type { LiveTurnStatus } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
@@ -12,10 +13,13 @@ import { cn } from "@/lib/utils";
  * `deriveLiveTurnStatus` (`lib/transcript.ts`), so desktop and mobile cannot
  * disagree about what the turn is doing.
  *
+ * The label runs through `EmojiText`, so the leading emoji renders as a lucide
+ * icon exactly as it does in assistant prose — no raw OS glyph on the
+ * dashboard (standing rule, 2026-10-13). Telegram keeps the plain emoji.
+ *
  * The phase fades in on change (one remount per label, see `key` below) and the
  * animation is dropped entirely under `prefers-reduced-motion` — the label then
- * simply swaps. Emoji keep their own colours: unlike `.thinking-shimmer`, this
- * class does not use `background-clip: text`.
+ * simply swaps.
  */
 export function LiveStatus({
   label,
@@ -39,7 +43,7 @@ export function LiveStatus({
         data-testid="live-status-label"
         aria-live="polite"
       >
-        {label}
+        <EmojiText text={label} />
       </span>
     </div>
   );

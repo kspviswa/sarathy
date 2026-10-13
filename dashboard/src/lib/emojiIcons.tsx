@@ -209,3 +209,67 @@ export const EMOJI_KEYS: string[] = Object.keys(EMOJI_ICONS).sort(
 export function emojiIcon(char: string): EmojiEntry | null {
   return EMOJI_ICONS[normalizeEmoji(char)] ?? null;
 }
+
+/**
+ * Render one emoji as a lucide icon.
+ *
+ * Sizing and colour live in `.emoji-icon` (index.css): the span sets the size
+ * relative to the surrounding text and the `data-variant` attribute picks a
+ * theme-aware colour token, so the icon is bigger than a plain glyph and adapts
+ * to light/dark instead of being a fixed colour.
+ *
+ * The original glyph is kept as the accessible name (`role="img"` +
+ * `aria-label`) so the emoji still reads correctly to a screen reader.
+ */
+export function EmojiIcon({ name }: { name?: string }) {
+  const entry = name ? emojiIcon(name) : null;
+  if (!entry) return <span>{name}</span>;
+  const { icon: Icon, variant } = entry;
+  return (
+    <span className="emoji-icon" data-variant={variant} role="img" aria-label={name}>
+      <Icon aria-hidden="true" />
+    </span>
+  );
+}
+
+/** Escape a character for use inside a RegExp. */
+function escapeRegExp(char: string): string {
+  return char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * One alternation of every known emoji, each key's code points followed by an
+ * optional U+FE0F so a single entry matches both `⚠` and `⚠️`.
+ */
+const EMOJI_TEXT_RE = new RegExp(
+  EMOJI_KEYS.map((key) =>
+    Array.from(key)
+      .map((char) => `${escapeRegExp(char)}\\uFE0F?`)
+      .join(""),
+  ).join("|"),
+  "gu",
+);
+
+/**
+ * Render a plain string with every known emoji swapped for its lucide icon.
+ *
+ * The markdown pipeline (`lib/markdown.tsx`) already does this for assistant
+ * prose, but surfaces that render a bare string — the live-status strip, chips,
+ * any non-markdown label — showed the raw OS glyph. This is the same swap for
+ * those surfaces, so the dashboard never emits a raw emoji (standing rule,
+ * 2026-10-13). Unmapped text passes through untouched.
+ */
+export function EmojiText({ text }: { text: string }) {
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  EMOJI_TEXT_RE.lastIndex = 0;
+
+  for (let match = EMOJI_TEXT_RE.exec(text); match; match = EMOJI_TEXT_RE.exec(text)) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    parts.push(<EmojiIcon key={match.index} name={normalizeEmoji(match[0])} />);
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+
+  return <>{parts}</>;
+}

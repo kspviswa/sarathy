@@ -85,21 +85,26 @@ describe.each([
 ])("%s — live image-pipeline status (spec 134 §B)", (_name, View) => {
   it("shows the newest pipeline phase while the turn is running", () => {
     render(<View {...props} streaming messages={describing("🔍 Sending image to VLM…")} />);
-    expect(screen.getByTestId("live-status-label")).toHaveTextContent(
-      "🔍 Sending image to VLM…",
-    );
+    const label = screen.getByTestId("live-status-label");
+    expect(label).toHaveTextContent("Sending image to VLM…");
+    // Standing rule (2026-10-13): the dashboard never shows a raw emoji — the
+    // leading glyph is a lucide icon whose accessible name is the emoji.
+    expect(within(label).getByRole("img", { name: "🔍" })).toBeInTheDocument();
   });
 
   it("advances the label as the pipeline advances", () => {
     const { rerender } = render(
       <View {...props} streaming messages={describing("🖼️ Preparing image…")} />,
     );
-    expect(screen.getByTestId("live-status-label")).toHaveTextContent("🖼️ Preparing image…");
+    expect(screen.getByTestId("live-status-label")).toHaveTextContent("Preparing image…");
+    expect(
+      within(screen.getByTestId("live-status-label")).getByRole("img", { name: "🖼" }),
+    ).toBeInTheDocument();
 
     rerender(<View {...props} streaming messages={describing("✅ Image description received")} />);
-    expect(screen.getByTestId("live-status-label")).toHaveTextContent(
-      "✅ Image description received",
-    );
+    const label = screen.getByTestId("live-status-label");
+    expect(label).toHaveTextContent("Image description received");
+    expect(within(label).getByRole("img", { name: "✅" })).toBeInTheDocument();
   });
 
   it("falls back to 'Sarathy is responding…' before the turn says anything", () => {
@@ -128,7 +133,7 @@ describe.each([
     );
     // Phase on screen AND still in the collapse — surfacing must not consume it.
     expect(screen.getByTestId("live-status-label")).toHaveTextContent(
-      "🔍 Sending image to VLM…",
+      "Sending image to VLM…",
     );
     expect(screen.getByRole("button", { name: /thinking/i })).toBeInTheDocument();
     // Spec 135 §A: the step count moved into that one header.

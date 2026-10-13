@@ -1,7 +1,5 @@
 """Context builder for assembling agent prompts."""
 
-import base64
-import mimetypes
 import platform
 import time
 from datetime import datetime
@@ -266,18 +264,24 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         ]
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
-        """Build user message content with optional base64-encoded images."""
+        """Build user message content with optional (downscaled) images.
+
+        Multi-megabyte phone photos are downscaled/re-encoded via the shared
+        ``prepare_image_data_url`` helper so neither the vision provider nor the
+        main model is handed a huge pixel load. Falls back to skipping a file
+        that is missing, non-image, or undecodable.
+        """
         if not media:
             return text
 
+        from sarathy.agent.image_prep import prepare_image_data_url
+
         images = []
         for path in media:
-            p = Path(path)
-            mime, _ = mimetypes.guess_type(path)
-            if not p.is_file() or not mime or not mime.startswith("image/"):
+            data_url = prepare_image_data_url(path)
+            if data_url is None:
                 continue
-            b64 = base64.b64encode(p.read_bytes()).decode()
-            images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            images.append({"type": "image_url", "image_url": {"url": data_url}})
 
         if not images:
             return text

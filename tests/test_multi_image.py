@@ -97,7 +97,7 @@ async def test_per_image_progress_frames():
     provider = _RecordingProvider()
     events = []
 
-    async def on_progress(text, *, tool_hint=False, sealed=False):
+    async def on_progress(text, *, tool_hint=False, seal=False, phase=False):
         events.append(text)
 
     messages = [
@@ -125,8 +125,8 @@ async def test_single_image_phases_name_the_vlm_round_trip():
     provider = _RecordingProvider()
     events = []
 
-    async def on_progress(text, *, tool_hint=False, sealed=False):
-        events.append((text, tool_hint))
+    async def on_progress(text, *, tool_hint=False, seal=False, phase=False):
+        events.append((text, tool_hint, phase))
 
     messages = [
         {
@@ -138,13 +138,17 @@ async def test_single_image_phases_name_the_vlm_round_trip():
         messages, provider, on_progress=on_progress
     )
 
-    assert [t for t, _ in events] == [
+    assert [t for t, _, _ in events] == [
         "🔍 Sending image to VLM…",
         "✅ Image description received",
     ]
     # Every phase is a tool_hint progress frame — the dashboard's live status
     # strip reads nothing else (frame contract unchanged, spec 134 §A).
-    assert all(tool_hint for _, tool_hint in events)
+    assert all(tool_hint for _, tool_hint, _ in events)
+    # …and every phase is tagged `phase=True`, which exempts it from the
+    # outbound dispatcher's `send_tool_hints` gate. Without this the narration
+    # was silently dropped and the live strip never left the fallback label.
+    assert all(phase for _, _, phase in events)
 
 
 @pytest.mark.asyncio
@@ -161,7 +165,7 @@ async def test_no_success_phase_when_the_vision_call_fails():
 
     events = []
 
-    async def on_progress(text, *, tool_hint=False, sealed=False):
+    async def on_progress(text, *, tool_hint=False, seal=False, phase=False):
         events.append(text)
 
     messages = [

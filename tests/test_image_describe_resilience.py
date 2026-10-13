@@ -57,7 +57,7 @@ async def test_describe_emits_progress_before_calling_provider(monkeypatch):
     loop = _loop()
     events = []
 
-    async def on_progress(text, *, tool_hint=False, sealed=False):
+    async def on_progress(text, *, tool_hint=False, seal=False, phase=False):
         events.append((text, tool_hint))
 
     messages = [
@@ -92,7 +92,7 @@ async def test_describe_progress_failure_does_not_break_turn(monkeypatch):
     monkeypatch.setattr(loop_mod, "IMAGE_DESCRIBE_TIMEOUT_S", 5.0)
     loop = _loop()
 
-    async def bad_progress(text, *, tool_hint=False, sealed=False):
+    async def bad_progress(text, *, tool_hint=False, seal=False, phase=False):
         raise RuntimeError("progress channel down")
 
     messages = [

@@ -343,6 +343,27 @@
     opacity: 0.8;
   }
 }
+
+/* Live status strip (spec 134 §B) — the newest pipeline phase ("🔍 Sending
+   image to VLM…", "✅ Image description received") fades in as it replaces the
+   previous one, so a phase change is perceptible without moving the layout.
+   Deliberately NOT `.thinking-shimmer`: that clips a gradient to the glyphs,
+   which drains the emoji of their colour. Under prefers-reduced-motion the
+   label just swaps, which is all the information the fade carries. */
+@keyframes hint-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.live-hint {
+  animation: hint-in 200ms ease-out backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-hint {
+    animation: none;
+  }
+}
 /* Emoji → inline lucide icon (2026-10-11).
    The agent's replies are emoji-heavy; the raw glyphs render inconsistently
    across platforms. `EmojiIcon` swaps them for lucide SVGs — bigger than a

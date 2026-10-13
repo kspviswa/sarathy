@@ -50,7 +50,7 @@ def _loop():
 
 @pytest.mark.asyncio
 async def test_describe_emits_progress_before_calling_provider(monkeypatch):
-    """A '🔍 Reading image…' progress frame is emitted before the vision call."""
+    """A '🔍 Sending image to VLM…' progress frame is emitted before the vision call."""
     from sarathy.agent import loop as loop_mod
 
     monkeypatch.setattr(loop_mod, "IMAGE_DESCRIBE_TIMEOUT_S", 5.0)
@@ -66,7 +66,7 @@ async def test_describe_emits_progress_before_calling_provider(monkeypatch):
     await loop._describe_images_with_image_provider(
         messages, _FastProvider(), on_progress=on_progress
     )
-    assert any("Reading image" in t for t, _ in events)
+    assert any("Sending image to VLM" in t for t, _ in events)
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,11 @@
  * frame. On Telegram each ack is its own message, so it is always visible.
  * Frames carrying `metadata._notice` are now appended as their own, sealed
  * bubble that streaming frames never touch.
+ *
+ * It also owns the read side: `deriveLiveTurnStatus` turns the newest bubble's
+ * `toolHints` into the one label both SPAs show while a turn is live (spec
+ * 134 §B), so the image→VLM pipeline is narrated in the open instead of only
+ * inside the collapsed Thinking section.
  */
 import { cleanRenderedContent } from "@/lib/messageText";
 import type { OutboundMessage, SessionMessage } from "@/lib/types";
@@ -323,4 +328,64 @@ export function visibleTranscriptMessages(messages: SessionMessage[]): SessionMe
     if (m.role !== "user" && m.role !== "assistant") return false;
     return Boolean(cleanRenderedContent(m.content).trim()) || Boolean(m.media?.length);
   });
+}
+
+/** Shown while a turn is live but has told us nothing about what it is doing. */
+export const LIVE_FALLBACK_LABEL = "Sarathy is responding…";
+
+export interface LiveTurnStatus {
+  /** What the live strip reads out: the newest pipeline phase, or the fallback. */
+  label: string;
+  /**
+   * The working chip belongs to the strip only while the transcript has no
+   * assistant bubble of its own — that bubble renders its own chip, and two
+   * "working" chips on screen at once is noise.
+   */
+  showChip: boolean;
+}
+
+/**
+ * What the live "working" strip should say for the turn in flight (spec 134 §B).
+ *
+ * The image→VLM pipeline narrates itself through ordinary `_tool_hint` frames —
+ * "🖼️ Preparing image…", "🔍 Sending image to VLM…", "✅ Image description
+ * received" — which `applyOutbound` folds into the turn's bubble `toolHints`.
+ * They used to be visible ONLY inside the collapsed Thinking section, i.e. never
+ * while the turn is running. Telegram shows the same strings in its streaming
+ * draft; this is the dashboard half of that parity.
+ *
+ * Derived ONCE, here, and consumed by both SPAs — desktop and mobile must not
+ * be able to disagree about what the turn is doing (spec 127/131/134 rule:
+ * shared frame behaviour lives in this module, never duplicated inline).
+ *
+ * Returns `null` when the strip has nothing to add, i.e. the live bubble already
+ * shows the working chip and any hint it carries is history:
+ * - no messages, or the turn has not opened an assistant bubble yet → the
+ *   caller's pre-existing fallback strip renders instead (last message is the
+ *   user's), which is why that case still returns a status rather than null;
+ * - the live bubble already has real prose → the answer is streaming in, so a
+ *   stale phase name ("Sending image to VLM…") would be a lie.
+ */
+export function deriveLiveTurnStatus(messages: ChatMessage[]): LiveTurnStatus | null {
+  const last = messages[messages.length - 1];
+  if (!last) return null;
+
+  // Turn is running, nothing has come back yet: today's strip, unchanged.
+  if (last.role === "user") {
+    return { label: LIVE_FALLBACK_LABEL, showChip: true };
+  }
+
+  // Walk back over out-of-band notice bubbles (a `/steer` ack lands mid-turn)
+  // and the user turn to find the bubble this turn is currently writing.
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const bubble = messages[i];
+    if (bubble.role === "user") break;
+    if (bubble.notice) continue;
+
+    const hint = (bubble.toolHints ?? []).filter(Boolean).pop();
+    if (!hint) return null;
+    if (cleanRenderedContent(bubble.content).trim()) return null;
+    return { label: hint, showChip: false };
+  }
+  return null;
 }

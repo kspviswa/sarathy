@@ -22,6 +22,7 @@ import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/Quote
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CodeBlock } from "@/components/CodeBlock";
+import { LiveStatus } from "@/components/LiveStatus";
 import { ReactionChip } from "@/components/Presence";
 import { SlashAutocomplete } from "@/components/CommandPalette";
 import { ThinkingSection } from "@/components/ThinkingSection";
@@ -43,6 +44,7 @@ import {
   type QuoteChip,
 } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
+import { deriveLiveTurnStatus } from "@/lib/transcript";
 import type { ChatMessage } from "@/views/ChatView";
 import { DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 
@@ -218,6 +220,10 @@ export function ChatView({
     }
   }, [messages, streaming]);
 
+  // The live strip's label: the turn's newest narrated phase, or the fallback
+  // (spec 134 §B). Derived in `lib/transcript.ts`, shared with desktop.
+  const liveStatus = useMemo(() => deriveLiveTurnStatus(messages), [messages]);
+
   // Auto-grow with content (spec 126 §F). The textarea now owns a full-width
   // row, so its resting height drops from 96px to 64px: on a 360×640 phone the
   // two-row composer plus this taller box would eat a third of the viewport
@@ -390,16 +396,12 @@ export function ChatView({
             />
           ))}
 
-          {/* Parity with the desktop ChatView: a live "responding" strip while
-              the turn is running and the last message is still the user's. */}
-          {streaming &&
-            messages.length > 0 &&
-            messages[messages.length - 1].role === "user" && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <ReactionChip state="working" />
-                <span>Sarathy is responding…</span>
-              </div>
-            )}
+          {/* Parity with the desktop ChatView: a live status strip while the
+              turn is running. It reads the turn's newest narrated phase —
+              "🔍 Sending image to VLM…", a tool call — falling back to
+              "Sarathy is responding…". Both SPAs render the same component off
+              the same `deriveLiveTurnStatus` (spec 134 §B). */}
+          {streaming && liveStatus && <LiveStatus {...liveStatus} />}
         </div>
       </div>
 

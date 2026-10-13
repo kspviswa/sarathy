@@ -443,15 +443,28 @@ class AgentLoop:
 
         total = len(image_parts)
         descriptions: list[str] = []
+
+        async def _phase(label: str) -> None:
+            """Announce one image-pipeline phase (spec 134 §A).
+
+            Always a `tool_hint=True` progress frame, so the dashboard can show
+            it as the live status label (Telegram narrates the same string in
+            its streaming draft). Best-effort by contract: a bus hiccup must
+            never fail the turn.
+            """
+            if not on_progress:
+                return
+            try:
+                await on_progress(label, tool_hint=True)
+            except Exception:
+                pass  # progress is best-effort; never fail the turn for it
+
         for idx, image_part in enumerate(image_parts, 1):
-            if on_progress:
-                label = (
-                    f"🔍 Reading image {idx}/{total}…" if total > 1 else "🔍 Reading image…"
-                )
-                try:
-                    await on_progress(label, tool_hint=True)
-                except Exception:
-                    pass  # progress is best-effort; never fail the turn for it
+            await _phase(
+                f"🔍 Sending image {idx}/{total} to VLM…"
+                if total > 1
+                else "🔍 Sending image to VLM…"
+            )
 
             description_messages = [
                 {"role": "system", "content": system_prompt},
@@ -486,6 +499,14 @@ class AgentLoop:
             except Exception as e:
                 logger.warning("Image provider description failed (image {}/{}): {}", idx, total, e)
                 descriptions.append("Image description unavailable")
+            else:
+                # The vision round-trip for this image is done: name the phase so
+                # the live status stops claiming we are still sending the image.
+                await _phase(
+                    f"✅ Image description received {idx}/{total}"
+                    if total > 1
+                    else "✅ Image description received"
+                )
 
         # Rewrite the user message: replace image parts with description hints.
         if total == 1:
@@ -1452,12 +1473,14 @@ class AgentLoop:
             )
 
         # Signal image preprocessing (downscale/re-encode) before the message is
-        # built — a multi-megabyte upload is otherwise a silent pause.
+        # built — a multi-megabyte upload is otherwise a silent pause. Named
+        # apart from the describe phase below so the two are never confused in
+        # the live status line (spec 134 §A).
         media_paths = msg.media if msg.media else None
         if media_paths and (on_progress is None):
             count = len(media_paths)
             label = (
-                f"🔍 Preparing {count} images…" if count > 1 else "🔍 Preparing image…"
+                f"🖼️ Preparing {count} images…" if count > 1 else "🖼️ Preparing image…"
             )
             try:
                 await _bus_progress(label, tool_hint=True)

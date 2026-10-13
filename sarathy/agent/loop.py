@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
-import mimetypes
 import re
 import time
 import uuid
@@ -17,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from sarathy.agent.builtin_commands import BUILTIN_COMMANDS, get_help_text
+from sarathy.agent.image_prep import prepare_image_data_url
 from sarathy.providers.manager import RuntimeProvider
 from sarathy.agent.context import ContextBuilder
 from sarathy.agent.subagent import SubagentManager
@@ -64,6 +63,11 @@ TOPIC_MARKER_RE = re.compile(
 )
 # Prompt asks for <= 6 words; hard-cap defensively at 8.
 TOPIC_MAX_WORDS = 8
+
+# Upper bound on the vision-provider describe call. A cold local model can take
+# a while to load, but the turn must never hang indefinitely — on timeout the
+# image is replaced by a "(timed out)" hint and the turn proceeds.
+IMAGE_DESCRIBE_TIMEOUT_S = 120.0
 
 
 def strip_topic_marker(content: str) -> tuple[str, str | None]:
@@ -354,19 +358,17 @@ class AgentLoop:
         return False
 
     def _local_image_to_data_url(self, path: str) -> str | None:
-        """Convert a local image path to a data URL.
-        
+        """Convert a local image path to a data URL, downscaling large images.
+
+        Multi-megabyte phone photos are shrunk to a sane vision budget before
+        base64-encoding so the image provider isn't handed a huge pixel load.
         Returns the data URL if the file exists and is an image, None otherwise.
         """
         p = Path(path)
         if not p.is_absolute():
             # Resolve relative paths against workspace/media
             p = self.workspace / "media" / path
-        mime, _ = mimetypes.guess_type(str(p))
-        if not p.is_file() or not mime or not mime.startswith("image/"):
-            return None
-        b64 = base64.b64encode(p.read_bytes()).decode()
-        return f"data:{mime};base64,{b64}"
+        return prepare_image_data_url(p)
 
     async def _describe_images_with_image_provider(
         self,
@@ -439,17 +441,33 @@ class AgentLoop:
             {"role": "user", "content": image_parts + ([{"type": "text", "text": user_text}] if user_text else [])},
         ]
 
-        # Call the image provider
+        # Call the image provider. A cold local vision model can take a while to
+        # load, so signal progress and bound the wait — an unbounded describe
+        # call looks to the user like the turn simply hung.
+        if on_progress:
+            try:
+                await on_progress("🔍 Reading image…", tool_hint=True)
+            except Exception:
+                pass  # progress is best-effort; never fail the turn for it
+
         try:
-            response = await image_provider.chat(
-                messages=description_messages,
-                tools=[],
-                model=image_provider.get_default_model(),
-                temperature=0.1,
-                max_tokens=1024,
-                stream=False,
+            response = await asyncio.wait_for(
+                image_provider.chat(
+                    messages=description_messages,
+                    tools=[],
+                    model=image_provider.get_default_model(),
+                    temperature=0.1,
+                    max_tokens=1024,
+                    stream=False,
+                ),
+                timeout=IMAGE_DESCRIBE_TIMEOUT_S,
             )
             description = response.content or "Image description unavailable"
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Image provider description timed out after {}s", IMAGE_DESCRIBE_TIMEOUT_S
+            )
+            description = "Image description unavailable (timed out)"
         except Exception as e:
             logger.warning("Image provider description failed: {}", e)
             description = "Image description unavailable"

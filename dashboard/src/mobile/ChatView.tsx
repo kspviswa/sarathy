@@ -24,6 +24,7 @@ import { CodeBlock } from "@/components/CodeBlock";
 import { ReactionChip } from "@/components/Presence";
 import { SlashAutocomplete } from "@/components/CommandPalette";
 import { ThinkingSection } from "@/components/ThinkingSection";
+import { ThinkingIndicator } from "@/components/ThinkingIndicator";
 import { UsageFooter } from "@/components/UsageFooter";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -378,7 +379,7 @@ export function ChatView({
         <div ref={messageListRef} className="flex w-full flex-col gap-3" data-testid="mobile-message-list">
           {messages.map((m, i) => (
             <MobileMessage
-              key={m.turnId ?? m.messageId ?? i}
+              key={m.bubbleId ?? m.turnId ?? m.messageId ?? i}
               message={m}
               streaming={streaming}
               onOpenFile={onOpenFile}
@@ -677,9 +678,8 @@ function MobileMessage({
         ) : hasContent ? (
           <AssistantBody content={cleanContent} onOpenFile={onOpenFile} streaming={message.progress} onSend={onSend} />
         ) : live ? (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
-            thinking…
+          <div className="text-muted-foreground">
+            <ThinkingIndicator label="Thinking…" />
           </div>
         ) : null}
         {!isUser && !isNotice && live && (

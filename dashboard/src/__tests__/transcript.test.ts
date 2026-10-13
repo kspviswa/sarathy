@@ -103,6 +103,130 @@ describe("applyOutbound — command notices", () => {
   });
 });
 
+/**
+ * Spec 131 §C/§D — sealed prose.
+ *
+ * The loop publishes a `_seal` frame when a tool-call iteration carried genuine
+ * reply text ("Noted — I'll remember that." + a memory write). That text must
+ * survive the turn's `_final`, and a turn that ends this way shows exactly two
+ * bubbles — never one per tool call.
+ */
+describe("applyOutbound — sealed prose (spec 131 §C)", () => {
+  it("seals the live bubble in place when the prose already streamed in", () => {
+    let msgs = applyOutbound([user("remember tea")], frame("Not", { _progress: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("Noted — I will remember that.", { _progress: true, _seal: true, turn_id: "T" }));
+
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]).toMatchObject({
+      content: "Noted — I will remember that.",
+      sealed: true,
+      progress: false,
+    });
+  });
+
+  it("appends a sealed bubble when nothing streamed first (non-streaming turn)", () => {
+    const msgs = applyOutbound(
+      [user("remember tea")],
+      frame("Noted — I will remember that.", { _progress: true, _seal: true, turn_id: "T" }),
+    );
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]).toMatchObject({ sealed: true, progress: false, turnId: "T" });
+  });
+
+  it("answer + memory-log tool call yields EXACTLY two bubbles", () => {
+    // The real frame sequence: reasoning, streamed prose, sealed prose,
+    // tool hint, then the turn's final.
+    let msgs = applyOutbound([user("remember tea")], frame("Let me note that.", { _thinking: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("Noted", { _progress: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("Noted — I will remember that you like tea.", { _progress: true, _seal: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame('memory_log("tea")', { _progress: true, _tool_hint: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("Anything else?", { _final: true, turn_id: "T" }));
+
+    expect(msgs).toHaveLength(3); // user + sealed answer + follow-up final
+    expect(msgs[1]).toMatchObject({
+      content: "Noted — I will remember that you like tea.",
+      sealed: true,
+      thinkingContent: "Let me note that.",
+    });
+    expect(msgs[2]).toMatchObject({ content: "Anything else?" });
+    expect(msgs[2].progress).toBeFalsy();
+    expect(msgs[2].sealed).toBeUndefined();
+
+    // The loop sends `_tool_hint: true` with the hint text in `content`. It
+    // must ride the sealed bubble's thinking section, never become the message
+    // text, and never mint a bubble of its own.
+    expect(msgs[1].toolHints).toEqual(['memory_log("tea")']);
+    expect(msgs.some((m) => m.content.includes("memory_log"))).toBe(false);
+
+    // One bubble per PROSE-bearing iteration — the tool call adds no bubble.
+    expect(msgs.filter((m) => m.role === "assistant")).toHaveLength(2);
+  });
+
+  it("gives each bubble of a turn a unique id (React key)", () => {
+    let msgs = applyOutbound([user("go")], frame("A", { _progress: true, _seal: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("B", { _final: true, turn_id: "T" }));
+    const ids = msgs.filter((m) => m.role === "assistant").map((m) => m.bubbleId);
+    expect(ids).toEqual(["T#0", "T#1"]);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("further streamed prose after a seal opens a fresh bubble", () => {
+    let msgs = applyOutbound([user("go")], frame("sealed", { _progress: true, _seal: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("live", { _progress: true, turn_id: "T" }));
+    expect(msgs.map((m) => m.content)).toEqual(["go", "sealed", "live"]);
+    expect(msgs[1].sealed).toBe(true);
+    expect(msgs[2].progress).toBe(true);
+  });
+
+  it("a reasoning-only turn produces no message bubble", () => {
+    let msgs = applyOutbound([user("do it")], frame("monologue", { _thinking: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("monologue grows", { _thinking: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame('memory_log("x")', { _progress: true, _tool_hint: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("Done.", { _final: true, turn_id: "T" }));
+
+    // The turn's single assistant bubble hosts the thinking collapse and the
+    // final answer; the monologue is NEVER the message text.
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]).toMatchObject({
+      content: "Done.",
+      thinkingContent: "monologue grows",
+      progress: false,
+    });
+    expect(msgs[1].toolHints).toEqual(['memory_log("x")']);
+    expect(msgs.some((m) => m.content.includes("monologue"))).toBe(false);
+  });
+
+  it("a late _thinking frame after a seal does NOT create a third bubble", () => {
+    let msgs = applyOutbound([user("go")], frame("answer", { _progress: true, _seal: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("final", { _final: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("one more thought", { _thinking: true, turn_id: "T" }));
+    expect(msgs).toHaveLength(3);
+    expect(msgs[2].thinkingContent).toBe("one more thought");
+    expect(msgs[2].content).toBe("final");
+  });
+
+  it("a late tool hint after a seal folds into the turn's last bubble", () => {
+    let msgs = applyOutbound([user("go")], frame("answer", { _progress: true, _seal: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame("final", { _final: true, turn_id: "T" }));
+    msgs = applyOutbound(msgs, frame('exec("ls")', { _progress: true, _tool_hint: true, turn_id: "T" }));
+
+    // Two bubbles stay two bubbles — the hint attaches to the live one.
+    expect(msgs).toHaveLength(3);
+    expect(msgs[2].toolHints).toEqual(['exec("ls")']);
+    expect(msgs[1].toolHints).toBeUndefined();
+  });
+
+  it("a sealed bubble is never merged into by a turn-less frame", () => {
+    // Legacy frames with no turn_id: the seal still blocks the merge.
+    let msgs = applyOutbound([user("go")], frame("sealed", { _progress: true, _seal: true }));
+    msgs = applyOutbound(msgs, frame("final", { _final: true }));
+    expect(msgs.map((m) => m.content)).toEqual(["go", "sealed", "final"]);
+  });
+});
+
+/**
+ * Spec 131 §F — unchanged streaming behaviour.
+ */
 describe("applyOutbound — unchanged streaming behaviour", () => {
   it("replaces the live bubble's text on progress", () => {
     let msgs = applyOutbound([user("hi")], frame("he", { _progress: true }));

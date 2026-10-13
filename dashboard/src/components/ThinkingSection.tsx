@@ -1,4 +1,4 @@
-import { Check, ChevronRight, Loader2, Wrench } from "lucide-react";
+import { Check, ChevronRight, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 
 import { cn } from "@/lib/utils";
 import { CodeBlock } from "./CodeBlock";
+import { ThinkingIndicator } from "./ThinkingIndicator";
 
 interface ThinkingSectionProps {
   toolHints: string[];
@@ -63,9 +64,11 @@ export function ThinkingSection({
         {done ? (
           <Check className="size-3 shrink-0 text-green-500" />
         ) : (
-          <Loader2 className="size-3 shrink-0 animate-spin text-primary/60" />
+          /* Animated dots replace the old static spinner; the word below
+             shimmers. Both stand still under prefers-reduced-motion. */
+          <ThinkingIndicator showLabel={false} className="shrink-0" />
         )}
-        <span className="font-medium">
+        <span className={cn("font-medium", !done && "thinking-shimmer")}>
           {done ? `Thought for ${formatElapsed(elapsed)}` : "Thinking"}
         </span>
         {toolHints.length > 0 && (

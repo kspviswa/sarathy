@@ -228,6 +228,52 @@
     animation: none;
   }
 }
+
+/* Live thinking indicator (spec 131 §E) — a shimmering label plus travelling
+   dots, used in the thinking collapse header and in both SPAs' live bubbles.
+   Under prefers-reduced-motion the shimmer is dropped for a solid colour and
+   the dots hold still, so the indicator stays readable without animating. */
+@keyframes think-shimmer {
+  0% { background-position: 200% 50%; }
+  100% { background-position: -200% 50%; }
+}
+
+.thinking-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--foreground) 45%,
+    var(--muted-foreground) 90%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: think-shimmer 1.8s linear infinite;
+}
+
+@keyframes think-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
+.thinking-dot {
+  animation: think-dot 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    color: var(--muted-foreground);
+  }
+  .thinking-dot {
+    animation: none;
+    opacity: 0.8;
+  }
+}
 /* Emoji → inline lucide icon (2026-10-11).
    The agent's replies are emoji-heavy; the raw glyphs render inconsistently
    across platforms. `EmojiIcon` swaps them for lucide SVGs — bigger than a

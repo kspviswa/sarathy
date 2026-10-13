@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { MessageSquare, Search, X } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { EmojiText } from "@/lib/emojiIcons";
 import type { SessionInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -144,7 +145,7 @@ export function ArchiveBrowser({
                   >
                     <div className="flex items-baseline gap-2">
                       <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                        {s.topic || s.preview || s.key}
+                        <EmojiText text={s.topic || s.preview || s.key} />
                       </span>
                       {typeof s.messageCount === "number" && (
                         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
@@ -153,7 +154,7 @@ export function ArchiveBrowser({
                       )}
                     </div>
                     {s.topic && s.preview && (
-                      <p className="truncate text-xs text-muted-foreground">{s.preview}</p>
+                      <p className="truncate text-xs text-muted-foreground"><EmojiText text={s.preview} /></p>
                     )}
                   </button>
                 </li>
@@ -230,7 +231,7 @@ export function TranscriptDrawer({
                 {q.text}
               </div>
             ))}
-            <span className="whitespace-pre-wrap break-words">{m.content}</span>
+            <span className="whitespace-pre-wrap break-words"><EmojiText text={m.content} /></span>
           </div>
         ))}
         {messages?.length === 0 && (

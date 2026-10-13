@@ -273,11 +273,13 @@ class TestMarkerImageBase64:
             
             class MockImageProvider:
                 def __init__(self):
+                    # Each image is described in its own call now, so accumulate
+                    # across calls rather than overwriting.
                     self.received_parts = []
                 async def chat(self, messages, tools, model, temperature, max_tokens, stream):
                     user_content = messages[-1]["content"]
                     if isinstance(user_content, list):
-                        self.received_parts = [p for p in user_content if p.get("type") == "image_url"]
+                        self.received_parts += [p for p in user_content if p.get("type") == "image_url"]
                     class Response:
                         content = "Test description"
                     return Response()
@@ -291,7 +293,8 @@ class TestMarkerImageBase64:
             
             await loop._describe_images_with_image_provider(messages, provider)
             
-            # Should have 2 image parts: the real image (as data URL) and the http URL
+            # Should have 2 image parts total: the real image (as data URL) and
+            # the http URL. The missing file is dropped.
             assert len(provider.received_parts) == 2
             
             # First should be data URL for test.png

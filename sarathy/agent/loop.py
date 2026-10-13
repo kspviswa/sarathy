@@ -429,51 +429,74 @@ class AgentLoop:
         if not image_parts:
             return messages
 
-        # Build the description request for the image provider
+        # Describe each image individually so a multi-image turn yields clean,
+        # per-image descriptions (a single batched call tends to merge or drop
+        # subjects). Each image gets its own progress frame and its own bounded
+        # timeout, so the user always sees which image is in flight.
         system_prompt = (
-            "You are an image description service. Describe the image(s) in detail: "
+            "You are an image description service. Describe the image in detail: "
             "subjects, text/OCR, layout, colors."
         )
-        user_text = " ".join(p.get("text", "") for p in text_parts if isinstance(p, dict) and p.get("type") == "text")
+        user_text = " ".join(
+            p.get("text", "")
+            for p in text_parts
+            if isinstance(p, dict) and p.get("type") == "text"
+        )
 
-        description_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": image_parts + ([{"type": "text", "text": user_text}] if user_text else [])},
-        ]
+        total = len(image_parts)
+        descriptions: list[str] = []
+        for idx, image_part in enumerate(image_parts, 1):
+            if on_progress:
+                label = (
+                    f"🔍 Reading image {idx}/{total}…" if total > 1 else "🔍 Reading image…"
+                )
+                try:
+                    await on_progress(label, tool_hint=True)
+                except Exception:
+                    pass  # progress is best-effort; never fail the turn for it
 
-        # Call the image provider. A cold local vision model can take a while to
-        # load, so signal progress and bound the wait — an unbounded describe
-        # call looks to the user like the turn simply hung.
-        if on_progress:
+            description_messages = [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [image_part]
+                    + ([{"type": "text", "text": user_text}] if user_text else []),
+                },
+            ]
+
             try:
-                await on_progress("🔍 Reading image…", tool_hint=True)
-            except Exception:
-                pass  # progress is best-effort; never fail the turn for it
+                response = await asyncio.wait_for(
+                    image_provider.chat(
+                        messages=description_messages,
+                        tools=[],
+                        model=image_provider.get_default_model(),
+                        temperature=0.1,
+                        max_tokens=1024,
+                        stream=False,
+                    ),
+                    timeout=IMAGE_DESCRIBE_TIMEOUT_S,
+                )
+                descriptions.append(response.content or "Image description unavailable")
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Image provider description timed out after {}s (image {}/{})",
+                    IMAGE_DESCRIBE_TIMEOUT_S,
+                    idx,
+                    total,
+                )
+                descriptions.append("Image description unavailable (timed out)")
+            except Exception as e:
+                logger.warning("Image provider description failed (image {}/{}): {}", idx, total, e)
+                descriptions.append("Image description unavailable")
 
-        try:
-            response = await asyncio.wait_for(
-                image_provider.chat(
-                    messages=description_messages,
-                    tools=[],
-                    model=image_provider.get_default_model(),
-                    temperature=0.1,
-                    max_tokens=1024,
-                    stream=False,
-                ),
-                timeout=IMAGE_DESCRIBE_TIMEOUT_S,
+        # Rewrite the user message: replace image parts with description hints.
+        if total == 1:
+            hint = f"[image description: {descriptions[0]}]"
+        else:
+            hint = "\n".join(
+                f"[image {i} description: {d}]" for i, d in enumerate(descriptions, 1)
             )
-            description = response.content or "Image description unavailable"
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Image provider description timed out after {}s", IMAGE_DESCRIBE_TIMEOUT_S
-            )
-            description = "Image description unavailable (timed out)"
-        except Exception as e:
-            logger.warning("Image provider description failed: {}", e)
-            description = "Image description unavailable"
-
-        # Rewrite the user message: replace image parts with description hint
-        new_content = text_parts + [{"type": "text", "text": f"[image description: {description}]"}]
+        new_content = text_parts + [{"type": "text", "text": hint}]
 
         # Create new messages list with rewritten user message
         new_messages = list(messages)
@@ -1397,17 +1420,6 @@ class AgentLoop:
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
 
-        history = session.get_history(max_messages=self.memory_window)
-        initial_messages = self.context.build_messages(
-            history=history,
-            current_message=msg.content,
-            media=msg.media if msg.media else None,
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            history_budget_tokens=self._history_budget_tokens(),
-            model=self.model,
-        )
-
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
@@ -1423,6 +1435,30 @@ class AgentLoop:
                     metadata=meta,
                 )
             )
+
+        # Signal image preprocessing (downscale/re-encode) before the message is
+        # built — a multi-megabyte upload is otherwise a silent pause.
+        media_paths = msg.media if msg.media else None
+        if media_paths and (on_progress is None):
+            count = len(media_paths)
+            label = (
+                f"🔍 Preparing {count} images…" if count > 1 else "🔍 Preparing image…"
+            )
+            try:
+                await _bus_progress(label, tool_hint=True)
+            except Exception:
+                pass  # progress is best-effort; never fail the turn for it
+
+        history = session.get_history(max_messages=self.memory_window)
+        initial_messages = self.context.build_messages(
+            history=history,
+            current_message=msg.content,
+            media=media_paths,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            history_budget_tokens=self._history_budget_tokens(),
+            model=self.model,
+        )
 
         async def _bus_thinking(content: str) -> None:
             # Thinking is a dashboard-only stream. Non-dashboard channels (e.g.

@@ -447,15 +447,19 @@ class AgentLoop:
         async def _phase(label: str) -> None:
             """Announce one image-pipeline phase (spec 134 §A).
 
-            Always a `tool_hint=True` progress frame, so the dashboard can show
-            it as the live status label (Telegram narrates the same string in
-            its streaming draft). Best-effort by contract: a bus hiccup must
-            never fail the turn.
+            A `tool_hint=True` progress frame so the dashboard can show it as
+            the live status label — but ALSO tagged `phase=True`, which exempts
+            it from the outbound dispatcher's `send_tool_hints` gate. These are
+            user-facing narration, not tool-call noise: without the exemption
+            they were silently dropped (send_tool_hints defaults to False) and
+            the live strip never left "Sarathy is responding…" during the long,
+            otherwise-silent image→VLM call. Best-effort by contract: a bus
+            hiccup must never fail the turn.
             """
             if not on_progress:
                 return
             try:
-                await on_progress(label, tool_hint=True)
+                await on_progress(label, tool_hint=True, phase=True)
             except Exception:
                 pass  # progress is best-effort; never fail the turn for it
 
@@ -1040,7 +1044,7 @@ class AgentLoop:
                 )
 
                 async def _btw_progress(
-                    content: str, *, tool_hint: bool = False, seal: bool = False
+                    content: str, *, tool_hint: bool = False, seal: bool = False, phase: bool = False
                 ) -> None:
                     await self.bus.publish_outbound(
                         OutboundMessage(
@@ -1052,6 +1056,7 @@ class AgentLoop:
                                 "_progress": True,
                                 "_tool_hint": tool_hint,
                                 "_seal": seal,
+                                "_phase": phase,
                             },
                         )
                     )
@@ -1450,10 +1455,17 @@ class AgentLoop:
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
 
-        async def _bus_progress(content: str, *, tool_hint: bool = False, seal: bool = False) -> None:
+        async def _bus_progress(
+            content: str, *, tool_hint: bool = False, seal: bool = False, phase: bool = False
+        ) -> None:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
             meta["_tool_hint"] = tool_hint
+            # Pipeline narration (spec 134 §A) is exempt from the dispatcher's
+            # `send_tool_hints` gate: it exists precisely to narrate the long,
+            # otherwise-silent image→VLM call, so it must always ship.
+            if phase:
+                meta["_phase"] = True
             # Sealed prose (131 §C): genuine reply text that shipped with a tool
             # call. The SPA renders it as its own bubble that the turn's `_final`
             # cannot overwrite — an answer emitted together with a memory/KB
@@ -1483,7 +1495,7 @@ class AgentLoop:
                 f"🖼️ Preparing {count} images…" if count > 1 else "🖼️ Preparing image…"
             )
             try:
-                await _bus_progress(label, tool_hint=True)
+                await _bus_progress(label, tool_hint=True, phase=True)
             except Exception:
                 pass  # progress is best-effort; never fail the turn for it
 

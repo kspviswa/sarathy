@@ -357,7 +357,9 @@ class TelegramChannel(BaseChannel):
             logger.error("Invalid chat_id: {}", msg.chat_id)
             return
 
-        is_tool_hint = msg.metadata.get("_tool_hint", False)
+        # Pipeline narration (spec 134 §A) carries its own emoji and is not a
+        # tool call — give it the neutral arrow, not the wrench.
+        is_tool_hint = msg.metadata.get("_tool_hint", False) and not msg.metadata.get("_phase")
         prefix = "🔧 " if is_tool_hint else "↳ "
 
         import time

@@ -138,7 +138,7 @@ describe("ChatView — New chat button", () => {
 });
 
 describe("ThinkingSection — thinking indicator stops + shows elapsed time", () => {
-  it("shows 'Thinking' with pulsing Loader2 when not done", () => {
+  it("shows an animated 'Thinking' indicator while the turn runs", () => {
     render(
       <ThinkingSection
         toolHints={[]}
@@ -147,8 +147,26 @@ describe("ThinkingSection — thinking indicator stops + shows elapsed time", ()
       />,
     );
     expect(screen.getByText("Thinking")).toBeInTheDocument();
-    const spinner = document.querySelector(".animate-spin");
-    expect(spinner).toBeInTheDocument();
+
+    // Spec 131 §E: the static Loader2 spinner is gone. What ships now is a
+    // shimmer + travelling dots, which `index.css` disables under
+    // prefers-reduced-motion.
+    expect(document.querySelector(".animate-spin")).toBeNull();
+    expect(screen.getByTestId("thinking-indicator")).toBeInTheDocument();
+    expect(document.querySelectorAll(".thinking-dot")).toHaveLength(3);
+    expect(screen.getByText("Thinking")).toHaveClass("thinking-shimmer");
+  });
+
+  it("stops the indicator once the turn is done", () => {
+    render(
+      <ThinkingSection
+        toolHints={[]}
+        thinkingContent="reasoning..."
+        done={true}
+      />,
+    );
+    expect(screen.queryByTestId("thinking-indicator")).not.toBeInTheDocument();
+    expect(document.querySelector(".thinking-shimmer")).toBeNull();
   });
 
   it("shows 'Thought for Ns' with Check icon when done", () => {

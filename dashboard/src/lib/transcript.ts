@@ -23,7 +23,10 @@ function isMergeable(last: ChatMessage | undefined): last is ChatMessage {
     last?.role === "assistant" &&
     // A notice is a completed, standalone message: streaming frames start a
     // fresh bubble rather than overwriting it.
-    !last.notice
+    !last.notice &&
+    // A sealed bubble is genuine prose the turn has already committed to
+    // (spec 131 §C). Streaming frames must never merge into it either.
+    !last.sealed
   );
 }
 
@@ -37,14 +40,53 @@ function replaceAt(prev: ChatMessage[], idx: number, patch: Partial<ChatMessage>
   return prev.map((m, i) => (i === idx ? { ...m, ...patch } : m));
 }
 
-/** Index of the last assistant bubble tagged with `turnId`, or -1. */
+/**
+ * Index of the turn's live content bubble, or -1.
+ *
+ * A sealed bubble is skipped on purpose: it is already committed prose, so the
+ * next frame of the same turn opens a fresh bubble beside it instead of
+ * overwriting it (spec 131 §D).
+ */
 function findTurnIndex(prev: ChatMessage[], turnId: string): number {
+  for (let i = prev.length - 1; i >= 0; i -= 1) {
+    if (
+      prev[i].turnId === turnId &&
+      prev[i].role === "assistant" &&
+      !prev[i].notice &&
+      !prev[i].sealed
+    ) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Index of the turn's last bubble of any kind (sealed included), or -1.
+ *
+ * Reasoning and tool hints fold into this. They must never mint a bubble of
+ * their own: a late `_thinking` after a sealed reply would otherwise be the
+ * third bubble of a two-bubble turn.
+ */
+function findHostIndex(prev: ChatMessage[], turnId: string): number {
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     if (prev[i].turnId === turnId && prev[i].role === "assistant" && !prev[i].notice) {
       return i;
     }
   }
   return -1;
+}
+
+/**
+ * Stable per-bubble key. One turn can own several bubbles (a sealed reply plus
+ * the follow-up final), so `turnId` alone is not a unique React key — the
+ * sub-index makes it one.
+ */
+function nextBubbleId(prev: ChatMessage[], turnId: string | undefined): string {
+  const base = turnId ?? "";
+  let n = 0;
+  for (const m of prev) if ((m.turnId ?? "") === base) n += 1;
+  return `${base}#${n}`;
 }
 
 /**
@@ -76,9 +118,35 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
   // a turn never merges into a neighbouring turn's bubble.
   const turnId = typeof md.turn_id === "string" ? md.turn_id : undefined;
   const matchIdx = turnId ? findTurnIndex(prev, turnId) : -1;
+  const hostIdx = turnId ? findHostIndex(prev, turnId) : -1;
 
   const last = prev[prev.length - 1];
   const mergeable = isMergeable(last);
+
+  // ---- sealed prose (spec 131 §C) -------------------------------------------
+  // The loop publishes this when a tool-call iteration carried genuine reply
+  // text ("Noted — I'll remember that." + memory write). The prose already
+  // streamed into the turn's live bubble, so sealing it IN PLACE is what keeps
+  // the answer on screen when the turn's `_final` follows; with nothing live
+  // (non-streaming turn) it appends its own sealed bubble.
+  if (md._seal) {
+    if (matchIdx >= 0) {
+      return replaceAt(prev, matchIdx, { content: m.content, progress: false, sealed: true });
+    }
+    return [
+      ...prev,
+      {
+        role: "assistant",
+        content: m.content,
+        progress: false,
+        sealed: true,
+        media: m.media?.length ? m.media : undefined,
+        replyTo: m.replyTo ?? null,
+        turnId,
+        bubbleId: nextBubbleId(prev, turnId),
+      },
+    ];
+  }
 
   // ---- attachment folds into its turn's bubble ----------------------------
   // A media outbound (assistant voice reply) is a plain frame: attach it to the
@@ -90,7 +158,14 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     }
     return [
       ...prev,
-      { role: "assistant", content: m.content, media: m.media, replyTo: m.replyTo, turnId },
+      {
+        role: "assistant",
+        content: m.content,
+        media: m.media,
+        replyTo: m.replyTo,
+        turnId,
+        bubbleId: nextBubbleId(prev, turnId),
+      },
     ];
   }
 
@@ -121,9 +196,68 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
         replyTo: m.replyTo ?? last.replyTo,
       });
     }
+    // Sealed prose already exists for this turn, so the final answer is a
+    // SECOND bubble — exactly two for "answer + memory write", never one per
+    // tool call (spec 131 §C).
     return [
       ...prev,
-      { role: "assistant", content: m.content, media: m.media, replyTo: m.replyTo, turnId },
+      {
+        role: "assistant",
+        content: m.content,
+        media: m.media,
+        replyTo: m.replyTo,
+        turnId,
+        bubbleId: nextBubbleId(prev, turnId),
+      },
+    ];
+  }
+
+  // ---- reasoning / tool-hint fold into the turn's bubble -------------------
+  // Both are checked BEFORE `_progress`: the loop stamps every hint frame with
+  // `_progress` too, so testing `_progress` first used to swallow a tool hint
+  // into the message text and mint a bubble for it.
+  //
+  // Neither is EVER a message: they only fill the thinking collapse, and they
+  // attach to whatever bubble the turn already has (sealed included) instead of
+  // minting one of their own — a late monologue must not inflate a two-bubble
+  // turn into three.
+  if (md._thinking) {
+    const host = hostIdx >= 0 ? hostIdx : turnId ? -1 : mergeable ? prev.length - 1 : -1;
+    if (host >= 0) return replaceAt(prev, host, { thinkingContent: m.content });
+    return [
+      ...prev,
+      {
+        role: "assistant",
+        content: "",
+        thinkingContent: m.content,
+        turnId,
+        bubbleId: nextBubbleId(prev, turnId),
+      },
+    ];
+  }
+
+  if (md._tool_hint) {
+    // The loop sends `_tool_hint: true` with the hint TEXT in `content`
+    // (`_tool_hint` as a string is tolerated for older senders).
+    const hint = typeof md._tool_hint === "string" ? md._tool_hint : m.content;
+    const host = hostIdx >= 0 ? hostIdx : turnId ? -1 : mergeable ? prev.length - 1 : -1;
+    const patch = { toolHint: hint };
+    if (host >= 0) {
+      return replaceAt(prev, host, {
+        ...patch,
+        toolHints: [...(prev[host].toolHints || []), hint],
+      });
+    }
+    return [
+      ...prev,
+      {
+        role: "assistant",
+        content: "",
+        toolHint: hint,
+        toolHints: [hint],
+        turnId,
+        bubbleId: nextBubbleId(prev, turnId),
+      },
     ];
   }
 
@@ -131,38 +265,17 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
   if (md._progress) {
     if (matchIdx >= 0) return replaceAt(prev, matchIdx, { content: m.content, progress: true });
     if (!turnId && mergeable) return replaceLast(prev, { content: m.content, progress: true });
-    return [...prev, { role: "assistant", content: m.content, progress: true, turnId }];
-  }
-
-  // ---- reasoning / tool-hint fold into the live bubble --------------------
-  if (md._thinking) {
-    if (matchIdx >= 0) return replaceAt(prev, matchIdx, { thinkingContent: m.content });
-    if (!turnId && mergeable) {
-      return replaceLast(prev, { thinkingContent: m.content });
-    }
+    // The turn already committed a sealed reply: this frame opens a fresh
+    // bubble next to it rather than rewriting it.
     return [
       ...prev,
-      { role: "assistant", content: "", thinkingContent: m.content, turnId },
-    ];
-  }
-
-  if (md._tool_hint) {
-    const hint = String(md._tool_hint);
-    if (matchIdx >= 0) {
-      return replaceAt(prev, matchIdx, {
-        toolHint: hint,
-        toolHints: [...(prev[matchIdx].toolHints || []), hint],
-      });
-    }
-    if (!turnId && mergeable) {
-      return replaceLast(prev, {
-        toolHint: hint,
-        toolHints: [...(last.toolHints || []), hint],
-      });
-    }
-    return [
-      ...prev,
-      { role: "assistant", content: "", toolHint: hint, toolHints: [hint], turnId },
+      {
+        role: "assistant",
+        content: m.content,
+        progress: true,
+        turnId,
+        bubbleId: nextBubbleId(prev, turnId),
+      },
     ];
   }
 
@@ -184,6 +297,13 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
   }
   return [
     ...prev,
-    { role: "assistant", content: m.content, media: m.media, replyTo: m.replyTo, turnId },
+    {
+      role: "assistant",
+      content: m.content,
+      media: m.media,
+      replyTo: m.replyTo,
+      turnId,
+      bubbleId: nextBubbleId(prev, turnId),
+    },
   ];
 }

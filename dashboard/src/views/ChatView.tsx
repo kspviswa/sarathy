@@ -30,6 +30,7 @@ import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
 import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
 import { ThinkingSection } from "@/components/ThinkingSection";
+import { ThinkingIndicator } from "@/components/ThinkingIndicator";
 import { SlashAutocomplete } from "@/components/CommandPalette";
 import { UsageFooter } from "@/components/UsageFooter";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,17 @@ export interface ChatMessage {
    * message) and never merged into a turn's streaming bubble.
    */
   notice?: boolean;
+  /**
+   * Genuine prose the turn committed to alongside a tool call (spec 131 §C).
+   * A sealed bubble is never overwritten by a later frame: the turn's final
+   * answer opens a fresh bubble beside it.
+   */
+  sealed?: boolean;
+  /**
+   * `turnId` + sub-index. A turn can own several bubbles (sealed reply + the
+   * follow-up final), so this — not `turnId` — is the unique React key.
+   */
+  bubbleId?: string;
 }
 
 interface PendingMedia {
@@ -922,7 +934,7 @@ export function ChatView({
 
           {messages.map((m, i) => (
             <MessageRow
-              key={m.turnId ?? m.messageId ?? i}
+              key={m.bubbleId ?? m.turnId ?? m.messageId ?? i}
               message={m}
               streaming={streaming}
               onOpenFile={onOpenFile}
@@ -1053,9 +1065,8 @@ function MessageRow({
         ) : hasContent ? (
           <MessageBody content={cleanContent} streaming={message.progress} onOpenFile={onOpenFile} onSend={onSend} />
         ) : live ? (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
-            thinking…
+          <div className="text-muted-foreground">
+            <ThinkingIndicator label="Thinking…" />
           </div>
         ) : null}
 

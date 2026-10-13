@@ -31,6 +31,7 @@ from sarathy.agent.tools.web import WebFetchTool, create_web_search_tool
 from sarathy.bus.events import InboundMessage, OutboundMessage
 from sarathy.bus.queue import MessageBus
 from sarathy.providers.base import LLMProvider
+from sarathy.providers.thinking import strip_think
 from sarathy.session.manager import Session, SessionManager
 from sarathy.utils.tokens import estimate_messages_tokens, estimate_tokens
 
@@ -326,20 +327,17 @@ class AgentLoop:
                 cron_tool.set_context(channel, chat_id)
 
     @staticmethod
-    def _strip_think(text: str | None, reasoning_content: str | None = None) -> str | None:
-        """Strip <think>...</think> blocks that some models embed in content.
+    def _strip_think(text: str | None) -> str | None:
+        """Return the visible prose of ``text``, or ``None`` if there is none.
 
-        If the text becomes empty after stripping, fall back to reasoning_content.
+        Strips the ``<think>...</think>`` blocks some models (Qwen3, several
+        local models) embed inline in their content. The monologue belongs to
+        the thinking collapse — it is NEVER returned as visible text, and there
+        is deliberately no fallback to the dedicated reasoning field: doing that
+        published the private monologue as the message bubble while the same
+        text was also streaming into the collapse (spec 131 §B).
         """
-        if not text:
-            if reasoning_content:
-                cleaned = re.sub(
-                    r"<tool_call>[\s\S]*?</tool_call>\s*", "", reasoning_content
-                ).strip()
-                return cleaned if cleaned else None
-            return None
-        stripped = re.sub(r"yente[\s\S]*?\]\]", "", text).strip()
-        return stripped if stripped else (reasoning_content if reasoning_content else None)
+        return strip_think(text)
 
     @staticmethod
     def _has_image_content(messages: list[dict]) -> bool:
@@ -665,10 +663,15 @@ class AgentLoop:
                 total_time += elapsed
 
             if response.has_tool_calls:
+                # Genuine prose shipped alongside a tool call (e.g. "Noted — I'll
+                # remember that." + memory write) is a real reply and must not
+                # be swallowed by the turn's final, so it is published SEALED.
+                # Reasoning never reaches here: it left the loop on the thinking
+                # channel and `content` is visible prose by construction (131 §B).
+                clean = self._strip_think(response.content)
                 if on_progress:
-                    clean = self._strip_think(response.content, response.reasoning_content)
                     if clean:
-                        await on_progress(clean)
+                        await on_progress(clean, seal=True)
                     await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
 
                 tool_call_dicts = [
@@ -709,10 +712,13 @@ class AgentLoop:
                         "Found {} tool call(s) in reasoning_content", len(extracted_tool_calls)
                     )
 
+                    # Same rule as the structured-tool-call branch above: prose
+                    # here is genuine, so seal it rather than let the follow-up
+                    # final overwrite it (131 §C).
+                    clean = self._strip_think(response.content)
                     if on_progress:
-                        clean = self._strip_think(response.content, response.reasoning_content)
                         if clean:
-                            await on_progress(clean)
+                            await on_progress(clean, seal=True)
                         # Create fake tool call objects for _tool_hint
                         fake_tcs = [
                             type(
@@ -767,7 +773,7 @@ class AgentLoop:
                         tool_calls=None,
                         reasoning_content=response.reasoning_content,
                     )
-                    final_content = self._strip_think(response.content, response.reasoning_content)
+                    final_content = self._strip_think(response.content)
                     if final_content is None:
                         logger.warning(
                             "Empty response from LLM (iteration {}). "
@@ -1012,7 +1018,9 @@ class AgentLoop:
                     main_session.steer_queue if key not in self._active_main_turns else None
                 )
 
-                async def _btw_progress(content: str, *, tool_hint: bool = False) -> None:
+                async def _btw_progress(
+                    content: str, *, tool_hint: bool = False, seal: bool = False
+                ) -> None:
                     await self.bus.publish_outbound(
                         OutboundMessage(
                             channel=msg.channel,
@@ -1022,6 +1030,7 @@ class AgentLoop:
                                 "_btw": True,
                                 "_progress": True,
                                 "_tool_hint": tool_hint,
+                                "_seal": seal,
                             },
                         )
                     )
@@ -1420,10 +1429,16 @@ class AgentLoop:
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
 
-        async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
+        async def _bus_progress(content: str, *, tool_hint: bool = False, seal: bool = False) -> None:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
             meta["_tool_hint"] = tool_hint
+            # Sealed prose (131 §C): genuine reply text that shipped with a tool
+            # call. The SPA renders it as its own bubble that the turn's `_final`
+            # cannot overwrite — an answer emitted together with a memory/KB
+            # write yields exactly two bubbles, not one per tool call.
+            if seal:
+                meta["_seal"] = True
             if turn_id:
                 meta["turn_id"] = turn_id
             self._set_turn_phase(key, "tool" if tool_hint else "streaming")

@@ -9,6 +9,7 @@ import json_repair
 from openai import AsyncOpenAI
 
 from sarathy.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from sarathy.providers.thinking import ThinkSplitter, strip_think
 
 
 class CustomProvider(LLMProvider):
@@ -126,6 +127,16 @@ class CustomProvider(LLMProvider):
         except Exception:
             return {}
 
+    @staticmethod
+    async def _emit(callback: Any, value: str) -> None:
+        """Invoke a streaming callback (sync or async) with a non-empty value."""
+        if not callback or not value:
+            return
+        if asyncio.iscoroutinefunction(callback):
+            await callback(value)
+        else:
+            callback(value)
+
     async def _stream_chat(
         self,
         kwargs: dict,
@@ -139,6 +150,9 @@ class CustomProvider(LLMProvider):
         accumulated_tool_calls = []
         finish_reason = "unknown"
         usage: dict[str, Any] = {}
+        # Source B (spec 131 §A): strips inline <think> blocks out of the content
+        # delta stream so `accumulated_content` is visible prose only.
+        splitter = ThinkSplitter()
 
         # Add session_id for OpenRouter sticky routing if applicable
         self._apply_session_id(kwargs, session_id)
@@ -169,6 +183,7 @@ class CustomProvider(LLMProvider):
                 # - Ollama /v1: delta.reasoning
                 # - Ollama raw: delta.thinking
                 # - LM Studio / DeepSeek / Kimi: delta.reasoning_content
+                # This is reasoning SOURCE A — it goes straight to on_thinking.
                 reasoning = (
                     getattr(delta, "reasoning", None)
                     or getattr(delta, "thinking", None)
@@ -176,18 +191,20 @@ class CustomProvider(LLMProvider):
                 )
                 if reasoning:
                     accumulated_reasoning += reasoning
-                    if on_thinking and accumulated_reasoning:
-                        if asyncio.iscoroutinefunction(on_thinking):
-                            await on_thinking(accumulated_reasoning)
-                        else:
-                            on_thinking(accumulated_reasoning)
+                    await self._emit(on_thinking, accumulated_reasoning)
 
                 if delta.content:
-                    accumulated_content += delta.content
-                    if asyncio.iscoroutinefunction(on_progress):
-                        await on_progress(accumulated_content)
-                    else:
-                        on_progress(accumulated_content)
+                    # Reasoning SOURCE B: same channel, inline <think> tags
+                    # (Qwen3 and friends). Split here at the provider boundary so
+                    # everything downstream sees prose on this channel and the
+                    # monologue on the thinking channel — no text heuristics.
+                    visible, think = splitter.feed(delta.content)
+                    if think:
+                        accumulated_reasoning += think
+                        await self._emit(on_thinking, accumulated_reasoning)
+                    if visible:
+                        accumulated_content += visible
+                        await self._emit(on_progress, accumulated_content)
 
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
@@ -218,6 +235,10 @@ class CustomProvider(LLMProvider):
                 except Exception:
                     pass
             return LLMResponse(content=f"Error streaming: {e}", finish_reason="error")
+
+        # End of stream: drop any half-tag the last delta left in the carry
+        # buffer. It can only be a tag fragment, so it is shown nowhere.
+        splitter.flush()
 
         has_tool_calls = len(accumulated_tool_calls) > 0 and any(
             tc.get("function", {}).get("name") for tc in accumulated_tool_calls
@@ -270,7 +291,7 @@ class CustomProvider(LLMProvider):
         usage_dict = self._usage_from(u)
 
         return LLMResponse(
-            content=msg.content,
+            content=strip_think(msg.content),
             tool_calls=tool_calls,
             finish_reason=choice.finish_reason or "stop",
             usage=usage_dict,

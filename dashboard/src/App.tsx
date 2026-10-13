@@ -355,6 +355,23 @@ function AppInner() {
   /** The seed is one-shot: ChatView reports it applied so it can't re-inject. */
   const clearFollowUpSeed = useCallback(() => setFollowUpSeed(null), []);
 
+  /**
+   * "Open as new thread" from the Sessions tab (job 132 §C).
+   *
+   * Carries a past conversation's last question into the composer as a quote
+   * chip — the same seeding path a notification "Reply" uses — so the model
+   * reads it as genuine prior context. Nothing is sent on the user's behalf,
+   * and the live session is NOT archived: they may be mid-conversation here.
+   */
+  const handleOpenThread = useCallback(
+    (text: string) => {
+      if (!text.trim()) return;
+      setFollowUpSeed({ text, nonce: Date.now() });
+      selectSection("chat");
+    },
+    [selectSection],
+  );
+
   const handleStop = useCallback(async () => {
     await api.stopChat();
     endTurnLocal();
@@ -457,8 +474,22 @@ function AppInner() {
               }}
               aria-current={section === id ? "page" : undefined}
               data-testid={`nav-${id}`}
-              className="relative w-full justify-start"
+              /* Job 132 §E: the pill eases between states and the active marker
+                 grows in beside it. `motion-reduce` drops the transition for
+                 users who ask for reduced motion. */
+              className={cn(
+                "relative w-full justify-start transition-[background-color,color,transform] duration-200 ease-out motion-reduce:transition-none",
+                section === id && "scale-[0.99]",
+              )}
             >
+              <span
+                aria-hidden="true"
+                data-testid={`nav-indicator-${id}`}
+                className={cn(
+                  "absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary transition-all duration-200 ease-out motion-reduce:transition-none",
+                  section === id ? "scale-y-100 opacity-100" : "scale-y-50 opacity-0",
+                )}
+              />
               <Icon className="size-4" />
               <span className="flex-1 text-left">{label}</span>
               {unread[id] ? (
@@ -553,8 +584,14 @@ function AppInner() {
           </div>
         </header>
 
-        {/* Tab-style main area: activating a section swaps this region. */}
-        <div className="min-h-0 flex-1 overflow-hidden" data-testid="main-content">
+        {/* Tab-style main area: activating a section swaps this region. `key`
+            re-mounts it per section so the entry transition (job 132 §E) runs
+            on every switch instead of only the first paint. */}
+        <div
+          key={section}
+          className="section-in min-h-0 flex-1 overflow-hidden"
+          data-testid="main-content"
+        >
           {section === "chat" && (
             <>
               {historyError && (
@@ -593,7 +630,7 @@ function AppInner() {
           )}
 
           {section === "sessions" && (
-            <SessionsView sessions={sessions} initialKey={transcriptKey} />
+            <SessionsView initialKey={transcriptKey} onOpenThread={handleOpenThread} />
           )}
 
           {section === "files" && (
@@ -637,7 +674,12 @@ function AppInner() {
               selectSection(id);
             }}
             aria-current={section === id ? "page" : undefined}
-            className={cn(section === id && "bg-accent text-accent-foreground")}
+            /* Job 132 §E — the active pill eases in, reduced-motion aware. */
+            className={cn(
+              "transition-[background-color,color,transform] duration-200 ease-out motion-reduce:transition-none",
+              section === id && "scale-95 bg-accent text-accent-foreground",
+            )}
+            data-testid={`mobile-nav-${id}`}
           >
             <Icon className="size-4" />
             <span className="text-[11px]">{label}</span>

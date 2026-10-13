@@ -16,8 +16,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 vi.mock("@/lib/api", () => ({
   api: {
-    sessions: vi.fn().mockResolvedValue({ sessions: [] }),
-    session: vi.fn().mockResolvedValue({ key: "", createdAt: "", messages: [] }),
+    // The Sessions tab reads ARCHIVES (job 132 §C): one file per `/new`, opened
+    // by its archive id. `/api/sessions` + `/api/session` remain the live-chat
+    // path and are untouched by these tests.
+    sessionsArchive: vi.fn().mockResolvedValue({ sessions: [] }),
+    sessionArchive: vi
+      .fn()
+      .mockResolvedValue({ id: "", key: "", channel: "", createdAt: "", messages: [] }),
   },
 }));
 
@@ -44,22 +49,28 @@ const STORED_USER_TURN =
 const STORED_ASSISTANT_TURN =
   "Restart requested.\n[image: /home/u/.sarathy/media/shot.png]";
 
+/** An archive written today by `/new`, so its day cell is on the calendar. */
+const ARCHIVE_ID = "session-2026-10-10T00-00.jsonl";
+
 function mockSession() {
-  vi.mocked(api.sessions).mockResolvedValue({
+  vi.mocked(api.sessionsArchive).mockResolvedValue({
     sessions: [
       {
+        id: ARCHIVE_ID,
         key: "dashboard:console",
         channel: "dashboard",
         topic: "console",
         topic_user_set: false,
         created_at: `${todayDateKey()}T00:00:00Z`,
         updated_at: `${todayDateKey()}T00:01:00Z`,
-        message_count: 2,
+        messageCount: 2,
       },
     ],
   } as never);
-  vi.mocked(api.session).mockResolvedValue({
+  vi.mocked(api.sessionArchive).mockResolvedValue({
+    id: ARCHIVE_ID,
     key: "dashboard:console",
+    channel: "dashboard",
     createdAt: "2026-10-10T00:00:00Z",
     messages: [
       { role: "user", content: STORED_USER_TURN },
@@ -71,7 +82,7 @@ function mockSession() {
 /** Desktop SessionsView opens a transcript directly from `initialKey`. */
 async function renderDesktop() {
   mockSession();
-  render(<SessionsView initialKey="dashboard:console" />);
+  render(<SessionsView initialKey={ARCHIVE_ID} />);
   await waitFor(() => expect(screen.getByText(/restart the gateway/)).toBeTruthy());
 }
 

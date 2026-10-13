@@ -17,6 +17,7 @@ import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
 import { Logo } from "@/components/logo";
+import { MarkdownBubble } from "@/components/MarkdownBubble";
 import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -674,7 +675,9 @@ function MobileMessage({
           </div>
         )}
         {isUser ? (
-          <div className="whitespace-pre-wrap break-words">{cleanContent}</div>
+          /* Parity with the desktop MessageRow (job 132 §D): user turns render
+             as markdown, not literal backticks. Markdown only — no openUI. */
+          <MarkdownBubble content={cleanContent} onPrimary />
         ) : hasContent ? (
           <AssistantBody content={cleanContent} onOpenFile={onOpenFile} streaming={message.progress} onSend={onSend} />
         ) : live ? (

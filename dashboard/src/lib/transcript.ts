@@ -14,7 +14,8 @@
  * Frames carrying `metadata._notice` are now appended as their own, sealed
  * bubble that streaming frames never touch.
  */
-import type { OutboundMessage } from "@/lib/types";
+import { cleanRenderedContent } from "@/lib/messageText";
+import type { OutboundMessage, SessionMessage } from "@/lib/types";
 import type { ChatMessage } from "@/views/ChatView";
 
 /** True when a streaming frame may be folded into `last`. */
@@ -306,4 +307,20 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       bubbleId: nextBubbleId(prev, turnId),
     },
   ];
+}
+
+/**
+ * Conversation only, and nothing empty (job 132 §C).
+ *
+ * `/api/session/archive` already drops tool results and empty assistant
+ * records server-side; re-checking here means an older gateway — or a stale
+ * service-worker cache serving a pre-fix response — still cannot put a tool row
+ * or an empty bubble in the transcript. Media-only turns survive: they carry an
+ * attachment with no text.
+ */
+export function visibleTranscriptMessages(messages: SessionMessage[]): SessionMessage[] {
+  return messages.filter((m) => {
+    if (m.role !== "user" && m.role !== "assistant") return false;
+    return Boolean(cleanRenderedContent(m.content).trim()) || Boolean(m.media?.length);
+  });
 }

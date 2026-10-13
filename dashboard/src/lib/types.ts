@@ -37,6 +37,10 @@ export interface DevicesResponse {
 
 export interface SessionInfo {
   key: string;
+  /** Archive file name (job 132 §C). Present only for ARCHIVED sessions — the
+   *  stable per-file identity, needed because one key can have many archives
+   *  (one per `/new`). */
+  id?: string;
   created_at?: string;
   updated_at?: string;
   path?: string;
@@ -74,6 +78,23 @@ export interface SessionDetail {
   messages: SessionMessage[];
   /** Additive live turn state (spec 127 §A.5); absent on older gateways. */
   turn?: TurnBlock;
+}
+
+/**
+ * One archived transcript (job 132 §A). Same shape as `SessionDetail` plus the
+ * archive's own identity, so the browser can address it by `id`.
+ *
+ * `messages` is server-filtered to user turns and assistant turns that have
+ * text: no tool rows, no empty bubbles.
+ */
+export interface SessionArchiveDetail {
+  /** Archive file name — the addressable identity. */
+  id: string;
+  key: string;
+  channel: string;
+  createdAt: string | null;
+  updatedAt?: string | null;
+  messages: SessionMessage[];
 }
 
 export interface FileNode {

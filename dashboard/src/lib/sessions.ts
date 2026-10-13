@@ -148,15 +148,36 @@ export function sessionChannel(s: SessionInfo): string {
   return "cli";
 }
 
+/**
+ * Stable per-row identity.
+ *
+ * Archived sessions carry the archive file name (`id`). It is required rather
+ * than cosmetic: `/new` rolls one conversation into MANY archive files that all
+ * share a `key`, so keying rows (and selection) by `key` collides and the
+ * browser cannot tell two different past conversations apart. Active sessions
+ * have no `id` and fall back to their key.
+ */
+export function sessionIdentity(s: SessionInfo): string {
+  return s.id ?? s.key;
+}
+
 /** `telegram` → `Telegram`. */
 export function channelLabel(channel: string): string {
   if (!channel) return "Other";
   return channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-/** Row title: topic when set, else the session key. */
+/**
+ * Row title: topic when set, else the first user message, else the key.
+ *
+ * The preview matters for archives: a rolled-over conversation usually has no
+ * topic, and `telegram:7` on its own tells the user nothing.
+ */
 export function sessionTitle(s: SessionInfo): string {
-  return s.topic?.trim() ? s.topic : s.key;
+  if (s.topic?.trim()) return s.topic;
+  const preview = s.preview?.trim();
+  if (preview) return preview.length > 60 ? `${preview.slice(0, 60)}…` : preview;
+  return s.key;
 }
 
 export interface SessionDateGroup {

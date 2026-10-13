@@ -14,6 +14,7 @@ import {
   sessionDateKey,
   sessionDateOptions,
   sessionDayKeys,
+  sessionIdentity,
   sessionsOnDate,
   sessionTitle,
   shiftMonth,
@@ -82,6 +83,33 @@ describe("sessionTitle", () => {
   it("shows the topic when set, else the key", () => {
     expect(sessionTitle(SESSIONS[0])).toBe("pi durable research");
     expect(sessionTitle(SESSIONS[1])).toBe("telegram:2");
+  });
+
+  it("falls back to the first user message — `telegram:7` alone tells the user nothing", () => {
+    expect(sessionTitle({ key: "telegram:7", preview: "check the archive" })).toBe(
+      "check the archive",
+    );
+    // A blank preview is not a title.
+    expect(sessionTitle({ key: "telegram:7", preview: "   " })).toBe("telegram:7");
+    // Long previews are clipped.
+    const long = "x".repeat(80);
+    expect(sessionTitle({ key: "telegram:7", preview: long })).toBe(`${"x".repeat(60)}…`);
+    // A topic still wins over the preview.
+    expect(sessionTitle({ key: "telegram:7", topic: "topic", preview: "preview" })).toBe("topic");
+  });
+});
+
+describe("sessionIdentity", () => {
+  it("uses the archive file name when present (job 132 §C)", () => {
+    // `/new` rolls one key into MANY archive files, so the file name — not the
+    // key — is what distinguishes two past conversations.
+    expect(
+      sessionIdentity({ key: "telegram:7", id: "session-2026-10-13T20-31.jsonl" }),
+    ).toBe("session-2026-10-13T20-31.jsonl");
+  });
+
+  it("falls back to the key for an active session", () => {
+    expect(sessionIdentity({ key: "dashboard:console" })).toBe("dashboard:console");
   });
 });
 

@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { applyOutbound } from "@/lib/transcript";
+import { applyOutbound, deriveLiveTurnStatus, LIVE_FALLBACK_LABEL } from "@/lib/transcript";
 import type { ChatMessage } from "@/views/ChatView";
 import type { OutboundMessage } from "@/lib/types";
 
@@ -324,5 +324,98 @@ describe("applyOutbound — turn_id keying (spec 127 §C.4)", () => {
     msgs = applyOutbound(msgs, mediaFrame);
     expect(msgs).toHaveLength(2);
     expect(msgs[1]).toMatchObject({ turnId: "T", media: ["/home/u/.sarathy/media/a.mp3"] });
+  });
+});
+
+/**
+ * Spec 134 §B — the live "working" strip narrates the image→VLM pipeline.
+ *
+ * The regression this pins: the loop narrates each phase through ordinary
+ * `_tool_hint` frames (prep → send to VLM → description received), the reducer
+ * folds them into the turn bubble's `toolHints`, and the ONLY thing that ever
+ * displayed them was the collapsed Thinking section — so while the image was
+ * being described, the dashboard showed a shimmering "Thinking" header and
+ * nothing else. Telegram prints the same strings in its streaming draft.
+ *
+ * `deriveLiveTurnStatus` is the one place that decision is made; both SPAs
+ * consume it, so this test also pins the parity.
+ */
+describe("deriveLiveTurnStatus — live pipeline narration (spec 134 §B)", () => {
+  /** The exact frame shape `_bus_progress(label, tool_hint=True)` publishes. */
+  const phase = (label: string) =>
+    frame(label, { _progress: true, _tool_hint: true, turn_id: "T" });
+
+  it("falls back to the generic label while the turn has produced nothing yet", () => {
+    expect(deriveLiveTurnStatus([user("what's in this photo?")])).toEqual({
+      label: LIVE_FALLBACK_LABEL,
+      showChip: true,
+    });
+  });
+
+  it("returns null for an empty transcript", () => {
+    expect(deriveLiveTurnStatus([])).toBeNull();
+  });
+
+  it("reads the newest _tool_hint frame as the live label", () => {
+    let msgs = applyOutbound([user("look")], phase("🔍 Sending image to VLM…"));
+    expect(deriveLiveTurnStatus(msgs)).toEqual({
+      label: "🔍 Sending image to VLM…",
+      showChip: false,
+    });
+  });
+
+  it("narrates the whole image→VLM pipeline phase by phase", () => {
+    let msgs = applyOutbound([user("what's in this photo?")], phase("🖼️ Preparing image…"));
+    const seen: (string | null)[] = [deriveLiveTurnStatus(msgs)?.label ?? null];
+
+    msgs = applyOutbound(msgs, phase("🔍 Sending image to VLM…"));
+    seen.push(deriveLiveTurnStatus(msgs)?.label ?? null);
+
+    msgs = applyOutbound(msgs, phase("✅ Image description received"));
+    seen.push(deriveLiveTurnStatus(msgs)?.label ?? null);
+
+    // The answer starts streaming in: the phase is history, the bubble speaks.
+    msgs = applyOutbound(msgs, frame("A tabby cat on a…", { _progress: true, turn_id: "T" }));
+    seen.push(deriveLiveTurnStatus(msgs)?.label ?? null);
+
+    expect(seen).toEqual([
+      "🖼️ Preparing image…",
+      "🔍 Sending image to VLM…",
+      "✅ Image description received",
+      null,
+    ]);
+  });
+
+  it("keeps narrating when a /steer notice bubble lands mid-pipeline", () => {
+    let msgs = applyOutbound([user("look")], phase("🔍 Sending image to VLM…"));
+    // Out-of-band ack: its own sealed bubble, appended AFTER the live one.
+    msgs = applyOutbound(msgs, frame("🎯 Steer noted", { _notice: true }));
+    expect(msgs[msgs.length - 1].notice).toBe(true);
+    expect(deriveLiveTurnStatus(msgs)).toEqual({
+      label: "🔍 Sending image to VLM…",
+      showChip: false,
+    });
+  });
+
+  it("narrates a tool call like any other phase", () => {
+    let msgs = applyOutbound([user("search that")], phase("web_search(\"weather\")"));
+    expect(deriveLiveTurnStatus(msgs)?.label).toBe("web_search(\"weather\")");
+  });
+
+  it("says nothing once the turn is finished", () => {
+    let msgs = applyOutbound([user("look")], phase("🔍 Sending image to VLM…"));
+    msgs = applyOutbound(msgs, frame("A cat.", { _final: true, turn_id: "T" }));
+    expect(deriveLiveTurnStatus(msgs)).toBeNull();
+  });
+
+  it("never leaks the PREVIOUS turn's last hint into a fresh turn", () => {
+    let msgs = applyOutbound([user("look")], phase("🔍 Sending image to VLM…"));
+    msgs = applyOutbound(msgs, frame("A cat.", { _final: true, turn_id: "T" }));
+    // New question sent: the transcript ends on the user's message.
+    msgs = [...msgs, user("and this one?")];
+    expect(deriveLiveTurnStatus(msgs)).toEqual({
+      label: LIVE_FALLBACK_LABEL,
+      showChip: true,
+    });
   });
 });

@@ -92,7 +92,7 @@ async def test_single_image_uses_singular_hint():
 
 @pytest.mark.asyncio
 async def test_per_image_progress_frames():
-    """Each image emits its own 'Reading image i/N' progress frame."""
+    """Each image emits its own 'Sending image i/N to VLM' progress frame (spec 134 §A)."""
     loop = _loop()
     provider = _RecordingProvider()
     events = []
@@ -113,9 +113,68 @@ async def test_per_image_progress_frames():
     await loop._describe_images_with_image_provider(
         messages, provider, on_progress=on_progress
     )
-    assert "🔍 Reading image 1/3…" in events
-    assert "🔍 Reading image 2/3…" in events
-    assert "🔍 Reading image 3/3…" in events
+    assert "🔍 Sending image 1/3 to VLM…" in events
+    assert "🔍 Sending image 2/3 to VLM…" in events
+    assert "🔍 Sending image 3/3 to VLM…" in events
+
+
+@pytest.mark.asyncio
+async def test_single_image_phases_name_the_vlm_round_trip():
+    """One image -> singular phase labels, before AND after the vision call."""
+    loop = _loop()
+    provider = _RecordingProvider()
+    events = []
+
+    async def on_progress(text, *, tool_hint=False, sealed=False):
+        events.append((text, tool_hint))
+
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _png_data_url()}}],
+        }
+    ]
+    await loop._describe_images_with_image_provider(
+        messages, provider, on_progress=on_progress
+    )
+
+    assert [t for t, _ in events] == [
+        "🔍 Sending image to VLM…",
+        "✅ Image description received",
+    ]
+    # Every phase is a tool_hint progress frame — the dashboard's live status
+    # strip reads nothing else (frame contract unchanged, spec 134 §A).
+    assert all(tool_hint for _, tool_hint in events)
+
+
+@pytest.mark.asyncio
+async def test_no_success_phase_when_the_vision_call_fails():
+    """A failed describe must not claim a description was received."""
+    loop = _loop()
+
+    class _BrokenProvider:
+        async def chat(self, *a, **kw):
+            raise RuntimeError("vision offline")
+
+        def get_default_model(self):
+            return "vision-model"
+
+    events = []
+
+    async def on_progress(text, *, tool_hint=False, sealed=False):
+        events.append(text)
+
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": _png_data_url()}}],
+        }
+    ]
+    await loop._describe_images_with_image_provider(
+        messages, _BrokenProvider(), on_progress=on_progress
+    )
+
+    assert events == ["🔍 Sending image to VLM…"]
 
 
 @pytest.mark.asyncio

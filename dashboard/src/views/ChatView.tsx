@@ -25,6 +25,7 @@ import { toast } from "sonner";
 
 import { CodeBlock } from "@/components/CodeBlock";
 import { GreetingState, DEFAULT_SUGGESTIONS, type Suggestion } from "@/components/GreetingState";
+import { LiveStatus } from "@/components/LiveStatus";
 import { MarkdownBubble } from "@/components/MarkdownBubble";
 import { PresenceIndicator, ReactionChip } from "@/components/Presence";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
@@ -48,6 +49,7 @@ import {
   type Quote,
   type QuoteChip,
 } from "@/lib/quotes";
+import { deriveLiveTurnStatus } from "@/lib/transcript";
 import type { SlashCommand } from "@/lib/palette";
 import type { ReactionState } from "@/lib/reactions";
 import { UIBlock, extractProse, hasOpenUIBlock } from "@/lib/uiBlocks";
@@ -473,6 +475,10 @@ export function ChatView({
       if (el) el.scrollTop = el.scrollHeight;
     }
   }, [messages, streaming, scrollRef]);
+
+  // The live strip's label: the turn's newest narrated phase, or the fallback
+  // (spec 134 §B). Derived in `lib/transcript.ts`, shared with mobile.
+  const liveStatus = useMemo(() => deriveLiveTurnStatus(messages), [messages]);
 
   useEffect(() => {
     return () => {
@@ -949,14 +955,14 @@ export function ChatView({
             />
           ))}
 
-          {streaming &&
-            messages.length > 0 &&
-            messages[messages.length - 1].role === "user" && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <ReactionChip state="working" elapsedMs={elapsed} />
-                <span>Sarathy is responding…</span>
-              </div>
-            )}
+          {streaming && liveStatus && (
+            /* Narration, not decoration (spec 134 §B): the label is the newest
+               `_tool_hint` the loop published — "🔍 Sending image to VLM…" while
+               an image is being described, a tool call while it works — with
+               "Sarathy is responding…" as the fallback. Identical markup on
+               mobile; the decision lives in `deriveLiveTurnStatus`. */
+            <LiveStatus {...liveStatus} elapsedMs={elapsed} />
+          )}
         </div>
       </div>
 

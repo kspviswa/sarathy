@@ -45,7 +45,7 @@ import {
   type QuoteChip,
 } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
-import { deriveLiveTurnStatus, turnSegments } from "@/lib/transcript";
+import { deriveLiveTurnStatus, liveBubbleIndex, turnSegments } from "@/lib/transcript";
 import type { ChatMessage } from "@/views/ChatView";
 import { DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 
@@ -225,6 +225,14 @@ export function ChatView({
   // (spec 134 §B). Derived in `lib/transcript.ts`, shared with desktop.
   const liveStatus = useMemo(() => deriveLiveTurnStatus(messages), [messages]);
 
+  // Which bubble the turn in flight is writing (spec 135 §A follow-up). The
+  // session-wide `streaming` flag says a turn is running, not WHICH bubble it is
+  // in — so the live treatment is applied through this index, never to every row.
+  const liveIndex = useMemo(
+    () => (streaming ? liveBubbleIndex(messages) : -1),
+    [streaming, messages],
+  );
+
   // Auto-grow with content (spec 126 §F). The textarea now owns a full-width
   // row, so its resting height drops from 96px to 64px: on a 360×640 phone the
   // two-row composer plus this taller box would eat a third of the viewport
@@ -389,7 +397,10 @@ export function ChatView({
             <MobileMessage
               key={m.bubbleId ?? m.turnId ?? m.messageId ?? i}
               message={m}
-              streaming={streaming}
+              /* Parity with desktop: the live treatment belongs to the bubble the
+                 turn in flight is writing, never to every bubble because the
+                 SESSION is streaming (spec 135 §A follow-up). */
+              live={streaming && i === liveIndex}
               onOpenFile={onOpenFile}
               onRegenerate={m.role === "assistant" && !streaming ? onRegenerate : undefined}
               onReply={!streaming ? () => setReplyToMsg(m) : undefined}
@@ -583,14 +594,21 @@ export function ChatView({
 
 function MobileMessage({
   message,
-  streaming,
+  live: liveProp,
   onOpenFile,
   onRegenerate,
   onReply,
   onSend,
 }: {
   message: ChatMessage;
-  streaming: boolean;
+  /**
+   * Whether this bubble is the one the turn in flight is writing
+   * (`liveBubbleIndex`) — NOT the session-wide `streaming` flag. Reading that
+   * directly painted the live affordances onto every finished bubble above the
+   * live one, and left the caret blinking on a turn that ended without a
+   * `_final` frame (voice replies, `/stop`).
+   */
+  live: boolean;
   onOpenFile?: (path: string) => void;
   onRegenerate?: () => void;
   onReply?: () => void;
@@ -628,12 +646,12 @@ function MobileMessage({
   const segments = useMemo(() => (isUser || isNotice ? [] : turnSegments(message)), [message, isUser, isNotice]);
   const hasContent = segments.length > 0;
 
-  // Parity with the desktop MessageRow. The thinking strip's live state must
-  // track the *turn*, not just `message.progress`: reasoning/tool-hint frames
-  // never set `progress`, so keying off `progress` alone made mobile claim a
-  // finished "Thought for 0s ✓" while the turn was still reasoning, whereas
-  // desktop shows the live "Thinking ⟳". `streaming` is the App-level turn flag.
-  const live = !isUser && !isNotice && (streaming || Boolean(message.progress));
+  // Parity with the desktop MessageRow: the thinking strip's live state tracks
+  // the bubble the turn in flight is WRITING, never the session-wide `streaming`
+  // flag (spec 135 §A follow-up). Reading `streaming` (or `progress`) directly
+  // made every finished bubble above the live one shimmer and pulse, and kept the
+  // caret blinking on a turn that ended without a `_final` frame.
+  const live = !isUser && !isNotice && liveProp;
 
   // The collapse header is the turn's only status row: it shows whenever the
   // turn has anything to reveal, and also while a live turn has said nothing
@@ -720,6 +738,7 @@ function MobileMessage({
              them — the same shared component desktop renders (spec 135 §A). */
           <TurnSegments
             segments={segments}
+            live={live}
             renderSegment={(text, isStreaming) => (
               <AssistantBody
                 content={cleanRenderedContent(text)}

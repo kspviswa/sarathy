@@ -467,11 +467,39 @@ export function deriveLiveTurnStatus(messages: ChatMessage[]): LiveTurnStatus | 
 }
 
 /**
+ * Index of the bubble the turn in flight is writing, or `-1` when none is.
+ *
+ * `streaming` is session-wide — the gateway runs ONE turn at a time per session —
+ * so it cannot by itself say WHICH bubble is live. Read directly it painted the
+ * live affordances (pulsing dots, shimmering label, a duration that keeps
+ * counting, the streaming caret) onto every finished bubble above the live one,
+ * and a turn that ends without a `_final` frame (voice replies, `/stop`) left its
+ * trailing segment unsealed — so the caret blinked on a finished answer forever.
+ *
+ * The live bubble is the newest assistant bubble the turn has produced: walk back
+ * over out-of-band notices (a `/steer` ack is appended AFTER the turn's bubble,
+ * mid-turn) and stop at the user turn, which means the turn has produced nothing
+ * yet — there the strip under the transcript is the status, and no bubble may
+ * light up. Derived once, here, so both SPAs cannot disagree.
+ */
+export function liveBubbleIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role === "user") return -1;
+    if (m.role !== "assistant" || m.notice) continue;
+    return i;
+  }
+  return -1;
+}
+
+/**
  * The turn's ordered prose (spec 135 §A).
  *
  * A turn is ONE bubble holding N segments, so this is the only thing a bubble
  * needs to render its body: the divider between entries IS the turn's trail.
- * The streaming caret rides the trailing unsealed segment.
+ * The streaming caret rides the trailing unsealed segment — but only while the
+ * bubble is the live one (`liveBubbleIndex`); an unsealed segment on a finished
+ * turn is a turn that ended without a `_final` frame, not a live answer.
  *
  * Read side, shared by both SPAs for the same reason the write side is: a
  * desktop/mobile disagreement about where a turn's prose ends would show up as

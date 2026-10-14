@@ -883,6 +883,8 @@ class AgentLoop:
                 await self._handle_steer(msg)
             elif lowered.startswith("/btw"):
                 await self._handle_btw(msg)
+            elif lowered.startswith("/local"):
+                await self._handle_local(msg)
             else:
                 self._spawn_dispatch(msg)
 
@@ -998,17 +1000,118 @@ class AgentLoop:
         )
         asyncio.create_task(self._run_btw_turn(msg, text))
 
-    async def _run_btw_turn(self, msg: InboundMessage, btw_text: str) -> None:
-        """Run the /btw side turn against a snapshot of the main session."""
+    async def _handle_local(self, msg: InboundMessage) -> None:
+        """Handle /local: a /btw-style side turn pinned to the local role.
+
+        `/local <msg>` runs the side turn on the provider tagged `local` in the
+        config (set with `/provider role local <name> [model]`) rather than the
+        active one. The main session's provider and model are never touched —
+        the swap happens inside the side turn and is restored in its `finally`.
+        """
+        parts = msg.content.split(None, 1)
+        text = parts[1].strip() if len(parts) > 1 else ""
+        if not text:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=(
+                        "Usage: /local <message>\n\n"
+                        "Ask a side question on the local provider/model configured for the "
+                        "local role. It runs concurrently and is delivered as soon as it's ready."
+                    ),
+                    metadata={"_notice": True},
+                )
+            )
+            return
+
+        # No local provider configured → tell the user to set one and stop. This
+        # must NOT silently fall back to the active provider: the whole point of
+        # `/local` is that the answer comes from the local model.
+        if self._resolve_side_provider("local") is None:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=(
+                        "⚠️ No local provider is configured. "
+                        "Set one first with `/provider role local <name> [model]`."
+                    ),
+                    metadata={"_notice": True},
+                )
+            )
+            return
+
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    "🏠 LOCAL noted — running on the local provider. "
+                    "I'll deliver the answer as soon as it's ready."
+                ),
+                metadata={"_notice": True},
+            )
+        )
+        asyncio.create_task(self._run_btw_turn(msg, text, provider_role="local", side_tag="local"))
+
+    def _resolve_side_provider(self, provider_role: str) -> Any | None:
+        """Resolve the provider a side turn should run on.
+
+        Returns ``None`` when no runtime is available or the role is unassigned,
+        so callers can tell "run on the active provider" from "no local provider
+        is configured" and refuse the turn instead of quietly answering from the
+        wrong model.
+        """
+        if not provider_role or self.runtime is None:
+            return None
+        try:
+            return self.runtime.provider_for(provider_role)
+        except Exception as e:
+            logger.warning("Side-turn provider '{}' lookup failed ({}); using active", provider_role, e)
+            return None
+
+    async def _run_btw_turn(
+        self,
+        msg: InboundMessage,
+        btw_text: str,
+        *,
+        provider_role: str | None = None,
+        side_tag: str = "btw",
+    ) -> None:
+        """Run a concurrent side turn against a snapshot of the main session.
+
+        Shared by `/btw` (the active provider) and `/local` (the provider tagged
+        with ``provider_role``). The provider swap is scoped to this task and
+        restored in the `finally`, so the main session's active provider/model is
+        never mutated by a side turn. Frames keep the `_btw` tagging that the
+        dashboard transcript and the Telegram channel already understand.
+        """
         key = msg.session_key
         try:
             main_session = self.sessions.get_or_create(key)
             snapshot = main_session.get_history(max_messages=self.memory_window)
-            side_key = f"{key}##btw##{uuid.uuid4().hex[:8]}"
+            # A distinct side session per turn keeps concurrent /btw and /local
+            # turns from colliding with each other or with the main session.
+            side_key = f"{key}##{side_tag}##{uuid.uuid4().hex[:8]}"
             side_session = self.sessions.get_or_create(side_key)
             self._active_btw_turns.add(key)
 
-            # Protect MessageTool per-turn state so the btw turn cannot pollute
+            # Resolve the role's provider BEFORE the turn and swap it in for the
+            # duration only. `self.provider`/`self.model` are the loop-wide
+            # active pair, so restoring them here is what keeps /local from
+            # changing what the main session talks to.
+            override_provider = self._resolve_side_provider(provider_role) if provider_role else None
+            override_model = None
+            saved_provider: tuple[Any, str] | None = None
+            if override_provider is not None:
+                override_model = override_provider.get_default_model()
+                saved_provider = (self.provider, self.model)
+                self.provider = override_provider
+                self.model = override_model
+            side_model = override_model or self.model
+
+            # Protect MessageTool per-turn state so the side turn cannot pollute
             # the main turn's duplicate-suppression tracking.
             mt = self.tools.get("message")
             saved_state = None
@@ -1030,7 +1133,7 @@ class AgentLoop:
                     channel=msg.channel,
                     chat_id=msg.chat_id,
                     history_budget_tokens=self._history_budget_tokens(),
-                    model=self.model,
+                    model=side_model,
                 )
 
                 effective_reasoning_effort = (
@@ -1084,6 +1187,11 @@ class AgentLoop:
                 self._save_turn(side_session, all_msgs, 1 + len(snapshot))
                 self.sessions.save(side_session)
             finally:
+                # Restore the loop-wide active provider/model BEFORE anything
+                # else can observe them: a /local turn must never leave the main
+                # session pointed at the local model.
+                if saved_provider is not None:
+                    self.provider, self.model = saved_provider
                 if mt is not None and saved_state is not None:
                     (
                         mt._default_channel,
@@ -1093,7 +1201,7 @@ class AgentLoop:
                     mt._turn_sends = list(saved_state[3])
                     mt._response_metadata = dict(saved_state[4])
         except Exception as e:
-            logger.exception("Side (/btw) turn failed for session {}", key)
+            logger.exception("Side (/{}) turn failed for session {}", side_tag, key)
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,

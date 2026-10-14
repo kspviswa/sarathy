@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { CodeBlock } from "@/components/CodeBlock";
 import { LiveStatus } from "@/components/LiveStatus";
 import { SlashAutocomplete } from "@/components/CommandPalette";
+import { SlashUsageCard, useSlashUsage } from "@/components/SlashUsageCard";
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { TurnSegments } from "@/components/AssistantTurn";
 import { UsageFooter } from "@/components/UsageFooter";
@@ -783,8 +784,15 @@ function AssistantBody({
   onOpenFile?: (path: string) => void;
   onSend?: (message: string) => void;
 }) {
-  const hasUI = useMemo(() => hasOpenUIBlock(content), [content]);
-  const chunks = useMemo(() => (hasUI ? extractProse(content) : [content]), [content, hasUI]);
+  // Slash-usage replies render as a tappable card instead of a wall of
+  // monospace (spec 137 §A3). The detection is the shared module's, shared with
+  // desktop; only the markdown pipeline below differs between the two surfaces.
+  // Tap targets are sized for a phone.
+  const usage = useSlashUsage(onSend ? content : "");
+  const body = usage ? usage.prose : content;
+
+  const hasUI = useMemo(() => hasOpenUIBlock(body), [body]);
+  const chunks = useMemo(() => (hasUI ? extractProse(body) : [body]), [body, hasUI]);
 
   const markdown = useMemo(
     () =>
@@ -817,6 +825,16 @@ function AssistantBody({
       )),
     [chunks, onOpenFile],
   );
+
+  if (usage) {
+    return (
+      <div className="md">
+        {markdown}
+        <SlashUsageCard parsed={usage} onSend={onSend} />
+        {streaming && <span className="streaming-caret" />}
+      </div>
+    );
+  }
 
   if (hasUI) {
     return (

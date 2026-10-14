@@ -1056,3 +1056,77 @@ async def test_edit_provider_requires_v1_base(tmp_path) -> None:
             "/api/providers/adhoc", json={"apiBase": "http://localhost:1234/v1"}, headers=h
         )
         assert ok.status == 200
+
+
+@pytest.mark.asyncio
+async def test_modalities_allow_same_provider_for_all(tmp_path) -> None:
+    client, _ = await _authed_client_with_runtime(tmp_path)
+    async with client:
+        token = await _pair(client)
+        h = {"Authorization": f"Bearer {token}"}
+
+        for role in ("main", "local", "image"):
+            resp = await client.post(
+                f"/api/modalities/{role}",
+                json={"provider": "adhoc", "model": "qwen3:27b"},
+                headers=h,
+            )
+            assert resp.status == 200, await resp.text()
+
+        resp = await client.get("/api/modalities", headers=h)
+        data = await resp.json()
+        assert data["main"] == {"provider": "adhoc", "model": "qwen3:27b"}
+        assert data["local"] == {"provider": "adhoc", "model": "qwen3:27b"}
+        assert data["image"] == {"provider": "adhoc", "model": "qwen3:27b"}
+
+        # The provider now reports all three roles.
+        resp = await client.get("/api/providers", headers=h)
+        by_name = {p["name"]: p for p in (await resp.json())["providers"]}
+        assert sorted(by_name["adhoc"]["roles"]) == ["image", "local", "main"]
+
+
+@pytest.mark.asyncio
+async def test_modalities_clear_and_unknown(tmp_path) -> None:
+    client, _ = await _authed_client_with_runtime(tmp_path)
+    async with client:
+        token = await _pair(client)
+        h = {"Authorization": f"Bearer {token}"}
+
+        assert (
+            await client.post("/api/modalities/nope", json={"provider": "adhoc"}, headers=h)
+        ).status == 404
+
+        assert (
+            await client.post(
+                "/api/modalities/local", json={"provider": "ghost", "model": "m"}, headers=h
+            )
+        ).status == 400
+
+        await client.post(
+            "/api/modalities/local", json={"provider": "adhoc", "model": "m"}, headers=h
+        )
+        resp = await client.post(
+            "/api/modalities/local", json={"provider": "", "model": ""}, headers=h
+        )
+        assert resp.status == 200
+        assert (await resp.json())["local"]["provider"] is None
+
+
+@pytest.mark.asyncio
+async def test_add_provider_derives_slug_from_friendly_name(tmp_path) -> None:
+    client, _ = await _authed_client_with_runtime(tmp_path)
+    async with client:
+        token = await _pair(client)
+        h = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.post(
+            "/api/providers",
+            json={"label": "Ollama S1", "apiBase": "http://s1:11434/v1"},
+            headers=h,
+        )
+        assert resp.status == 200
+        assert (await resp.json())["name"] == "ollama_s1"
+
+        resp = await client.get("/api/providers", headers=h)
+        by_name = {p["name"]: p for p in (await resp.json())["providers"]}
+        assert by_name["ollama_s1"]["label"] == "Ollama S1"

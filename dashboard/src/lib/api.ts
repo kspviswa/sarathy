@@ -6,6 +6,8 @@ import type {
   JobDetailResponse,
   JobsListResponse,
   MeResponse,
+  ModalitiesResponse,
+  ModalityRole,
   PairResponse,
   ProviderModelsResponse,
   ProvidersResponse,
@@ -164,6 +166,14 @@ export const api = {
     request<{ ok: boolean; model: string }>(`/api/providers/${encodeURIComponent(name)}/model`, {
       method: "POST",
       body: JSON.stringify({ model }),
+    }),
+
+  modalities: () => request<ModalitiesResponse>("/api/modalities"),
+
+  setModality: (role: ModalityRole, provider: string, model: string) =>
+    request<ModalitiesResponse>(`/api/modalities/${role}`, {
+      method: "POST",
+      body: JSON.stringify({ provider, model }),
     }),
 
   setRuntime: (data: { provider?: string; model?: string }) =>

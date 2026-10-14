@@ -115,6 +115,21 @@ def _is_openai_v1_base(base: str | None) -> bool:
     return base.rstrip("/").endswith("/v1")
 
 
+def _slugify(text: str) -> str:
+    """Turn a friendly name into a valid provider key.
+
+    ``"Ollama S1"`` → ``"ollama_s1"``. Falls back to ``"provider"`` when the
+    text has no usable characters, and prefixes an underscore when it would
+    start with a digit.
+    """
+    slug = re.sub(r"[^0-9a-zA-Z]+", "_", text).strip("_").lower()
+    if not slug:
+        return "provider"
+    if slug[0].isdigit():
+        slug = "_" + slug
+    return slug
+
+
 def _media_type_from_path(path: str) -> str:
     ext = Path(path).suffix.lower()
     if ext in _IMAGE_EXTS:
@@ -944,6 +959,8 @@ class DashboardChannel(BaseChannel):
         app.router.add_get("/api/providers/{name}/models", self._api_providers_models)
         app.router.add_post("/api/providers/{name}/role", self._api_providers_set_role)
         app.router.add_post("/api/providers/{name}/model", self._api_providers_set_model)
+        app.router.add_get("/api/modalities", self._api_modalities_get)
+        app.router.add_post("/api/modalities/{role}", self._api_modalities_set)
         app.router.add_post("/api/runtime", self._api_runtime_set)
         app.router.add_post("/api/restart", self._api_restart)
         app.router.add_get("/api/sessions", self._api_sessions)
@@ -1348,12 +1365,36 @@ class DashboardChannel(BaseChannel):
         items = []
         for name, p in cfg.providers.items():
             try:
-                desc = describe_provider(name, p)
+                desc = describe_provider(name, p, cfg.modalities)
             except Exception:
                 continue
             desc["active"] = name == active
             items.append(desc)
         return web.json_response({"providers": items, "active": active})
+
+    async def _api_modalities_get(self, request: web.Request) -> web.Response:
+        if self.runtime is None:
+            return web.json_response({"error": "runtime not available"}, status=503)
+        return web.json_response(self.runtime.modality_status())
+
+    async def _api_modalities_set(self, request: web.Request) -> web.Response:
+        """Bind a modality to a provider/model pairing (empty provider clears)."""
+        role = request.match_info["role"]
+        if role not in ("main", "local", "image"):
+            return web.json_response({"error": "unknown modality"}, status=404)
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        if self.runtime is None:
+            return web.json_response({"error": "runtime not available"}, status=503)
+        provider = (data.get("provider") or "").strip()
+        model = (data.get("model") or "").strip()
+        try:
+            self.runtime.set_modality(role, provider, model)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        return web.json_response(self.runtime.modality_status())
 
     async def _api_providers_add(self, request: web.Request) -> web.Response:
         from sarathy.config.loader import save_config
@@ -1365,6 +1406,12 @@ class DashboardChannel(BaseChannel):
         except Exception:
             return web.json_response({"error": "invalid body"}, status=400)
         name = (data.get("name") or "").strip()
+        label = (data.get("label") or "").strip()
+        # A friendly English name is what the user types; the key is a slug
+        # derived from it so several instances of the same kind can coexist
+        # (e.g. "Ollama S1" and "Ollama S2").
+        if not name and label:
+            name = _slugify(label)
         if not name or not name.isidentifier():
             return web.json_response({"error": "invalid provider name"}, status=400)
         kind = (data.get("kind") or "custom").strip()
@@ -1379,19 +1426,19 @@ class DashboardChannel(BaseChannel):
             )
         cfg = self._load_full_config()
         if name in cfg.providers:
-            return web.json_response({"error": "provider already exists"}, status=409)
+            return web.json_response({"error": f"provider '{name}' already exists"}, status=409)
         cfg.providers[name] = ProviderConfig(
             kind=kind,
             api_base=api_base,
             api_key=(data.get("apiKey") or "").strip() or "dummy",
-            label=(data.get("label") or "").strip() or name.title(),
+            label=label or name.title(),
             extra_headers=dict(data.get("extraHeaders") or {}),
         )
         save_config(cfg, self.config_path)
         if data.get("setActive"):
             cfg.agents.defaults.provider = name
             save_config(cfg, self.config_path)
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, "name": name})
 
     async def _api_providers_edit(self, request: web.Request) -> web.Response:
         from sarathy.config.loader import save_config

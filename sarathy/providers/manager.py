@@ -234,19 +234,35 @@ async def asyncio_to_thread(fn, *args, **kwargs):
     return await asyncio.to_thread(fn, *args, **kwargs)
 
 
-def describe_provider(name: str, cfg: "ProviderConfig") -> dict[str, Any]:
-    """Return a JSON-safe description of a configured provider."""
+def describe_provider(
+    name: str, cfg: "ProviderConfig", modalities: Any | None = None
+) -> dict[str, Any]:
+    """Return a JSON-safe description of a configured provider.
+
+    ``roles`` lists every modality (``main``/``local``/``image``) this provider
+    serves — a provider may serve several at once. ``role`` is kept as the
+    first of those for older consumers.
+    """
     kind = resolve_kind(name, cfg)
     spec = provider_spec_for(kind)
     api_base = cfg.api_base or (spec.default_api_base if spec else None)
+    roles: list[str] = []
+    if modalities is not None:
+        for role in ("main", "local", "image"):
+            binding = getattr(modalities, role, None)
+            if binding is not None and binding.provider == name:
+                roles.append(role)
+    if not roles and cfg.role:
+        roles.append(cfg.role)
     return {
         "name": name,
-        "label": cfg.label or spec.label if spec else (name.title()),
+        "label": (cfg.label or (spec.label if spec else "") or name.title()),
         "kind": kind,
         "apiBase": api_base,
         "hasApiKey": bool(cfg.api_key and cfg.api_key != "dummy"),
         "isLocal": kind in LOCAL_KINDS,
-        "role": cfg.role or "",
+        "role": roles[0] if roles else "",
+        "roles": roles,
         "model": cfg.model or "",
     }
 
@@ -404,98 +420,128 @@ class RuntimeProvider:
     ROLE_LOCAL = "local"
     ROLE_IMAGE = "image"
 
-    def provider_for(self, role: str) -> "LLMProvider | None":
-        """Resolve the provider tagged ``role`` (``main`` | ``local`` | ``image``).
+    def resolve_modality(self, role: str) -> tuple[str | None, str | None]:
+        """Resolve ``role`` to ``(provider_name, model)``.
 
-        Returns ``None`` when no provider carries that role, so callers can
-        fall back to the active provider. ``main`` falls back to the current
-        active provider when unassigned (the interactive voice is the crown).
+        Precedence:
+          1. the ``modalities.<role>`` binding, when it names a configured provider;
+          2. the legacy per-provider ``role`` tag (configs written before the
+             ``modalities`` block existed);
+          3. for ``main`` only, the active provider.
+
+        Returns ``(None, None)`` when nothing resolves, so callers can tell
+        "unassigned" from "assigned".
         """
+        if role not in (self.ROLE_MAIN, self.ROLE_LOCAL, self.ROLE_IMAGE):
+            return (None, None)
+
+        binding = getattr(self.config.modalities, role, None)
+        if binding is not None and binding.provider:
+            if binding.provider in self.config.providers:
+                cfg = self.config.providers[binding.provider]
+                return (binding.provider, binding.model or cfg.model or self.model)
+            logger.warning(
+                "Modality '{}' points at unknown provider '{}'; ignoring",
+                role,
+                binding.provider,
+            )
+
+        for name, cfg in self.config.providers.items():
+            if cfg.role == role:
+                return (name, cfg.model or self.model)
+
         if role == self.ROLE_MAIN:
-            for name, cfg in self.config.providers.items():
-                if cfg.role == self.ROLE_MAIN:
-                    return build_provider(name, cfg, cfg.model or self.model)
-            # No explicit main → the active provider is the main voice.
-            return self.provider
-        if role == self.ROLE_LOCAL:
-            for name, cfg in self.config.providers.items():
-                if cfg.role == self.ROLE_LOCAL:
-                    try:
-                        return build_provider(name, cfg, cfg.model or self.model)
-                    except Exception as e:
-                        logger.warning(
-                            "Local provider '{}' failed to build ({}); falling back to main",
-                            name,
-                            e,
-                        )
-                        return self.provider
+            return (self.config.agents.defaults.provider, self.model)
+        return (None, None)
+
+    def provider_for(self, role: str) -> "LLMProvider | None":
+        """Resolve the provider for ``role`` (``main`` | ``local`` | ``image``).
+
+        Returns ``None`` when the role is unassigned, so callers can fall back
+        to the active provider (or refuse the turn) rather than quietly running
+        on the wrong model.
+        """
+        name, model = self.resolve_modality(role)
+        if not name or name not in self.config.providers:
             return None
-        if role == self.ROLE_IMAGE:
-            for name, cfg in self.config.providers.items():
-                if cfg.role == self.ROLE_IMAGE:
-                    try:
-                        return build_provider(name, cfg, cfg.model or self.model)
-                    except Exception as e:
-                        logger.warning(
-                            "Image provider '{}' failed to build ({}); falling back to active",
-                            name,
-                            e,
-                        )
-                        return None
-            return None
-        return None
+        cfg = self.config.providers[name]
+        try:
+            return build_provider(name, cfg, model or self.model)
+        except Exception as e:
+            logger.warning(
+                "Provider '{}' for role '{}' failed to build ({}); falling back to main",
+                name,
+                role,
+                e,
+            )
+            return self.provider if role != self.ROLE_IMAGE else None
+
+    def modality_status(self) -> dict[str, Any]:
+        """Return the resolved ``{provider, model}`` for each modality."""
+        out: dict[str, Any] = {"active": self.config.agents.defaults.provider}
+        for role in (self.ROLE_MAIN, self.ROLE_LOCAL, self.ROLE_IMAGE):
+            name, model = self.resolve_modality(role)
+            out[role] = {"provider": name, "model": model}
+        return out
 
     def role_status(self) -> dict[str, Any]:
-        """Return role designations for /provider roles.
-
-        ``main`` resolves to the explicit main tag, else the active provider.
-        ``local`` is the tagged local name or None. ``image`` is the tagged
-        image name or None. Each role reports the model that would actually
-        run: the provider's own override when set, else the active/default model.
-        """
-        main_name = None
-        local_name = None
-        image_name = None
-        main_model = None
-        local_model = None
-        image_model = None
-        for name, cfg in self.config.providers.items():
-            if cfg.role == self.ROLE_MAIN:
-                main_name = name
-                main_model = cfg.model or self.model
-            elif cfg.role == self.ROLE_LOCAL:
-                local_name = name
-                local_model = cfg.model or self.model
-            elif cfg.role == self.ROLE_IMAGE:
-                image_name = name
-                image_model = cfg.model or self.model
-        if main_name is None:
-            main_name = self.config.agents.defaults.provider
-            main_model = self.model
+        """Flat role designations for ``/provider roles`` (legacy shape)."""
+        st = self.modality_status()
         return {
-            "main": main_name,
-            "main_model": main_model,
-            "local": local_name,
-            "local_model": local_model,
-            "image": image_name,
-            "image_model": image_model,
-            "active": self.config.agents.defaults.provider,
+            "main": st["main"]["provider"],
+            "main_model": st["main"]["model"],
+            "local": st["local"]["provider"],
+            "local_model": st["local"]["model"],
+            "image": st["image"]["provider"],
+            "image_model": st["image"]["model"],
+            "active": st["active"],
         }
 
+    def set_modality(self, role: str, provider_name: str, model: str | None = None) -> None:
+        """Bind ``role`` to ``provider_name`` (``""`` clears the binding).
+
+        The pairing is stored under ``modalities.<role>`` and may be shared:
+        the same provider/model can serve several modalities at once. Binding
+        ``main`` also makes the provider active, so the interactive voice and
+        the main modality never disagree.
+        """
+        if role not in (self.ROLE_MAIN, self.ROLE_LOCAL, self.ROLE_IMAGE):
+            raise ValueError("role must be 'main', 'local', or 'image'")
+        cfg = load_config(self.config_path)
+        if provider_name and provider_name not in cfg.providers:
+            raise ValueError(
+                f"Provider '{provider_name}' is not configured. "
+                f"Available: {', '.join(cfg.providers.keys())}"
+            )
+        binding = getattr(cfg.modalities, role)
+        binding.provider = provider_name
+        if model is not None:
+            binding.model = model
+        elif not provider_name:
+            binding.model = ""
+        if role == self.ROLE_MAIN and provider_name:
+            cfg.agents.defaults.provider = provider_name
+            if model:
+                cfg.agents.defaults.model = model
+        save_config(cfg, self.config_path)
+        self.config = cfg
+        self._mtime = self._file_mtime()
+        if role == self.ROLE_MAIN:
+            self.provider = create_provider(cfg)
+            self.model = cfg.agents.defaults.model
+        if self._on_change:
+            try:
+                self._on_change()
+            except Exception as e:
+                logger.warning("Runtime on_change callback failed: {}", e)
+
     def set_role(self, role: str, provider_name: str, model: str | None = None) -> None:
-        """Tag ``provider_name`` with ``role`` (``main`` | ``local`` | ``image``) and persist.
+        """Tag ``provider_name`` with ``role`` (``main`` | ``local`` | ``image``).
 
-        All three roles are exclusive: assigning a new main, local, or image
-        clears the previously tagged provider of that role. There is exactly
-        one main, at most one local, and at most one image at any time. When
-        ``model`` is given, it is stored as the provider's per-provider model
-        override (receiving the tag alone leaves any previously stored model
-        untouched).
-
-        ``role`` may also be ``""`` to un-designate the provider: it clears any
-        role tag on ``provider_name`` (and touches no other provider). Tagging a
-        provider as ``main`` also makes it the active provider, so interactive
-        turns and the main role never disagree.
+        Writes the ``modalities.<role>`` binding and mirrors the legacy
+        per-provider ``role`` tag (clearing any other provider holding it) so
+        older surfaces keep working. ``role=""`` clears the tag on
+        ``provider_name`` and any modality binding that points at it.
         """
         if role not in ("", self.ROLE_MAIN, self.ROLE_LOCAL, self.ROLE_IMAGE):
             raise ValueError("role must be '', 'main', 'local', or 'image'")
@@ -507,13 +553,23 @@ class RuntimeProvider:
             )
         if role == "":
             cfg.providers[provider_name].role = ""
+            for r in (self.ROLE_MAIN, self.ROLE_LOCAL, self.ROLE_IMAGE):
+                b = getattr(cfg.modalities, r)
+                if b.provider == provider_name:
+                    b.provider = ""
+                    b.model = ""
         else:
             for name, p in cfg.providers.items():
                 if p.role == role and name != provider_name:
                     p.role = ""
             cfg.providers[provider_name].role = role
+            b = getattr(cfg.modalities, role)
+            b.provider = provider_name
+            if model is not None:
+                b.model = model
+            elif not b.model:
+                b.model = cfg.providers[provider_name].model or ""
             if role == self.ROLE_MAIN:
-                # Keep the active provider and the main role in lockstep.
                 cfg.agents.defaults.provider = provider_name
         if model is not None:
             cfg.providers[provider_name].model = model

@@ -138,7 +138,22 @@ export interface ProviderInfo {
   isLocal: boolean;
   active: boolean;
   role: string;
+  roles: string[];
   model: string;
+}
+
+export type ModalityRole = "main" | "local" | "image";
+
+export interface ModalityBinding {
+  provider: string | null;
+  model: string | null;
+}
+
+export interface ModalitiesResponse {
+  main: ModalityBinding;
+  local: ModalityBinding;
+  image: ModalityBinding;
+  active: string;
 }
 
 export interface ProvidersResponse {

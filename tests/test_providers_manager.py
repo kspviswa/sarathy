@@ -819,3 +819,98 @@ def test_set_role_main_sets_active(tmp_path):
     assert reloaded.providers["adhoc"].role == "main"
     assert reloaded.agents.defaults.provider == "adhoc"
     assert runtime.role_status()["active"] == "adhoc"
+
+
+# ---------------------------------------------------------------------------
+# Modalities: one provider/model pairing can serve several roles at once
+# ---------------------------------------------------------------------------
+
+
+def test_same_provider_serves_all_modalities(tmp_path):
+    cfg, config_path = _role_config(tmp_path)
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+
+    runtime.set_modality("main", "adhoc", "qwen3:27b")
+    runtime.set_modality("local", "adhoc", "qwen3:27b")
+    runtime.set_modality("image", "adhoc", "qwen3:27b")
+
+    st = runtime.modality_status()
+    assert st["main"] == {"provider": "adhoc", "model": "qwen3:27b"}
+    assert st["local"] == {"provider": "adhoc", "model": "qwen3:27b"}
+    assert st["image"] == {"provider": "adhoc", "model": "qwen3:27b"}
+
+    # The pairing is what actually runs.
+    assert runtime.provider_for("local").api_base == "http://adhoc/v1"
+    assert runtime.provider_for("local").get_default_model() == "qwen3:27b"
+    assert runtime.provider_for("image").api_base == "http://adhoc/v1"
+
+
+def test_modalities_survive_reload_and_share_provider(tmp_path):
+    from sarathy.config.loader import load_config
+
+    cfg, config_path = _role_config(tmp_path)
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    runtime.set_modality("local", "adhoc", "m1")
+    runtime.set_modality("image", "adhoc", "m2")
+
+    reloaded = load_config(config_path)
+    assert reloaded.modalities.local.provider == "adhoc"
+    assert reloaded.modalities.local.model == "m1"
+    assert reloaded.modalities.image.model == "m2"
+    # Different models on the same provider are allowed per modality.
+    fresh = RuntimeProvider(reloaded, config_path=config_path)
+    assert fresh.provider_for("local").get_default_model() == "m1"
+    assert fresh.provider_for("image").get_default_model() == "m2"
+
+
+def test_set_modality_main_sets_active(tmp_path):
+    cfg, config_path = _role_config(tmp_path)
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+
+    runtime.set_modality("main", "adhoc", "qwen3:27b")
+
+    assert runtime.modality_status()["active"] == "adhoc"
+    assert runtime.provider_for("main").api_base == "http://adhoc/v1"
+
+
+def test_set_modality_empty_clears(tmp_path):
+    from sarathy.config.loader import save_config
+
+    # A config with no legacy role tags, so clearing leaves nothing behind.
+    cfg = Config()
+    cfg.agents.defaults.provider = "mainprov"
+    cfg.agents.defaults.model = "llama3"
+    cfg.providers["mainprov"] = ProviderConfig(
+        kind="custom", api_base="http://main/v1", api_key="k"
+    )
+    cfg.providers["adhoc"] = ProviderConfig(kind="custom", api_base="http://adhoc/v1", api_key="k")
+    for drop in ("ollama", "lmstudio", "vllm"):
+        cfg.providers.pop(drop)
+    save_config(cfg, tmp_path / "config.json")
+    runtime = RuntimeProvider(cfg, config_path=tmp_path / "config.json")
+
+    runtime.set_modality("local", "adhoc", "m1")
+    assert runtime.provider_for("local") is not None
+
+    runtime.set_modality("local", "", "")
+
+    assert runtime.modality_status()["local"] == {"provider": None, "model": None}
+    assert runtime.provider_for("local") is None
+
+
+def test_set_modality_unknown_provider_raises(tmp_path):
+    import pytest
+
+    cfg, config_path = _role_config(tmp_path)
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    with pytest.raises(ValueError, match="not configured"):
+        runtime.set_modality("local", "ghost", "m")
+
+
+def test_modality_overrides_legacy_role_tag(tmp_path):
+    """A modalities binding wins over a legacy per-provider role tag."""
+    cfg, config_path = _role_config(tmp_path)
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    # legacy: localprov carries role='local'; rebind via modalities.
+    runtime.set_modality("local", "adhoc", "m1")
+    assert runtime.provider_for("local").api_base == "http://adhoc/v1"

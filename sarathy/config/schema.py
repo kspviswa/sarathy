@@ -312,12 +312,40 @@ class ToolsConfig(Base):
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
+class ModalityBinding(Base):
+    """A ``provider`` + ``model`` pairing assigned to one modality (role).
+
+    ``provider`` is a key into :class:`ProvidersConfig`; ``model`` is the model
+    to run on it. Either may be empty (unassigned). The same pairing may be
+    reused across modalities — a single local endpoint can serve main, local
+    and image at once.
+    """
+
+    provider: str = ""
+    model: str = ""
+
+
+class ModalitiesConfig(Base):
+    """The provider/model pairing for each modality Sarathy speaks through.
+
+    ``main`` is the interactive voice, ``local`` backs ``/local`` and cheap
+    async side turns, ``image`` handles vision requests. This supersedes the
+    per-provider ``role`` tag (which is still read as a fallback for configs
+    written before this block existed).
+    """
+
+    main: ModalityBinding = Field(default_factory=ModalityBinding)
+    local: ModalityBinding = Field(default_factory=ModalityBinding)
+    image: ModalityBinding = Field(default_factory=ModalityBinding)
+
+
 class Config(BaseSettings):
     """Root configuration for sarathy."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    modalities: ModalitiesConfig = Field(default_factory=ModalitiesConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
 

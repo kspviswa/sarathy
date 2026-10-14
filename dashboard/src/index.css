@@ -195,6 +195,25 @@
   @apply my-2 max-h-64 rounded-lg;
 }
 
+/* The rich slash-command usage card (spec 137) renders INSIDE a `.md` bubble,
+   so the markdown defaults above bleed straight into it: its tappable rows are
+   `<li>`s, so every one picked up a disc bullet and an indent, and its `<p>`
+   hints inherited the prose margins.
+
+   `.slash-usage` opts the card back out. Doubled class on the selectors so they
+   outrank the single-class `.md ul` / `.md p` rules above regardless of source
+   order — the same trick `.md.md-on-primary` uses below. */
+.slash-usage ul,
+.slash-usage ol {
+  @apply m-0 list-none p-0;
+}
+.slash-usage li {
+  @apply my-0 list-none;
+}
+.slash-usage p {
+  @apply my-0;
+}
+
 /* Markdown inside a PRIMARY-filled (user) bubble.
    The `.md` rules above assume a card background and set `text-foreground` /
    `bg-muted` explicitly, so on the primary fill an inline code span rendered

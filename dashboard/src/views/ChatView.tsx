@@ -35,6 +35,7 @@ import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/Quote
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { TurnSegments } from "@/components/AssistantTurn";
 import { SlashAutocomplete } from "@/components/CommandPalette";
+import { SlashUsageCard, useSlashUsage } from "@/components/SlashUsageCard";
 import { UsageFooter } from "@/components/UsageFooter";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -264,11 +265,20 @@ function MessageBody({
   onOpenFile?: (path: string) => void;
   onSend?: (message: string) => void;
 }) {
+  // Slash-usage replies (the `📖 /model — …` help block, `/help`, model and
+  // provider listings, arg-less usage notices) render as a tappable card
+  // instead of a wall of monospace (spec 137 §A3). Detection lives in the shared
+  // module — this view only decides to mount it — so mobile cannot drift.
+  // `prose` is whatever the card did not account for, and still renders as
+  // markdown so no explanatory text is lost.
+  const usage = useSlashUsage(onSend ? content : "");
+  const body = usage ? usage.prose : content;
+
   // Gate on a cheap fence check so the heavy openUI renderer stays unloaded for
   // ordinary text replies. When a block IS present, prose (fences stripped) is
   // shown alongside it; otherwise the whole body renders as markdown.
-  const hasUI = useMemo(() => hasOpenUIBlock(content), [content]);
-  const chunks = useMemo(() => (hasUI ? extractProse(content) : [content]), [content, hasUI]);
+  const hasUI = useMemo(() => hasOpenUIBlock(body), [body]);
+  const chunks = useMemo(() => (hasUI ? extractProse(body) : [body]), [body, hasUI]);
 
   const markdown = useMemo(
     () =>
@@ -301,6 +311,16 @@ function MessageBody({
       )),
     [chunks, onOpenFile],
   );
+
+  if (usage) {
+    return (
+      <div className="md">
+        {markdown}
+        <SlashUsageCard parsed={usage} onSend={onSend} />
+        {streaming && <span className="streaming-caret" />}
+      </div>
+    );
+  }
 
   if (hasUI) {
     return (

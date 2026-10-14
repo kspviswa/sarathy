@@ -111,6 +111,11 @@ BUILTIN_COMMANDS = {
         description="Ask a side question that runs concurrently (delivered as soon as ready)",
         subcommands=[],
     ),
+    "local": BuiltinCommand(
+        name="local",
+        description="Ask a side question using the local provider/model",
+        subcommands=[],
+    ),
 }
 
 

@@ -133,7 +133,7 @@ describe("applyOutbound — sealed prose, one bubble per turn (spec 131 §C / 13
       progress: false,
     });
     expect(turnSegments(msgs[1])).toEqual([
-      { text: "Noted — I will remember that.", sealed: true },
+      { text: "Noted — I will remember that.", sealed: true, kind: "note" },
     ]);
   });
 
@@ -145,7 +145,7 @@ describe("applyOutbound — sealed prose, one bubble per turn (spec 131 §C / 13
     expect(msgs).toHaveLength(2);
     expect(msgs[1]).toMatchObject({ sealed: true, progress: false, turnId: "T" });
     expect(turnSegments(msgs[1])).toEqual([
-      { text: "Noted — I will remember that.", sealed: true },
+      { text: "Noted — I will remember that.", sealed: true, kind: "note" },
     ]);
   });
 
@@ -165,8 +165,8 @@ describe("applyOutbound — sealed prose, one bubble per turn (spec 131 §C / 13
     // The prose is two ordered segments in the SAME bubble: the sealed reply and
     // the follow-up answer, which is what the trail divider draws between.
     expect(turnSegments(msgs[1])).toEqual([
-      { text: "Noted — I will remember that you like tea.", sealed: true },
-      { text: "Anything else?", sealed: true },
+      { text: "Noted — I will remember that you like tea.", sealed: true, kind: "note" },
+      { text: "Anything else?", sealed: true, kind: "answer" },
     ]);
     // `content` mirrors them joined, so copy/media/`deriveLiveTurnStatus` still
     // see the whole answer.
@@ -192,9 +192,9 @@ describe("applyOutbound — sealed prose, one bubble per turn (spec 131 §C / 13
     // The regression this pins: pre-135 this rendered as three bubbles.
     expect(msgs.filter((m) => m.role === "assistant")).toHaveLength(1);
     expect(turnSegments(msgs[1])).toEqual([
-      { text: "step one", sealed: true },
-      { text: "step two", sealed: true },
-      { text: "all done", sealed: true },
+      { text: "step one", sealed: true, kind: "note" },
+      { text: "step two", sealed: true, kind: "note" },
+      { text: "all done", sealed: true, kind: "answer" },
     ]);
     expect(msgs[1].toolHints).toEqual(['exec("ls")', 'exec("pwd")']);
     expect(turnStepCount(msgs[1])).toBe(2);
@@ -214,15 +214,15 @@ describe("applyOutbound — sealed prose, one bubble per turn (spec 131 §C / 13
 
     expect(msgs).toHaveLength(2);
     expect(turnSegments(msgs[1])).toEqual([
-      { text: "sealed", sealed: true },
-      { text: "live", sealed: false },
+      { text: "sealed", sealed: true, kind: "note" },
+      { text: "live", sealed: false, kind: "answer" },
     ]);
   });
 
   it("rewrites the OPEN segment frame by frame (streamed text is cumulative)", () => {
     let msgs = applyOutbound([user("hi")], frame("Hel", { _progress: true, turn_id: "T" }));
     msgs = applyOutbound(msgs, frame("Hello", { _progress: true, turn_id: "T" }));
-    expect(turnSegments(msgs[1])).toEqual([{ text: "Hello", sealed: false }]);
+    expect(turnSegments(msgs[1])).toEqual([{ text: "Hello", sealed: false, kind: "answer" }]);
   });
 
   it("a reasoning-only turn produces no message bubble", () => {
@@ -239,7 +239,7 @@ describe("applyOutbound — sealed prose, one bubble per turn (spec 131 §C / 13
       thinkingContent: "monologue grows",
       progress: false,
     });
-    expect(turnSegments(msgs[1])).toEqual([{ text: "Done.", sealed: true }]);
+    expect(turnSegments(msgs[1])).toEqual([{ text: "Done.", sealed: true, kind: "answer" }]);
     expect(msgs[1].toolHints).toEqual(['memory_log("x")']);
     expect(msgs.some((m) => m.content.includes("monologue"))).toBe(false);
   });
@@ -252,8 +252,8 @@ describe("applyOutbound — sealed prose, one bubble per turn (spec 131 §C / 13
     expect(msgs).toHaveLength(2);
     expect(msgs[1].thinkingContent).toBe("one more thought");
     expect(turnSegments(msgs[1])).toEqual([
-      { text: "answer", sealed: true },
-      { text: "final", sealed: true },
+      { text: "answer", sealed: true, kind: "note" },
+      { text: "final", sealed: true, kind: "answer" },
     ]);
   });
 
@@ -484,7 +484,7 @@ describe("turnSegments — the read side of one bubble (spec 135 §A)", () => {
   it("reads a stored (pre-135) assistant message as one finished segment", () => {
     // What `/api/session/archive` returns: role + content, no segments.
     const stored: ChatMessage = { role: "assistant", content: "A tabby cat." };
-    expect(turnSegments(stored)).toEqual([{ text: "A tabby cat.", sealed: true }]);
+    expect(turnSegments(stored)).toEqual([{ text: "A tabby cat.", sealed: true, kind: "answer" }]);
   });
 
   it("is empty for a live turn that has only narrated so far", () => {
@@ -515,7 +515,7 @@ describe("turnSegments — the read side of one bubble (spec 135 §A)", () => {
     // A tool-call iteration with no prose at all seals nothing.
     let msgs = applyOutbound([user("go")], frame("", { _progress: true, _seal: true, turn_id: "T" }));
     msgs = applyOutbound(msgs, frame("Done.", { _final: true, turn_id: "T" }));
-    expect(turnSegments(msgs[1])).toEqual([{ text: "Done.", sealed: true }]);
+    expect(turnSegments(msgs[1])).toEqual([{ text: "Done.", sealed: true, kind: "answer" }]);
   });
 });
 

@@ -58,23 +58,69 @@ export interface TurnSegmentsProps {
   className?: string;
 }
 
+/** One rendered unit of the turn's prose: a run of notes, or one answer. */
+interface TurnRun {
+  kind: "notes" | "answer";
+  items: { text: string; streaming: boolean }[];
+}
+
 /**
- * The turn's prose: every segment, in order, separated by the trail divider.
+ * Partition the turn's prose into the shapes the bubble renders (spec 138 §A).
  *
- * The first segment sits flush with the bubble's own left edge; continuation
- * segments take a faint accent bar so the eye reads "more of the same answer"
- * instead of "a new message".
+ * Consecutive notes collapse into ONE muted block — they are a list of steps,
+ * not a sequence of paragraphs — while every answer stands alone at the bubble's
+ * full prose weight. The divider between runs is what shows the turn's shape:
+ * process above, reply below.
+ *
+ * The streaming edge always renders as an answer, never as a note: until the
+ * loop commits it nobody knows whether it is the reply, and muting it would mute
+ * the reply of every plain Q&A turn until `_final` landed.
+ */
+function turnRuns(segments: TurnSegment[], live: boolean): TurnRun[] {
+  const runs: TurnRun[] = [];
+  segments.forEach((seg, i) => {
+    const streaming = live && !seg.sealed && i === segments.length - 1;
+    const kind: TurnRun["kind"] = seg.kind === "note" && seg.sealed ? "notes" : "answer";
+    const last = runs[runs.length - 1];
+    if (kind === "notes" && last?.kind === "notes") {
+      last.items.push({ text: seg.text, streaming });
+      return;
+    }
+    runs.push({ kind, items: [{ text: seg.text, streaming }] });
+  });
+  return runs;
+}
+
+/**
+ * The turn's prose, packed by kind (spec 135 §A, spec 138 §A).
+ *
+ * The monologue the loop narrates between tool calls is packed as a muted,
+ * ruled list; the turn's answer keeps the bubble's full prose weight. Before
+ * this, both rendered identically, so a finished turn read as a wall of
+ * equal-weight prose in which the reply was indistinguishable from the process
+ * (Viswa: "all this … is your monologue … but still your final partials").
  */
 export function TurnSegments({ segments, live, renderSegment, className }: TurnSegmentsProps) {
   if (!segments.length) return null;
+  const runs = turnRuns(segments, live);
   return (
     <div className={cn("flex flex-col", className)} data-testid="assistant-turn-segments">
-      {segments.map((seg, i) => (
-        <div key={i} className={cn("trail-segment", i > 0 && "trail-continue")}>
+      {runs.map((run, i) => (
+        <div key={i} className="trail-segment">
           {i > 0 && <TrailDivider />}
-          <div className={cn("md", i > 0 && "border-l-2 border-primary/20 pl-3")}>
-            {renderSegment(seg.text, live && !seg.sealed)}
-          </div>
+          {run.kind === "notes" ? (
+            <div className="trail-notes" data-testid="trail-notes">
+              {run.items.map((item, j) => (
+                <div key={j} className="trail-note" data-testid="trail-note">
+                  {renderSegment(item.text, item.streaming)}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="trail-answer" data-testid="trail-answer">
+              {renderSegment(run.items[0].text, run.items[0].streaming)}
+            </div>
+          )}
         </div>
       ))}
     </div>

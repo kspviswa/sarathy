@@ -740,3 +740,82 @@ class TestHandleProviderRole:
         assert reloaded.providers["ollama"].role == "local"
         assert reloaded.providers["ollama"].model == ""
         assert runtime.provider_for("local").get_default_model() == "llama3"
+
+
+# ---------------------------------------------------------------------------
+# Model selection independent of role, and role clearing
+# ---------------------------------------------------------------------------
+
+
+def test_describe_provider_includes_model():
+    from sarathy.providers.manager import describe_provider
+
+    cfg = ProviderConfig(kind="custom", api_base="http://x/v1", api_key="k", model="qwen3:27b")
+    desc = describe_provider("x", cfg)
+    assert desc["model"] == "qwen3:27b"
+    assert describe_provider("y", ProviderConfig(kind="custom", api_base="http://y/v1"))["model"] == ""
+
+
+def test_set_model_without_role_persists(tmp_path):
+    """A model can be chosen for a provider that carries no role."""
+    cfg, config_path = _role_config(tmp_path)
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+
+    runtime.set_model("adhoc", "qwen3:14b")
+
+    from sarathy.config.loader import load_config
+
+    reloaded = load_config(config_path)
+    assert reloaded.providers["adhoc"].model == "qwen3:14b"
+    assert reloaded.providers["adhoc"].role == ""
+
+
+def test_set_model_empty_clears_override(tmp_path):
+    cfg, config_path = _role_config(tmp_path)
+    cfg.providers["localprov"].model = "qwen3:27b"
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+
+    runtime.set_model("localprov", "")
+
+    from sarathy.config.loader import load_config
+
+    assert load_config(config_path).providers["localprov"].model == ""
+
+
+def test_set_model_unknown_provider_raises(tmp_path):
+    import pytest
+
+    cfg, config_path = _role_config(tmp_path)
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+    with pytest.raises(ValueError, match="not configured"):
+        runtime.set_model("nope", "m")
+
+
+def test_set_role_empty_clears_role(tmp_path):
+    cfg, config_path = _role_config(tmp_path)
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+
+    runtime.set_role("", "localprov")
+
+    from sarathy.config.loader import load_config
+
+    reloaded = load_config(config_path)
+    assert reloaded.providers["localprov"].role == ""
+    # other providers untouched
+    assert reloaded.providers["mainprov"].role == "main"
+    assert runtime.provider_for("local") is None
+
+
+def test_set_role_main_sets_active(tmp_path):
+    """Tagging main keeps the active provider in lockstep."""
+    cfg, config_path = _role_config(tmp_path)
+    runtime = RuntimeProvider(cfg, config_path=config_path)
+
+    runtime.set_role("main", "adhoc")
+
+    from sarathy.config.loader import load_config
+
+    reloaded = load_config(config_path)
+    assert reloaded.providers["adhoc"].role == "main"
+    assert reloaded.agents.defaults.provider == "adhoc"
+    assert runtime.role_status()["active"] == "adhoc"

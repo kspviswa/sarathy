@@ -160,6 +160,12 @@ export const api = {
       body: JSON.stringify({ role, model }),
     }),
 
+  setProviderModel: (name: string, model: string) =>
+    request<{ ok: boolean; model: string }>(`/api/providers/${encodeURIComponent(name)}/model`, {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    }),
+
   setRuntime: (data: { provider?: string; model?: string }) =>
     request<RuntimeSetResponse>("/api/runtime", {
       method: "POST",

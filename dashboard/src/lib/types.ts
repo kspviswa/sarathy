@@ -138,6 +138,7 @@ export interface ProviderInfo {
   isLocal: boolean;
   active: boolean;
   role: string;
+  model: string;
 }
 
 export interface ProvidersResponse {

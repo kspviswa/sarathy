@@ -247,6 +247,7 @@ def describe_provider(name: str, cfg: "ProviderConfig") -> dict[str, Any]:
         "hasApiKey": bool(cfg.api_key and cfg.api_key != "dummy"),
         "isLocal": kind in LOCAL_KINDS,
         "role": cfg.role or "",
+        "model": cfg.model or "",
     }
 
 
@@ -490,21 +491,58 @@ class RuntimeProvider:
         ``model`` is given, it is stored as the provider's per-provider model
         override (receiving the tag alone leaves any previously stored model
         untouched).
+
+        ``role`` may also be ``""`` to un-designate the provider: it clears any
+        role tag on ``provider_name`` (and touches no other provider). Tagging a
+        provider as ``main`` also makes it the active provider, so interactive
+        turns and the main role never disagree.
         """
-        if role not in (self.ROLE_MAIN, self.ROLE_LOCAL, self.ROLE_IMAGE):
-            raise ValueError("role must be 'main', 'local', or 'image'")
+        if role not in ("", self.ROLE_MAIN, self.ROLE_LOCAL, self.ROLE_IMAGE):
+            raise ValueError("role must be '', 'main', 'local', or 'image'")
         cfg = load_config(self.config_path)
         if provider_name not in cfg.providers:
             raise ValueError(
                 f"Provider '{provider_name}' is not configured. "
                 f"Available: {', '.join(cfg.providers.keys())}"
             )
-        for name, p in cfg.providers.items():
-            if p.role == role and name != provider_name:
-                p.role = ""
-        cfg.providers[provider_name].role = role
-        if model:
+        if role == "":
+            cfg.providers[provider_name].role = ""
+        else:
+            for name, p in cfg.providers.items():
+                if p.role == role and name != provider_name:
+                    p.role = ""
+            cfg.providers[provider_name].role = role
+            if role == self.ROLE_MAIN:
+                # Keep the active provider and the main role in lockstep.
+                cfg.agents.defaults.provider = provider_name
+        if model is not None:
             cfg.providers[provider_name].model = model
+        save_config(cfg, self.config_path)
+        self.config = cfg
+        self._mtime = self._file_mtime()
+        if role == self.ROLE_MAIN:
+            self.provider = create_provider(cfg)
+            self.model = cfg.agents.defaults.model
+        if self._on_change:
+            try:
+                self._on_change()
+            except Exception as e:
+                logger.warning("Runtime on_change callback failed: {}", e)
+
+    def set_model(self, provider_name: str, model: str) -> None:
+        """Persist a per-provider model override, independent of any role.
+
+        Works for any provider — main, local, image, or un-designated. An empty
+        ``model`` clears the override (the provider then uses the active/default
+        model).
+        """
+        cfg = load_config(self.config_path)
+        if provider_name not in cfg.providers:
+            raise ValueError(
+                f"Provider '{provider_name}' is not configured. "
+                f"Available: {', '.join(cfg.providers.keys())}"
+            )
+        cfg.providers[provider_name].model = model or ""
         save_config(cfg, self.config_path)
         self.config = cfg
         self._mtime = self._file_mtime()

@@ -1,4 +1,15 @@
-import { Loader2, Pencil, Plus, RefreshCw, RotateCw, Save, Trash2 } from "lucide-react";
+import {
+  Bot,
+  Cpu,
+  Image as ImageIcon,
+  Loader2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  RotateCw,
+  Save,
+  Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -22,7 +33,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { DevicesPanel } from "@/components/DevicesPanel";
 import { api } from "@/lib/api";
-import type { ConfigResponse, ProviderInfo } from "@/lib/types";
+import type { ConfigResponse, ModalitiesResponse, ModalityRole, ProviderInfo } from "@/lib/types";
 
 type FieldType = "text" | "number" | "boolean" | "select";
 
@@ -108,10 +119,34 @@ function fromFormValue(v: string, field: FieldDef): unknown {
   return v;
 }
 
-const MODALITIES: { role: "main" | "local" | "image"; label: string; blurb: string }[] = [
-  { role: "main", label: "Main (Sarathy)", blurb: "The default voice for chat and voice turns." },
-  { role: "local", label: "Local", blurb: "Used by /local and cheap async side turns." },
-  { role: "image", label: "Image", blurb: "Vision / image-understanding requests." },
+const MODALITIES: {
+  role: ModalityRole;
+  label: string;
+  blurb: string;
+  Icon: typeof Bot;
+  tint: string;
+}[] = [
+  {
+    role: "main",
+    label: "Main",
+    blurb: "Sarathy's own voice — chat, voice notes and interactive turns.",
+    Icon: Bot,
+    tint: "text-violet-500",
+  },
+  {
+    role: "local",
+    label: "Local",
+    blurb: "Backs /local and cheap async side turns on your own hardware.",
+    Icon: Cpu,
+    tint: "text-emerald-500",
+  },
+  {
+    role: "image",
+    label: "Image",
+    blurb: "Vision — describes pictures before the main model sees them.",
+    Icon: ImageIcon,
+    tint: "text-sky-500",
+  },
 ];
 
 export function ConfigView() {
@@ -124,14 +159,17 @@ export function ConfigView() {
   const [restarting, setRestarting] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [modalities, setModalities] = useState<ModalitiesResponse | null>(null);
   const [modelSuggestions, setModelSuggestions] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
 
-  const reloadProviders = useCallback(() => {
-    return api
-      .providers()
-      .then((res) => setProviders(res.providers))
-      .catch(() => setProviders([]));
+  const reloadProviders = useCallback(async () => {
+    const [p, m] = await Promise.all([
+      api.providers().catch(() => ({ providers: [], active: "" })),
+      api.modalities().catch(() => null),
+    ]);
+    setProviders(p.providers);
+    if (m) setModalities(m);
   }, []);
 
   useEffect(() => {
@@ -268,7 +306,11 @@ export function ConfigView() {
     <div className="mx-auto w-full max-w-2xl space-y-4 p-4">
       <ProvidersSection providers={providers} reload={reloadProviders} />
 
-      <ModalitiesSection providers={providers} reload={reloadProviders} />
+      <ModalitiesSection
+        providers={providers}
+        modalities={modalities}
+        reload={reloadProviders}
+      />
 
       {restartRequired ? (
         <Card className="border-primary/40 bg-primary/5">
@@ -440,7 +482,7 @@ function FieldRow({
 // Providers
 // ---------------------------------------------------------------------------
 
-const slugOk = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+const KINDS = ["custom", "ollama", "lmstudio", "vllm", "litellm"] as const;
 const v1Ok = (base: string) => base.trim().replace(/\/+$/, "").endsWith("/v1");
 
 function ProvidersSection({
@@ -452,29 +494,24 @@ function ProvidersSection({
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ProviderInfo | null>(null);
-  const [form, setForm] = useState({ name: "", apiBase: "", apiKey: "", label: "" });
+  const [form, setForm] = useState({ name: "", kind: "custom", apiBase: "", apiKey: "" });
   const [busy, setBusy] = useState(false);
 
   const openAdd = () => {
     setEditing(null);
-    setForm({ name: "", apiBase: "", apiKey: "", label: "" });
+    setForm({ name: "", kind: "custom", apiBase: "", apiKey: "" });
     setDialogOpen(true);
   };
 
   const openEdit = (p: ProviderInfo) => {
     setEditing(p);
-    setForm({ name: p.name, apiBase: p.apiBase ?? "", apiKey: "", label: p.label });
+    setForm({ name: p.label, kind: p.kind, apiBase: p.apiBase ?? "", apiKey: "" });
     setDialogOpen(true);
   };
 
-  const nameError = form.name && !slugOk(form.name) ? "Use letters, digits and underscores" : "";
   const baseError =
-    form.apiBase && !v1Ok(form.apiBase)
-      ? "Base URL must end with /v1"
-      : !editing && !form.apiBase
-        ? "Base URL is required"
-        : "";
-  const canSubmit = !!form.name && !nameError && !!form.apiBase && !baseError && !busy;
+    form.apiBase && !v1Ok(form.apiBase) ? "Base URL must end with /v1" : !form.apiBase ? "Base URL is required" : "";
+  const canSubmit = !!form.name.trim() && !baseError && !busy;
 
   async function submit() {
     if (!canSubmit) return;
@@ -483,20 +520,21 @@ function ProvidersSection({
       if (editing) {
         const body: Record<string, unknown> = {
           apiBase: form.apiBase.trim(),
-          label: form.label.trim() || form.name,
+          label: form.name.trim(),
+          kind: form.kind,
         };
         if (form.apiKey.trim()) body.apiKey = form.apiKey.trim();
         await api.editProvider(editing.name, body);
-        toast.success(`Provider '${editing.name}' updated`);
+        toast.success(`“${form.name.trim()}” updated`);
       } else {
-        await api.addProvider({
-          name: form.name.trim(),
-          kind: "custom",
+        const res = await api.addProvider({
+          label: form.name.trim(),
+          kind: form.kind,
           apiBase: form.apiBase.trim(),
           apiKey: form.apiKey.trim() || undefined,
-          label: form.label.trim() || form.name.trim(),
         });
-        toast.success(`Provider '${form.name.trim()}' added`);
+        toast.success(`“${form.name.trim()}” added`);
+        void res;
       }
       setDialogOpen(false);
       await reload();
@@ -508,10 +546,10 @@ function ProvidersSection({
   }
 
   async function remove(p: ProviderInfo) {
-    if (!window.confirm(`Remove provider '${p.name}'?`)) return;
+    if (!window.confirm(`Remove “${p.label}”?`)) return;
     try {
       await api.removeProvider(p.name);
-      toast.success(`Provider '${p.name}' removed`);
+      toast.success(`“${p.label}” removed`);
       await reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to remove provider");
@@ -523,7 +561,7 @@ function ProvidersSection({
       <CardHeader className="flex flex-row items-start justify-between gap-3">
         <div>
           <CardTitle>Providers</CardTitle>
-          <CardDescription>OpenAI-compatible endpoints Sarathy can talk to.</CardDescription>
+          <CardDescription>Endpoints Sarathy can talk to — any number, any mix.</CardDescription>
         </div>
         <Button size="sm" onClick={openAdd}>
           <Plus />
@@ -541,13 +579,13 @@ function ProvidersSection({
                   <div className="min-w-0">
                     <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
                       <span className="truncate">{p.label}</span>
-                      {p.role ? (
-                        <Badge variant={p.role === "main" ? "default" : "secondary"} className="text-[10px]">
-                          {p.role}
+                      {p.roles.map((r) => (
+                        <Badge key={r} variant={r === "main" ? "default" : "secondary"} className="text-[10px]">
+                          {r}
                         </Badge>
-                      ) : null}
+                      ))}
                     </p>
-                    <p className="truncate text-xs text-muted-foreground">{p.name}</p>
+                    <p className="truncate text-xs capitalize text-muted-foreground">{p.kind}</p>
                   </div>
                   <div className="flex shrink-0 gap-1">
                     <Button size="icon" variant="ghost" className="size-7" onClick={() => openEdit(p)} title="Edit">
@@ -558,8 +596,8 @@ function ProvidersSection({
                       variant="ghost"
                       className="size-7 text-destructive"
                       onClick={() => void remove(p)}
-                      disabled={p.role === "main"}
-                      title={p.role === "main" ? "Cannot remove the main provider" : "Remove"}
+                      disabled={p.roles.includes("main")}
+                      title={p.roles.includes("main") ? "Cannot remove the main provider" : "Remove"}
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
@@ -582,8 +620,7 @@ function ProvidersSection({
           <DialogHeader>
             <DialogTitle>{editing ? "Edit provider" : "Add provider"}</DialogTitle>
             <DialogDescription>
-              Point Sarathy at an OpenAI-compatible endpoint. The base URL must end in{" "}
-              <code className="rounded bg-muted px-1">/v1</code>.
+              Give it any name you like — add as many as you need, even several of the same kind.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4">
@@ -592,12 +629,25 @@ function ProvidersSection({
               <Input
                 id="pv-name"
                 value={form.name}
-                disabled={!!editing}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="openrouter"
+                placeholder="Ollama S1"
                 spellCheck={false}
               />
-              {nameError ? <p className="text-xs text-destructive">{nameError}</p> : null}
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="pv-kind">Type</Label>
+              <Select value={form.kind} onValueChange={(v) => setForm((f) => ({ ...f, kind: v }))}>
+                <SelectTrigger id="pv-kind">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {KINDS.map((k) => (
+                    <SelectItem key={k} value={k}>
+                      {k}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="pv-base">Base URL</Label>
@@ -605,7 +655,7 @@ function ProvidersSection({
                 id="pv-base"
                 value={form.apiBase}
                 onChange={(e) => setForm((f) => ({ ...f, apiBase: e.target.value }))}
-                placeholder="https://openrouter.ai/api/v1"
+                placeholder="http://192.168.0.18:1234/v1"
                 spellCheck={false}
               />
               {baseError ? <p className="text-xs text-destructive">{baseError}</p> : null}
@@ -643,9 +693,11 @@ function ProvidersSection({
 
 function ModalitiesSection({
   providers,
+  modalities,
   reload,
 }: {
   providers: ProviderInfo[];
+  modalities: ModalitiesResponse | null;
   reload: () => Promise<void>;
 }) {
   return (
@@ -653,44 +705,53 @@ function ModalitiesSection({
       <CardHeader>
         <CardTitle>Modalities</CardTitle>
         <CardDescription>
-          Assign a provider and model to each role. The pairing is what Sarathy uses.
+          Pick a provider and a model for each role. Any pairing can be reused across roles.
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col divide-y">
+      <CardContent className="flex flex-col gap-3">
         {MODALITIES.map((m) => (
-          <ModalityRow key={m.role} role={m.role} label={m.label} blurb={m.blurb} providers={providers} reload={reload} />
+          <ModalityCard
+            key={m.role}
+            role={m.role}
+            label={m.label}
+            blurb={m.blurb}
+            Icon={m.Icon}
+            tint={m.tint}
+            providers={providers}
+            binding={modalities ? modalities[m.role] : null}
+            reload={reload}
+          />
         ))}
       </CardContent>
     </Card>
   );
 }
 
-function ModalityRow({
+function ModalityCard({
   role,
   label,
   blurb,
+  Icon,
+  tint,
   providers,
+  binding,
   reload,
 }: {
-  role: "main" | "local" | "image";
+  role: ModalityRole;
   label: string;
   blurb: string;
+  Icon: typeof Bot;
+  tint: string;
   providers: ProviderInfo[];
+  binding: { provider: string | null; model: string | null } | null;
   reload: () => Promise<void>;
 }) {
-  const current = providers.find((p) => p.role === role);
-  const [providerName, setProviderName] = useState(current?.name ?? "");
-  const [model, setModel] = useState(current?.model ?? "");
+  const providerName = binding?.provider ?? "";
+  const model = binding?.model ?? "";
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    setProviderName(current?.name ?? "");
-    setModel(current?.model ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.name, current?.model]);
 
   const loadModels = useCallback(async (name: string) => {
     if (!name) return;
@@ -712,47 +773,16 @@ function ModalityRow({
     else setModels([]);
   }, [providerName, loadModels]);
 
-  async function chooseProvider(next: string) {
-    if (!next) {
-      // Clear this modality.
-      const holder = current?.name;
-      setProviderName("");
-      if (holder) {
-        try {
-          await api.setProviderRole(holder, "");
-          toast.success(`${label} cleared`);
-          await reload();
-        } catch (err) {
-          toast.error(err instanceof Error ? err.message : "Failed to clear role");
-        }
-      }
-      return;
-    }
-    setProviderName(next);
-    setModel("");
+  async function save(nextProvider: string, nextModel: string) {
     setBusy(true);
     try {
-      await api.setProviderRole(next, role);
-      toast.success(`${label} → ${next}`);
+      await api.setModality(role, nextProvider, nextModel);
       await reload();
+      if (nextProvider && nextModel) toast.success(`${label} → ${nextProvider}/${nextModel}`);
+      else if (nextProvider) toast.success(`${label} → ${nextProvider}`);
+      else toast.success(`${label} cleared`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to set role");
-      setProviderName(current?.name ?? "");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function chooseModel(next: string) {
-    setModel(next);
-    if (!providerName || !next) return;
-    setBusy(true);
-    try {
-      await api.setProviderRole(providerName, role, next);
-      toast.success(`${label} → ${providerName}/${next}`);
-      await reload();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to set model");
+      toast.error(err instanceof Error ? err.message : `Failed to update ${label}`);
     } finally {
       setBusy(false);
     }
@@ -761,7 +791,7 @@ function ModalityRow({
   const providerOptions: ComboboxOption[] = providers.map((p) => ({
     value: p.name,
     label: p.label,
-    hint: p.role && p.role !== role ? p.role : undefined,
+    hint: p.roles.length ? p.roles.join(", ") : undefined,
   }));
 
   const modelOptions: ComboboxOption[] = [];
@@ -769,20 +799,26 @@ function ModalityRow({
   for (const m of models) modelOptions.push({ value: m, label: m });
 
   return (
-    <div className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0">
-      <div>
-        <p className="flex items-center gap-2 text-sm font-medium">
-          {label}
-          {busy ? <Loader2 className="size-3.5 animate-spin text-muted-foreground" /> : null}
-        </p>
-        <p className="text-xs text-muted-foreground">{blurb}</p>
+    <div className="rounded-lg border p-3">
+      <div className="mb-3 flex items-start gap-3">
+        <div className={`mt-0.5 ${tint}`}>
+          <Icon className="size-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-2 text-sm font-semibold">
+            {label}
+            {busy ? <Loader2 className="size-3.5 animate-spin text-muted-foreground" /> : null}
+          </p>
+          <p className="text-xs text-muted-foreground">{blurb}</p>
+        </div>
       </div>
+
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-2">
           <Label>Provider</Label>
           <Combobox
             value={providerName}
-            onChange={(v) => void chooseProvider(v)}
+            onChange={(v) => void save(v, "")}
             options={providerOptions}
             placeholder="Select provider…"
             searchPlaceholder="Search providers…"
@@ -795,24 +831,15 @@ function ModalityRow({
             <div className="flex items-center gap-2">
               <Input
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
+                onChange={(e) => void save(providerName, e.target.value)}
                 placeholder="Type a model id"
                 spellCheck={false}
               />
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => void chooseModel(model)}
-                disabled={!providerName || !model || busy}
-                title="Save model"
-              >
-                <Save />
-              </Button>
             </div>
           ) : (
             <Combobox
               value={model}
-              onChange={(v) => void chooseModel(v)}
+              onChange={(v) => void save(providerName, v)}
               options={modelOptions}
               placeholder={providerName ? "Select model…" : "Pick a provider first"}
               searchPlaceholder="Search models…"
@@ -821,23 +848,26 @@ function ModalityRow({
               loading={loading}
             />
           )}
-          {!error && providerName ? (
-            <button
-              type="button"
-              className="self-start text-[11px] text-muted-foreground underline-offset-2 hover:underline"
-              onClick={() => void loadModels(providerName)}
-            >
-              {models.length ? `${models.length} models — refresh` : "refresh models"}
-            </button>
-          ) : null}
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Using{" "}
-        <code className="rounded bg-muted px-1">
-          {providerName ? `${providerName}/${model || "—"}` : "not configured"}
-        </code>
-      </p>
+
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          Using{" "}
+          <code className="rounded bg-muted px-1">
+            {providerName ? `${providerName}/${model || "—"}` : "not configured"}
+          </code>
+        </p>
+        {providerName && !error ? (
+          <button
+            type="button"
+            className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+            onClick={() => void loadModels(providerName)}
+          >
+            {models.length ? `${models.length} models — refresh` : "refresh models"}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

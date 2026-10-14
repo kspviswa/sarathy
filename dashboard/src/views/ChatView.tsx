@@ -51,7 +51,7 @@ import {
   type Quote,
   type QuoteChip,
 } from "@/lib/quotes";
-import { deriveLiveTurnStatus, turnSegments, type TurnSegment } from "@/lib/transcript";
+import { deriveLiveTurnStatus, liveBubbleIndex, turnSegments, type TurnSegment } from "@/lib/transcript";
 import type { SlashCommand } from "@/lib/palette";
 import type { ReactionState } from "@/lib/reactions";
 import { UIBlock, extractProse, hasOpenUIBlock } from "@/lib/uiBlocks";
@@ -508,6 +508,14 @@ export function ChatView({
   // The live strip's label: the turn's newest narrated phase, or the fallback
   // (spec 134 §B). Derived in `lib/transcript.ts`, shared with mobile.
   const liveStatus = useMemo(() => deriveLiveTurnStatus(messages), [messages]);
+
+  // Which bubble the turn in flight is writing (spec 135 §A follow-up). The
+  // session-wide `streaming` flag says a turn is running, not WHICH bubble it is
+  // in — so the live treatment is applied through this index, never to every row.
+  const liveIndex = useMemo(
+    () => (streaming ? liveBubbleIndex(messages) : -1),
+    [streaming, messages],
+  );
 
   useEffect(() => {
     return () => {
@@ -988,7 +996,11 @@ export function ChatView({
             <MessageRow
               key={m.bubbleId ?? m.turnId ?? m.messageId ?? i}
               message={m}
-              streaming={streaming}
+              /* The live treatment belongs to the bubble the turn in flight is
+                 writing — never to every bubble because the SESSION is streaming
+                 (spec 135 §A follow-up: the pulse and the caret used to appear on
+                 finished answers too). */
+              live={streaming && i === liveIndex}
               /* Only the NEWEST bubble animates in (job 132 §E): the class is
                  on a stable keyed node, so it fires once on mount and a
                  streaming reply does not re-trigger it frame by frame. */
@@ -1020,7 +1032,7 @@ export function ChatView({
 
 function MessageRow({
   message,
-  streaming,
+  live: liveProp,
   animate = false,
   onOpenFile,
   onRegenerate,
@@ -1028,7 +1040,14 @@ function MessageRow({
   onSend,
 }: {
   message: ChatMessage;
-  streaming: boolean;
+  /**
+   * Whether this bubble is the one the turn in flight is writing
+   * (`liveBubbleIndex`). NOT the session-wide `streaming` flag: reading that
+   * directly painted the live affordances onto every finished bubble above the
+   * live one, and left the caret blinking on a turn that ended without a
+   * `_final` frame (voice replies, `/stop`).
+   */
+  live: boolean;
   /** Fade the bubble in on mount (job 132 §E). */
   animate?: boolean;
   onOpenFile?: (path: string) => void;
@@ -1040,7 +1059,7 @@ function MessageRow({
   const isNotice = !isUser && Boolean(message.notice);
   const segments = useMemo(() => (isUser || isNotice ? [] : turnSegments(message)), [message, isUser, isNotice]);
   const hasContent = segments.length > 0;
-  const live = !isUser && !isNotice && (streaming || Boolean(message.progress));
+  const live = !isUser && !isNotice && liveProp;
 
   // The collapse header is the turn's only status row (spec 135 §A). It renders
   // whenever the turn has something to show — prose, a tool call, reasoning —
@@ -1158,6 +1177,7 @@ function MessageRow({
              prose is identical on both surfaces; only the body renderer is not. */
           <TurnSegments
             segments={segments}
+            live={live}
             renderSegment={(text, isStreaming) => (
               <MessageBody content={cleanRenderedContent(text)} streaming={isStreaming} onOpenFile={onOpenFile} onSend={onSend} />
             )}

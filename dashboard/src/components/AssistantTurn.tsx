@@ -40,9 +40,19 @@ function TrailDivider() {
 export interface TurnSegmentsProps {
   segments: TurnSegment[];
   /**
+   * Whether this bubble is the one the turn in flight is writing
+   * (`liveBubbleIndex`). Required, not defaulted: a caller that forgets it would
+   * silently either keep the old "caret on a finished answer" bug (default true)
+   * or drop the caret from a live answer (default false). Only a live bubble may
+   * show a streaming caret — an unsealed trailing segment on a finished turn just
+   * means the turn ended without a `_final` frame (voice replies, `/stop`).
+   */
+  live: boolean;
+  /**
    * Renders one segment's prose. `streaming` is true for the trailing unsealed
-   * segment, which is where the caret belongs. Implementations own their own
-   * caret (the desktop `MessageBody` / mobile `AssistantBody` both append one).
+   * segment of a LIVE bubble, which is where the caret belongs. Implementations
+   * own their own caret (the desktop `MessageBody` / mobile `AssistantBody` both
+   * append one).
    */
   renderSegment: (text: string, streaming: boolean) => ReactNode;
   className?: string;
@@ -55,7 +65,7 @@ export interface TurnSegmentsProps {
  * segments take a faint accent bar so the eye reads "more of the same answer"
  * instead of "a new message".
  */
-export function TurnSegments({ segments, renderSegment, className }: TurnSegmentsProps) {
+export function TurnSegments({ segments, live, renderSegment, className }: TurnSegmentsProps) {
   if (!segments.length) return null;
   return (
     <div className={cn("flex flex-col", className)} data-testid="assistant-turn-segments">
@@ -63,7 +73,7 @@ export function TurnSegments({ segments, renderSegment, className }: TurnSegment
         <div key={i} className={cn("trail-segment", i > 0 && "trail-continue")}>
           {i > 0 && <TrailDivider />}
           <div className={cn("md", i > 0 && "border-l-2 border-primary/20 pl-3")}>
-            {renderSegment(seg.text, !seg.sealed)}
+            {renderSegment(seg.text, live && !seg.sealed)}
           </div>
         </div>
       ))}

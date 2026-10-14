@@ -488,10 +488,10 @@ class TestDashboardNewApis(AioHTTPTestCase):
         resp = await self.client.request("GET", "/api/commands", headers=self._auth())
         assert resp.status == 200
         data = await resp.json()
-        # 19 builtins after /local joined the registry (spec 137 §C1). The count
+        # 20 builtins after /diary joined the registry (spec 138 §A1). The count
         # is pinned deliberately: adding a command must be a conscious bump here,
         # not a silent change to what the palette advertises.
-        assert data["count"] == len(BUILTIN_COMMANDS) == 19
+        assert data["count"] == len(BUILTIN_COMMANDS) == 20
         names = {c["name"] for c in data["commands"]}
         assert names == set(BUILTIN_COMMANDS)
         assert "local" in names

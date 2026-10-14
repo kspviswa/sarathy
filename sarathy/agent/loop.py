@@ -70,6 +70,165 @@ TOPIC_MAX_WORDS = 8
 # image is replaced by a "(timed out)" hint and the turn proceeds.
 IMAGE_DESCRIBE_TIMEOUT_S = 120.0
 
+# --------------------------------------------------------------------------- #
+# /diary — the Charitham biographer side turn (spec 138)
+# --------------------------------------------------------------------------- #
+
+# The narrow prompt's craft source. Resolved against the gateway workspace
+# first (~/.sarathy/workspace in production), then at its canonical location so
+# the prompt survives a workspace that moved.
+DIARY_SKILL_NAME = "diary-biographer"
+DIARY_SKILL_PATH = "/home/kspviswa/.sarathy/workspace/skills/diary-biographer/SKILL.md"
+
+# Charitham's capture CLI. Absolute path, invoked with python3 — the biographer
+# has no other way in.
+DIARY_CLI = "/home/kspviswa/portals/charitham/diary.py"
+
+DIARY_SOURCES = ("telegram", "discord", "email", "dashboard", "cli")
+
+# Instruction block that precedes the craft. Deliberately short and imperative:
+# the failure this prompt exists to fix is a 12B model replying conversationally
+# and never firing the tool, so the call is stated as mandatory and shown
+# literally, twice, with the exact command shape.
+DIARY_SYSTEM_PREAMBLE = """You are Sarathy's diary biographer. You write Viswa's life into \
+Charitham.
+
+You have exactly ONE job: the message below is first-person life content from
+Viswa — record it into the diary by calling the `exec` tool, then reply with one
+short line. You do not chat, you do not explain yourself, you do not ask
+questions. Your only tool is `exec`; there is nothing else you can or need to do.
+
+STEP 1 — DECIDE IF IT IS AN ENTRY.
+Record it when the message is first-person life content: events that happened to
+him, his family (Viyaan) or friends; moods and feelings; reflections and
+realisations; decisions about his LIFE and the reasoning behind them.
+Do NOT record technical instructions, work or task requests, code changes, job
+commands, project admin, or anything addressed to Sarathy-as-assistant. If it is
+clearly one of those, reply in ONE short line saying it is not a diary entry and
+make NO tool call at all.
+If it is genuinely ambiguous, record it anyway and pass `--confidence low`.
+
+STEP 2 — WRITE THE THREE LAYERS.
+  raw       : his exact words, verbatim and unedited. Never reword, never
+              tidy, never translate them.
+  narrative : 2-5 sentences of third-person biographical prose ("Viswa ...").
+              What happened AND the mood underneath it — the arc, not a log
+              line. Warm, precise, restrained. Never invent detail: the facts
+              are his, the prose is yours. No advice, no judgement, no
+              flattery, no moralising.
+  thread    : 1-2 sentences connecting this entry to earlier ones — how it
+              continues, echoes or turns a previous thread of his life. Run
+              `python3 {cli} search "<topic>"` first if you need the thread.
+              If it is genuinely the first of its kind, say so briefly.
+  mood      : exactly one of
+              joyful content calm grateful excited reflective curious
+              determined tired anxious low sad angry restless mixed
+  people    : comma-separated names, e.g. "Viyaan,Family" (omit the flag if none)
+  tags      : comma-separated, lowercase, e.g. "family,milestone"
+
+STEP 3 — RUN THE CAPTURE (MANDATORY).
+For EVERY entry — even a single sentence — you MUST run this with `exec`:
+
+  python3 {cli} add \\
+    --raw "<his verbatim words>" \\
+    --narrative "<your prose>" \\
+    --thread "<how it connects>" \\
+    --mood <one value from the taxonomy> \\
+    --people "A,B" \\
+    --tags "x,y" \\
+    --source {source}
+
+`--source {source}` is where this entry came from. The CLI prints the new entry
+id; you do not need to quote it back, just make sure the call succeeded.
+
+QUOTING IS YOUR PROBLEM TO SOLVE. His words can contain quotes, $, backticks
+and newlines, so NEVER paste raw text straight into a double-quoted flag. Write
+every long field to a temp file with a quoted heredoc and pass it with
+"$(cat file)" — the shell never re-parses what comes out of the substitution:
+
+  cat > /tmp/diary_raw.txt <<'DIARY_EOF'
+  ...his verbatim words, exactly as written...
+  DIARY_EOF
+  python3 {cli} add \\
+    --raw "$(cat /tmp/diary_raw.txt)" \\
+    --narrative "$(cat /tmp/diary_narrative.txt)" \\
+    --thread "$(cat /tmp/diary_thread.txt)" \\
+    --mood calm --people "Viyaan" --tags "family" --source {source}
+
+mood, people, tags and source are short and safe to write inline. Use
+`--when <ISO>` only when he explicitly asks to backdate the entry.
+
+STEP 4 — IMAGES.
+When the message carries `[attached media: <paths>]`, the turn also carries
+`[image description: ...]` text describing those images (one per image, in the
+same order). Pass BOTH of them to the same `add` call:
+
+  --images "<p1>,<p2>"        # comma-separated absolute paths, as listed
+  --image-desc "<d1>||<d2>"    # double-pipe separated, positionally aligned
+
+If the CLI rejects `--images` (an older build without the flag), run the same
+add WITHOUT `--images`/`--image-desc` and append those descriptions to the end
+of `--narrative` instead. Never drop the images silently.
+
+STEP 5 — THE ACK.
+After a successful call, reply with ONE short line in Sarathy's voice, e.g.
+"Noted, sir." That is all. No summary of what you wrote, no quotation of the
+command, no questions, no judgement, no advice.
+
+THE ONE RULE THAT MATTERS: NO questions, NO judgement, NO advice. If he wants
+advice he will ask for it outside this task. Violating that is the worst thing
+you can do here."""
+
+# Housekeeping that belongs to the gateway rather than the craft skill.
+DIARY_SYSTEM_EPILOGUE = """Reference (CLI):
+  python3 {cli} add ...   capture an entry (the command above)
+  python3 {cli} search "<q>"   find earlier entries (for the thread layer)
+  python3 {cli} list --limit 1   most recent entries
+  python3 {cli} show <id>    one entry
+  python3 {cli} stats     counts
+Storage: ~/.sarathy/diary/diary.db (SQLite + FTS5), Markdown mirror in
+~/.sarathy/diary/entries/YYYY-MM.md, browsable at http://127.0.0.1/charitham/."""
+
+
+def _sanitize_source(channel: str | None) -> str:
+    """Map a channel name onto a `--source` value the CLI understands."""
+    c = (channel or "").strip().lower()
+    return c if c in DIARY_SOURCES else "cli"
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Drop a leading YAML frontmatter block (skill metadata, not craft)."""
+    if not text.startswith("---"):
+        return text
+    parts = text.split("\n---", 1)
+    if len(parts) == 2 and "\n" in parts[0]:
+        return parts[1]
+    return text
+
+
+# Used when skills/diary-biographer/SKILL.md is missing: the same contract in
+# miniature, so `/diary` still records correctly on a fresh workspace.
+DIARY_CRAFT_FALLBACK = """# Diary craft (embedded fallback — SKILL.md not found)
+
+Trigger: record first-person life content (events, family, moods, reflections,
+life decisions). Refuse technical/work instructions with one short line and no
+tool call. Ambiguous → record with `--confidence low`.
+
+Three layers: `raw` is his exact words, verbatim. `narrative` is 2-4 sentences
+of third-person biographical prose ("Viswa ..."), warm and restrained, capturing
+what happened and the mood underneath. `thread` is 1-2 sentences connecting the
+entry to earlier ones (`diary.py search "<topic>"` when needed).
+
+Mood taxonomy (fixed, lowercase, one value): joyful content calm grateful
+excited reflective curious determined tired anxious low sad angry restless
+mixed. `people` and `tags` are comma-separated.
+
+Tone: third person, past tense for the narrative, present for the thread. No
+flattery, no diagnosis, no moralising, no invented detail. Facts are his; the
+prose is mine.
+
+The ack is one short line — "Noted, sir." — and nothing else."""
+
 
 def strip_topic_marker(content: str) -> tuple[str, str | None]:
     """Split the trailing `<topic>` marker off user-facing content.
@@ -587,8 +746,14 @@ class AgentLoop:
         session_metadata: dict | None = None,
         steer_queue: asyncio.Queue | None = None,
         session_key: str | None = None,
+        tools_override: list[dict] | None = None,
     ) -> tuple[str | None, list[str], list[dict], dict]:
-        """Run the agent iteration loop. Returns (final_content, tools_used, messages, stats)."""
+        """Run the agent iteration loop. Returns (final_content, tools_used, messages, stats).
+
+        ``tools_override`` narrows the advertised tool set for one turn (the
+        `/diary` biographer gets `exec` only). ``None`` keeps the live registry
+        lookup on every iteration, exactly as before.
+        """
         streaming_enabled = False
         session_streaming = session_metadata.get("streaming", False) if session_metadata else False
 
@@ -663,7 +828,11 @@ class AgentLoop:
             try:
                 response = await self.provider.chat(
                     messages=messages,
-                    tools=self.tools.get_definitions(),
+                    tools=(
+                        tools_override
+                        if tools_override is not None
+                        else self.tools.get_definitions()
+                    ),
                     model=self.model,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
@@ -885,6 +1054,8 @@ class AgentLoop:
                 await self._handle_btw(msg)
             elif lowered.startswith("/local"):
                 await self._handle_local(msg)
+            elif lowered.startswith("/diary"):
+                await self._handle_diary(msg)
             else:
                 self._spawn_dispatch(msg)
 
@@ -1055,6 +1226,110 @@ class AgentLoop:
         )
         asyncio.create_task(self._run_btw_turn(msg, text, provider_role="local", side_tag="local"))
 
+    async def _handle_diary(self, msg: InboundMessage) -> None:
+        """Handle /diary: capture first-person life content into Charitham.
+
+        A side turn like `/local` — but pinned to the `local` role AND given a
+        narrow biography-only system prompt with the `exec` tool alone. The
+        full ~19k-token prompt (AGENTS/SOUL/skills/KB) plus all 8 tools let a
+        12B local model answer conversationally with zero tool calls (proven
+        2026-10-14 on `/local`); this turn gives it exactly one job and one way
+        to do it, so the `diary.py add` call actually fires.
+        """
+        parts = msg.content.split(None, 1)
+        text = parts[1].strip() if len(parts) > 1 else ""
+        if not text:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=(
+                        "Usage: /diary <text>\n\n"
+                        "Write a life entry into your Charitham diary. Runs on the local "
+                        "biographer model — first-person prose only, no technical requests."
+                    ),
+                    metadata={"_notice": True},
+                )
+            )
+            return
+
+        # No local provider → say so and stop. Silently logging from the main
+        # (cloud) model would break the whole point of `/diary`.
+        if self._resolve_side_provider("local") is None:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=(
+                        "⚠️ No local provider is configured. "
+                        "Set one first with `/provider role local <name> [model]`."
+                    ),
+                    metadata={"_notice": True},
+                )
+            )
+            return
+
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="📔 DIARY noted — logging on the local biographer model.",
+                metadata={"_notice": True},
+            )
+        )
+        asyncio.create_task(
+            self._run_btw_turn(
+                msg,
+                text,
+                provider_role="local",
+                side_tag="diary",
+                system_prompt_override=self._build_diary_system_prompt(channel=msg.channel),
+                tools_override=self._diary_tool_definitions(),
+                media=msg.media or None,
+            )
+        )
+
+    def _diary_tool_definitions(self) -> list[dict]:
+        """The exec-only tool set a `/diary` turn is allowed to see."""
+        return [
+            t for t in self.tools.get_definitions() if t.get("function", {}).get("name") == "exec"
+        ]
+
+    def _build_diary_system_prompt(self, channel: str | None = None) -> str:
+        """Build the narrow `/diary` system prompt.
+
+        The craft comes from the workspace skill `diary-biographer/SKILL.md`
+        (read at runtime so editing the skill edits the biographer), wrapped in
+        the explicit instruction block a 12B model needs: what to record, the
+        three layers, and the mandatory `diary.py add` call. Falls back to a
+        compact embedded prompt when the skill file is missing, so a `/diary`
+        turn degrades to "less craft", never to a crash.
+        """
+        source = _sanitize_source(channel)
+        craft = self._read_diary_skill_craft()
+        return (
+            DIARY_SYSTEM_PREAMBLE.format(cli=DIARY_CLI, source=source)
+            + "\n\n---\n\n"
+            + DIARY_SYSTEM_EPILOGUE.format(cli=DIARY_CLI)
+            + "\n\n---\n\n"
+            + craft
+        )
+
+    def _read_diary_skill_craft(self) -> str:
+        """Read the diary-biographer skill; return the embedded fallback if absent."""
+        candidates = [
+            self.workspace / "skills" / DIARY_SKILL_NAME / "SKILL.md",
+            Path(DIARY_SKILL_PATH),
+        ]
+        for path in candidates:
+            try:
+                if path.is_file():
+                    return _strip_frontmatter(path.read_text(encoding="utf-8")).strip()
+            except OSError as e:
+                logger.warning("Could not read diary skill {}: {}", path, e)
+        logger.info("Diary skill not found; using the embedded biographer prompt")
+        return DIARY_CRAFT_FALLBACK
+
     def _resolve_side_provider(self, provider_role: str) -> Any | None:
         """Resolve the provider a side turn should run on.
 
@@ -1078,14 +1353,22 @@ class AgentLoop:
         *,
         provider_role: str | None = None,
         side_tag: str = "btw",
+        system_prompt_override: str | None = None,
+        tools_override: list[dict] | None = None,
+        media: list[str] | None = None,
     ) -> None:
         """Run a concurrent side turn against a snapshot of the main session.
 
-        Shared by `/btw` (the active provider) and `/local` (the provider tagged
-        with ``provider_role``). The provider swap is scoped to this task and
-        restored in the `finally`, so the main session's active provider/model is
-        never mutated by a side turn. Frames keep the `_btw` tagging that the
-        dashboard transcript and the Telegram channel already understand.
+        Shared by `/btw` (the active provider), `/local` (the provider tagged
+        with ``provider_role``) and `/diary` (the local role, narrowed further).
+        The provider swap is scoped to this task and restored in the `finally`,
+        so the main session's active provider/model is never mutated by a side
+        turn. Frames keep the `_btw` tagging that the dashboard transcript and
+        the Telegram channel already understand.
+
+        ``system_prompt_override`` / ``tools_override`` / ``media`` are opt-in
+        and all default to ``None``, which leaves `/btw` and `/local` byte-for-byte
+        on the full prompt, the full registry and no media.
         """
         key = msg.session_key
         try:
@@ -1130,10 +1413,12 @@ class AgentLoop:
                 messages = self.context.build_messages(
                     history=snapshot,
                     current_message=btw_text,
+                    media=media,
                     channel=msg.channel,
                     chat_id=msg.chat_id,
                     history_budget_tokens=self._history_budget_tokens(),
                     model=side_model,
+                    system_prompt_override=system_prompt_override,
                 )
 
                 effective_reasoning_effort = (
@@ -1171,6 +1456,7 @@ class AgentLoop:
                     channel=msg.channel,
                     steer_queue=steer_queue,
                     session_key=side_key,
+                    tools_override=tools_override,
                 )
 
                 await self.bus.publish_outbound(

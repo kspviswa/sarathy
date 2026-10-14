@@ -121,15 +121,22 @@ describe.each([
     expect(within(segments).getByText("The first is a cat.")).toBeInTheDocument();
     expect(within(segments).getByText("The second is a bus.")).toBeInTheDocument();
 
-    // Three segments → two dividers, and the glyph that makes the trail a
-    // deliberate pause rather than a stray border.
+    // Spec 138 §A: the two narration segments are packed as ONE muted notes
+    // block, and the divider marks the step from process to reply. The trail is
+    // still there — it is just no longer drawn between *every* pair.
+    const notes = screen.getByTestId("trail-notes");
+    expect(within(notes).getAllByTestId("trail-note")).toHaveLength(2);
+    expect(within(notes).getByText(/Two images; let me look at both\./)).toBeInTheDocument();
+    expect(within(notes).getByText("The first is a cat.")).toBeInTheDocument();
+
     const dividers = screen.getAllByTestId("trail-divider");
-    expect(dividers).toHaveLength(2);
+    expect(dividers).toHaveLength(1);
     expect(dividers[0]).toHaveTextContent("⁂");
-    // The two CONTINUATION segments carry the faint left accent bar; the first
-    // sits flush with the bubble's own edge.
-    expect(segments.querySelectorAll(".trail-continue")).toHaveLength(2);
-    expect(segments.querySelectorAll(".trail-segment")).toHaveLength(3);
+
+    // The answer is NOT in the notes block: it keeps the bubble's full prose.
+    const answer = screen.getByTestId("trail-answer");
+    expect(within(answer).getByText("The second is a bus.")).toBeInTheDocument();
+    expect(within(notes).queryByText("The second is a bus.")).toBeNull();
   });
 
   it("keeps reasoning and tool calls in the ONE collapse header, as chips", () => {
@@ -323,6 +330,9 @@ describe("both SPAs render the same shared turn module", () => {
       "The second is a bus.",
     ]);
     expect(segments.every((s) => s.sealed)).toBe(true);
+    // …and each segment knows which half of the turn it is (spec 138 §A): the
+    // prose shipped with a tool call is a note, the `_final` is the answer.
+    expect(segments.map((s) => s.kind)).toEqual(["note", "note", "answer"]);
   });
 });
 /**

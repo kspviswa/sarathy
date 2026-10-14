@@ -37,9 +37,23 @@ import type { ChatMessage } from "@/views/ChatView";
  * a tool call) or `_final` (the turn's answer). The one trailing `false` is the
  * streaming segment, and it is where the caret rides.
  */
+/** Which half of a turn a segment belongs to (spec 135 §C). */
+export type TurnSegmentKind = "note" | "answer";
+
 export interface TurnSegment {
   text: string;
   sealed: boolean;
+  /**
+   * `note` — the loop's between-tool narration. It IS part of the turn's
+   *   thinking, but it was being rendered as the reply (Viswa: "all this … is
+   *   your monologue … but still your final partials"), so it is packed as a
+   *   muted trail and the answer keeps the bubble's full prose weight.
+   * `answer` — the turn's actual reply (`_final`). A segment still streaming is
+   *   also `answer`: the live edge is prose until the loop commits it one way or
+   *   the other, so a plain Q&A turn streams at full weight instead of muting
+   *   the answer and popping it at `_final`.
+   */
+  kind: TurnSegmentKind;
 }
 
 /** True when a streaming frame may be folded into `last`. */
@@ -111,7 +125,7 @@ const SEGMENT_JOIN = "\n\n";
 function bubbleSegments(m: ChatMessage): TurnSegment[] {
   if (m.segments) return m.segments;
   const text = m.content ?? "";
-  return text ? [{ text, sealed: true }] : [];
+  return text ? [{ text, sealed: true, kind: "answer" }] : [];
 }
 
 /**
@@ -134,12 +148,16 @@ function openSegmentIndex(segments: TurnSegment[]): number {
  * Streamed prose: rewrite the open segment in place (`_progress` frames carry
  * the whole draft of the current iteration, not a delta). Once the segment is
  * sealed the next iteration opens a NEW segment of the SAME bubble.
+ *
+ * The open segment is always `kind: "answer"` — the live edge is written at the
+ * bubble's full prose weight, because until the iteration ends nobody knows
+ * whether it is the reply or another step of the monologue.
  */
 function withStreamedProse(target: ChatMessage, text: string): Pick<ChatMessage, "segments" | "content"> {
   const segments = [...bubbleSegments(target)];
   const open = openSegmentIndex(segments);
-  if (open >= 0) segments[open] = { text, sealed: false };
-  else segments.push({ text, sealed: false });
+  if (open >= 0) segments[open] = { text, sealed: false, kind: "answer" };
+  else segments.push({ text, sealed: false, kind: "answer" });
   return segmentsPatch(segments);
 }
 
@@ -147,12 +165,22 @@ function withStreamedProse(target: ChatMessage, text: string): Pick<ChatMessage,
  * Committed prose (`_seal` / `_final`): seal the open segment, or open-and-seal
  * a new one when every earlier segment is already committed. Either way the
  * turn stays in ONE bubble.
+ *
+ * `kind` is decided here, at commit time, and it is the WHOLE difference between
+ * the monologue and the reply: `_seal` means the loop shipped this prose
+ * alongside a tool call (process — a note), `_final` means it is the turn's
+ * answer. The reducer used to discard that distinction, which is why the
+ * monologue rendered as if it were the reply.
  */
-function withCommittedProse(target: ChatMessage, text: string): Pick<ChatMessage, "segments" | "content"> {
+function withCommittedProse(
+  target: ChatMessage,
+  text: string,
+  kind: TurnSegmentKind,
+): Pick<ChatMessage, "segments" | "content"> {
   const segments = [...bubbleSegments(target)];
   const open = openSegmentIndex(segments);
-  if (open >= 0) segments[open] = { text: text || segments[open].text, sealed: true };
-  else segments.push({ text, sealed: true });
+  if (open >= 0) segments[open] = { text: text || segments[open].text, sealed: true, kind };
+  else segments.push({ text, sealed: true, kind });
   return segmentsPatch(segments);
 }
 
@@ -160,7 +188,7 @@ function withCommittedProse(target: ChatMessage, text: string): Pick<ChatMessage
 function withAppendedProse(target: ChatMessage, text: string): Pick<ChatMessage, "segments" | "content"> {
   const segments = [...bubbleSegments(target)];
   const last = segments.length - 1;
-  if (last < 0) return segmentsPatch([{ text, sealed: false }]);
+  if (last < 0) return segmentsPatch([{ text, sealed: false, kind: "answer" }]);
   segments[last] = { ...segments[last], text: segments[last].text + text };
   return segmentsPatch(segments);
 }
@@ -208,7 +236,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     if (turnIdx >= 0) {
       const target = prev[turnIdx];
       return replaceAt(prev, turnIdx, {
-        ...withCommittedProse(target, m.content),
+        ...withCommittedProse(target, m.content, "note"),
         media: m.media?.length ? m.media : target.media,
         progress: false,
         sealed: true,
@@ -218,7 +246,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
-        ...segmentsPatch([{ text: m.content, sealed: true }]),
+        ...segmentsPatch([{ text: m.content, sealed: true, kind: "note" }]),
         progress: false,
         sealed: true,
         media: m.media?.length ? m.media : undefined,
@@ -240,7 +268,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
-        ...segmentsPatch([{ text: m.content, sealed: false }]),
+        ...segmentsPatch([{ text: m.content, sealed: false, kind: "answer" }]),
         media: m.media,
         replyTo: m.replyTo,
         turnId,
@@ -257,7 +285,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     if (turnIdx >= 0) {
       const target = prev[turnIdx];
       return replaceAt(prev, turnIdx, {
-        ...withCommittedProse(target, m.content),
+        ...withCommittedProse(target, m.content, "answer"),
         progress: false,
         media: m.media?.length ? m.media : target.media,
         replyTo: m.replyTo ?? target.replyTo,
@@ -273,7 +301,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     }
     if (!turnId && mergeable && !last.progress) {
       return replaceLast(prev, {
-        ...withCommittedProse(last, m.content),
+        ...withCommittedProse(last, m.content, "answer"),
         progress: false,
         media: m.media?.length ? m.media : last.media,
         replyTo: m.replyTo ?? last.replyTo,
@@ -283,7 +311,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
-        ...segmentsPatch([{ text: m.content, sealed: true }]),
+        ...segmentsPatch([{ text: m.content, sealed: true, kind: "answer" }]),
         media: m.media,
         replyTo: m.replyTo,
         turnId,
@@ -353,7 +381,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
-        ...segmentsPatch([{ text: m.content, sealed: false }]),
+        ...segmentsPatch([{ text: m.content, sealed: false, kind: "answer" }]),
         progress: true,
         turnId,
         bubbleId: nextBubbleId(prev, turnId),
@@ -381,7 +409,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     ...prev,
     {
       role: "assistant",
-      ...segmentsPatch([{ text: m.content, sealed: false }]),
+      ...segmentsPatch([{ text: m.content, sealed: false, kind: "answer" }]),
       media: m.media,
       replyTo: m.replyTo,
       turnId,

@@ -903,3 +903,107 @@ async def test_logout_clears_media_cookie(tmp_path) -> None:
         assert resp.status == 200
         cleared = resp.cookies.get("sarathy_media")
         assert cleared is not None and cleared.value == ""
+
+
+# ---------------------------------------------------------------------------
+# Provider endpoints: roles + model selection
+# ---------------------------------------------------------------------------
+
+
+async def _authed_client_with_runtime(tmp_path) -> tuple[TestClient, DashboardChannel]:
+    from sarathy.config.schema import ProviderConfig
+    from sarathy.providers.manager import RuntimeProvider
+
+    config_path = tmp_path / "config.json"
+    workspace = tmp_path / "ws"
+    cfg = Config()
+    cfg.channels.dashboard.enabled = True
+    cfg.channels.dashboard.pairing_keys = ["test-key"]
+    cfg.agents.defaults.workspace = str(workspace)
+    cfg.agents.defaults.provider = "mainprov"
+    cfg.agents.defaults.model = "llama3"
+    cfg.providers["mainprov"] = ProviderConfig(
+        kind="custom", api_base="http://main/v1", api_key="k", role="main"
+    )
+    cfg.providers["adhoc"] = ProviderConfig(kind="custom", api_base="http://adhoc/v1", api_key="k")
+    for drop in ("ollama", "lmstudio", "vllm"):
+        cfg.providers.pop(drop)
+    save_config(cfg, config_path)
+
+    session_manager = SessionManager(cfg, workspace=workspace)
+    channel = DashboardChannel(
+        cfg.channels.dashboard,
+        MessageBus(),
+        session_manager=session_manager,
+        config_path=config_path,
+        devices_path=config_path.parent / "devices.json",
+        runtime=RuntimeProvider(cfg, config_path=config_path),
+    )
+    client = TestClient(TestServer(channel._build_app()))
+    return client, channel
+
+
+@pytest.mark.asyncio
+async def test_providers_list_includes_role_and_model(tmp_path) -> None:
+    client, _ = await _authed_client_with_runtime(tmp_path)
+    async with client:
+        token = await _pair(client)
+        resp = await client.get("/api/providers", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status == 200
+        data = await resp.json()
+        by_name = {p["name"]: p for p in data["providers"]}
+        assert by_name["mainprov"]["role"] == "main"
+        assert by_name["adhoc"]["role"] == ""
+        assert by_name["mainprov"]["model"] == ""
+        assert data["active"] == "mainprov"
+
+
+@pytest.mark.asyncio
+async def test_set_provider_role_local_then_clear(tmp_path) -> None:
+    client, _ = await _authed_client_with_runtime(tmp_path)
+    async with client:
+        token = await _pair(client)
+        h = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.post("/api/providers/adhoc/role", json={"role": "local"}, headers=h)
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["local"] == "adhoc"
+
+        # Clearing with an empty role un-designates it.
+        resp = await client.post("/api/providers/adhoc/role", json={"role": ""}, headers=h)
+        assert resp.status == 200
+        assert (await resp.json())["local"] is None
+
+
+@pytest.mark.asyncio
+async def test_set_provider_model_is_role_independent(tmp_path) -> None:
+    client, _ = await _authed_client_with_runtime(tmp_path)
+    async with client:
+        token = await _pair(client)
+        h = {"Authorization": f"Bearer {token}"}
+
+        # adhoc has no role; model selection must still work.
+        resp = await client.post(
+            "/api/providers/adhoc/model", json={"model": "qwen3:14b"}, headers=h
+        )
+        assert resp.status == 200
+        assert (await resp.json())["model"] == "qwen3:14b"
+
+        resp = await client.get("/api/providers", headers=h)
+        by_name = {p["name"]: p for p in (await resp.json())["providers"]}
+        assert by_name["adhoc"]["model"] == "qwen3:14b"
+        assert by_name["adhoc"]["role"] == ""
+
+
+@pytest.mark.asyncio
+async def test_set_provider_model_unknown_provider_404(tmp_path) -> None:
+    client, _ = await _authed_client_with_runtime(tmp_path)
+    async with client:
+        token = await _pair(client)
+        resp = await client.post(
+            "/api/providers/nope/model",
+            json={"model": "m"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status == 404

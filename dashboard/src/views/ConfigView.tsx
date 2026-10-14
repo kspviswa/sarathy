@@ -1,4 +1,4 @@
-import { Loader2, RefreshCw, RotateCw, Save } from "lucide-react";
+import { Check, Loader2, RefreshCw, RotateCw, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -113,6 +113,13 @@ export function ConfigView() {
   const [modelSuggestions, setModelSuggestions] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
 
+  const reloadProviders = () => {
+    api
+      .providers()
+      .then((res) => setProviders(res.providers))
+      .catch(() => setProviders([]));
+  };
+
   useEffect(() => {
     api
       .getConfig()
@@ -128,10 +135,7 @@ export function ConfigView() {
       .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load config"))
       .finally(() => setLoading(false));
 
-    api
-      .providers()
-      .then((res) => setProviders(res.providers))
-      .catch(() => setProviders([]));
+    reloadProviders();
   }, []);
 
   const setField = (path: string, value: string) => {
@@ -254,7 +258,6 @@ export function ConfigView() {
           setModelSuggestions([]);
         }}
       />
-      <ImageModelControl providers={providers} />
       {restartRequired ? (
         <Card className="border-primary/40 bg-primary/5">
           <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -423,183 +426,95 @@ function FieldRow({
 
 const KINDS = ["custom", "ollama", "lmstudio", "vllm", "litellm"] as const;
 
-function ImageModelControl({ providers }: { providers: ProviderInfo[] }) {
-  const [imageProvider, setImageProvider] = useState<ProviderInfo | null>(null);
-  const [imageModel, setImageModel] = useState("");
-  const [saving, setSaving] = useState(false);
+const ROLE_OPTIONS: { value: string; label: string }[] = [
+  { value: "none", label: "No role" },
+  { value: "main", label: "Main — default voice" },
+  { value: "local", label: "Local — /local & async" },
+  { value: "image", label: "Image — vision" },
+];
 
-  useEffect(() => {
-    const current = providers.find((p) => p.role === "image");
-    if (current) {
-      setImageProvider(current);
-    }
-  }, [providers]);
-
-  async function handleSave() {
-    if (!imageProvider) return;
-    setSaving(true);
-    try {
-      await api.setProviderRole(imageProvider.name, "image", imageModel || undefined);
-      toast.success(`Image provider set to ${imageProvider.label}${imageModel ? ` (${imageModel})` : ""}`);
-      // Refresh will be triggered by parent
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to set image provider");
-    } finally {
-      setSaving(false);
-    }
+function roleBadge(role: string): { label: string; variant: "default" | "secondary" | "outline" } | null {
+  switch (role) {
+    case "main":
+      return { label: "main", variant: "default" };
+    case "local":
+      return { label: "local", variant: "secondary" };
+    case "image":
+      return { label: "image", variant: "outline" };
+    default:
+      return null;
   }
-
-  async function handleClear() {
-    if (!imageProvider) return;
-    setSaving(true);
-    try {
-      // Clear the image role by setting it to empty string - we need a different approach
-      // The backend doesn't support clearing a role directly, so we'd need to implement that
-      // For now, we just show a message
-      toast.info("To clear the image provider, assign the image role to a different provider");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to clear image provider");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Image Model</CardTitle>
-        <CardDescription>
-          Dedicated vision model for describing images. When set, all image content is sent to this provider
-          for description before the main model processes the turn.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <div className="flex-1">
-            <Label htmlFor="image-provider">Provider</Label>
-            <Select value={imageProvider?.name ?? ""} onValueChange={(v) => {
-              const p = providers.find((p) => p.name === v);
-              setImageProvider(p ?? null);
-              if (p) setImageModel("");
-            }}>
-              <SelectTrigger id="image-provider">
-                <SelectValue placeholder="Select image provider" />
-              </SelectTrigger>
-              <SelectContent>
-                {providers.map((p) => (
-                  <SelectItem key={p.name} value={p.name}>
-                    {p.label} ({p.kind})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex-1">
-            <Label htmlFor="image-model">Model (optional)</Label>
-            <Input
-              id="image-model"
-              value={imageModel}
-              onChange={(e) => setImageModel(e.target.value)}
-              placeholder="e.g. gpt-4o, claude-3-5-sonnet"
-              spellCheck={false}
-            />
-          </div>
-          <Button onClick={() => void handleSave()} disabled={saving || !imageProvider}>
-            <Save className="size-4" />
-            {saving ? "Saving…" : "Save"}
-          </Button>
-        </div>
-        {imageProvider && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Badge variant="secondary">Current: {imageProvider.label}</Badge>
-            {imageModel && <span>Model: {imageModel}</span>}
-            <Button variant="ghost" size="sm" onClick={handleClear}>
-              Clear
-            </Button>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
 }
 
-function ProvidersManager({ onActiveChanged }: { onActiveChanged: (name: string) => void }) {
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<ProviderInfo | null>(null);
-  const [form, setForm] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-  const [modelsFor, setModelsFor] = useState<string | null>(null);
+function ProviderCard({ provider, onChanged }: { provider: ProviderInfo; onChanged: () => void }) {
+  const [role, setRole] = useState(provider.role || "none");
+  const [model, setModel] = useState(provider.model || "");
   const [models, setModels] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [roleBusy, setRoleBusy] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<Record<string, string>>({});
 
-  const refresh = () => {
-    api
-      .providers()
-      .then((res) => setProviders(res.providers))
-      .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load providers"))
-      .finally(() => setLoading(false));
-  };
+  useEffect(() => setRole(provider.role || "none"), [provider.role]);
+  useEffect(() => setModel(provider.model || ""), [provider.model]);
 
-  useEffect(() => {
-    refresh();
-  }, []);
+  const datalistId = `models-${provider.name}`;
+  const badge = roleBadge(provider.role);
 
-  const openAdd = () => {
-    setEditing(null);
-    setForm({ kind: "custom", apiBase: "", apiKey: "", label: "" });
-  };
-
-  const openEdit = (p: ProviderInfo) => {
-    setEditing(p);
-    setForm({
-      name: p.name,
-      kind: p.kind,
-      apiBase: p.apiBase ?? "",
-      apiKey: "",
-      label: p.label,
-    });
-  };
-
-  async function submit() {
-    const name = (form.name ?? "").trim();
-    if (!name) {
-      toast.error("Provider name is required");
-      return;
+  async function applyRole(next: string) {
+    setRole(next);
+    setRoleBusy(true);
+    try {
+      await api.setProviderRole(provider.name, next === "none" ? "" : next);
+      toast.success(
+        next === "none" ? `Cleared the role on ${provider.label}` : `${provider.label} set as ${next}`,
+      );
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set role");
+      setRole(provider.role || "none");
+    } finally {
+      setRoleBusy(false);
     }
+  }
+
+  async function loadModels() {
+    setLoadingModels(true);
+    try {
+      const res = await api.providerModels(provider.name);
+      setModels(res.models);
+      if (!res.models.length) toast.warning(`No models returned by '${provider.name}'`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `Failed to fetch models from '${provider.name}'`);
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  async function saveModel() {
     setBusy(true);
     try {
-      if (editing) {
-        const body: Record<string, unknown> = { apiBase: form.apiBase, label: form.label, kind: form.kind };
-        if (form.apiKey.trim()) body.apiKey = form.apiKey.trim();
-        await api.editProvider(editing.name, body);
-        toast.success(`Provider '${editing.name}' updated`);
-      } else {
-        await api.addProvider({
-          name,
-          kind: form.kind,
-          apiBase: form.apiBase,
-          apiKey: form.apiKey.trim() || undefined,
-          label: form.label || name,
-        });
-        toast.success(`Provider '${name}' added`);
-      }
-      setEditing(null);
-      setForm({});
-      refresh();
+      const value = model.trim();
+      await api.setProviderModel(provider.name, value);
+      toast.success(
+        value ? `Model for ${provider.label} set to ${value}` : `Model override cleared for ${provider.label}`,
+      );
+      onChanged();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save provider");
+      toast.error(err instanceof Error ? err.message : "Failed to set model");
     } finally {
       setBusy(false);
     }
   }
 
-  async function remove(p: ProviderInfo) {
-    if (!window.confirm(`Remove provider '${p.name}'?`)) return;
+  async function remove() {
+    if (!window.confirm(`Remove provider '${provider.name}'?`)) return;
     setBusy(true);
     try {
-      await api.removeProvider(p.name);
-      toast.success(`Provider '${p.name}' removed`);
-      refresh();
+      await api.removeProvider(provider.name);
+      toast.success(`Provider '${provider.name}' removed`);
+      onChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to remove provider");
     } finally {
@@ -607,30 +522,224 @@ function ProvidersManager({ onActiveChanged }: { onActiveChanged: (name: string)
     }
   }
 
-  async function activate(p: ProviderInfo) {
+  async function submitEdit() {
     setBusy(true);
     try {
-      const res = await api.setRuntime({ provider: p.name });
-      if (res.applied) toast.success(`Active provider set to '${p.name}' (no restart)`);
-      else toast.warning("Provider set — gateway restart required");
-      refresh();
-      onActiveChanged(p.name);
+      const body: Record<string, unknown> = {
+        apiBase: form.apiBase ?? "",
+        label: form.label ?? "",
+        kind: form.kind ?? provider.kind,
+      };
+      if ((form.apiKey ?? "").trim()) body.apiKey = (form.apiKey ?? "").trim();
+      await api.editProvider(provider.name, body);
+      toast.success(`Provider '${provider.name}' updated`);
+      setEditing(false);
+      setForm({});
+      onChanged();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to switch provider");
+      toast.error(err instanceof Error ? err.message : "Failed to save provider");
     } finally {
       setBusy(false);
     }
   }
 
-  async function showModels(p: ProviderInfo) {
-    setModelsFor(p.name);
-    setModels([]);
+  return (
+    <div className="flex flex-col gap-3 rounded-md border p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+            {provider.label}
+            {provider.active ? (
+              <Badge variant="outline" className="text-[10px]">
+                active
+              </Badge>
+            ) : null}
+            {badge ? (
+              <Badge variant={badge.variant} className="text-[10px]">
+                {badge.label}
+              </Badge>
+            ) : null}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">
+            {provider.name} · {provider.kind} · {provider.apiBase ?? "no endpoint"}
+            {provider.hasApiKey ? " · apiKey set" : ""}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-1">
+          <Button size="sm" variant="ghost" onClick={() => {
+            setEditing((v) => !v);
+            setForm({ kind: provider.kind, apiBase: provider.apiBase ?? "", apiKey: "", label: provider.label });
+          }}>
+            Edit
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive"
+            onClick={() => void remove()}
+            disabled={provider.active || busy}
+          >
+            Remove
+          </Button>
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="flex flex-col gap-2 rounded-md bg-muted/40 p-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Select value={form.kind ?? provider.kind} onValueChange={(v) => setForm((f) => ({ ...f, kind: v }))}>
+              <SelectTrigger className="sm:w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {KINDS.map((k) => (
+                  <SelectItem key={k} value={k}>
+                    {k}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              placeholder="API base URL"
+              value={form.apiBase ?? ""}
+              onChange={(e) => setForm((f) => ({ ...f, apiBase: e.target.value }))}
+            />
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              placeholder="API key (leave blank to keep)"
+              value={form.apiKey ?? ""}
+              onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))}
+            />
+            <Input
+              placeholder="Label"
+              value={form.label ?? ""}
+              onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => void submitEdit()} disabled={busy}>
+              {busy ? "Saving…" : "Save"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setForm({}); }}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`role-${provider.name}`}>Role</Label>
+          <Select value={role} onValueChange={(v) => void applyRole(v)} disabled={roleBusy}>
+            <SelectTrigger id={`role-${provider.name}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {ROLE_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`model-${provider.name}`}>Model</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              id={`model-${provider.name}`}
+              list={datalistId}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="provider default"
+              spellCheck={false}
+            />
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => void loadModels()}
+              disabled={loadingModels}
+              title="List models from this provider"
+            >
+              <RefreshCw className={loadingModels ? "animate-spin" : ""} />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => void saveModel()}
+              disabled={busy}
+              title="Save model for this provider"
+            >
+              <Check />
+            </Button>
+          </div>
+          {models.length > 0 && (
+            <datalist id={datalistId}>
+              {models.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProvidersManager({ onActiveChanged }: { onActiveChanged: (name: string) => void }) {
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () => {
+    api
+      .providers()
+      .then((res) => {
+        setProviders(res.providers);
+        const active = res.providers.find((p) => p.active);
+        if (active) onActiveChanged(active.name);
+      })
+      .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load providers"))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const openAdd = () => {
+    setAdding(true);
+    setForm({ kind: "custom", apiBase: "", apiKey: "", label: "" });
+  };
+
+  async function submitAdd() {
+    const name = (form.name ?? "").trim();
+    if (!name) {
+      toast.error("Provider name is required");
+      return;
+    }
+    setBusy(true);
     try {
-      const res = await api.providerModels(p.name);
-      setModels(res.models);
+      await api.addProvider({
+        name,
+        kind: form.kind ?? "custom",
+        apiBase: form.apiBase ?? "",
+        apiKey: (form.apiKey ?? "").trim() || undefined,
+        label: (form.label ?? "").trim() || name,
+      });
+      toast.success(`Provider '${name}' added`);
+      setAdding(false);
+      setForm({});
+      refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to fetch models from '${p.name}'`);
-      setModelsFor(null);
+      toast.error(err instanceof Error ? err.message : "Failed to add provider");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -639,89 +748,27 @@ function ProvidersManager({ onActiveChanged }: { onActiveChanged: (name: string)
       <CardHeader className="flex flex-row items-start justify-between gap-2">
         <div>
           <CardTitle>Providers</CardTitle>
-          <CardDescription>LLM endpoints available to sarathy. Model/parameter changes apply without a restart.</CardDescription>
+          <CardDescription>
+            Add an endpoint, list its models, pick a model, and tag it main / local / image.
+            Tagging is independent of model choice.
+          </CardDescription>
         </div>
         <Button size="sm" variant="outline" onClick={openAdd}>
           Add provider
         </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {loading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading providers…
-          </div>
-        ) : providers.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No providers configured.</p>
-        ) : (
-          <div className="flex flex-col divide-y">
-            {providers.map((p) => (
-              <div key={p.name} className="flex items-center justify-between gap-2 py-2">
-                <div className="min-w-0">
-                  <p className="flex items-center gap-2 text-sm font-medium">
-                    {p.label}
-                    {p.active ? (
-                      <Badge variant="default" className="text-[10px]">
-                        active
-                      </Badge>
-                    ) : null}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {p.name} · {p.kind} · {p.isLocal ? p.apiBase ?? "no endpoint" : p.hasApiKey ? "apiKey set" : "no apiKey"}
-                  </p>
-                </div>
-                <div className="flex shrink-0 gap-1">
-                  {!p.active ? (
-                    <Button size="sm" variant="outline" onClick={() => void activate(p)} disabled={busy}>
-                      Activate
-                    </Button>
-                  ) : null}
-                  {modelsFor === p.name ? (
-                    <Button size="sm" variant="ghost" onClick={() => setModelsFor(null)}>
-                      Hide
-                    </Button>
-                  ) : (
-                    <Button size="sm" variant="ghost" onClick={() => void showModels(p)}>
-                      Models
-                    </Button>
-                  )}
-                  <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
-                    Edit
-                  </Button>
-                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => void remove(p)} disabled={p.active || busy}>
-                    Remove
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {modelsFor && modelsFor !== null && (
-          <div className="rounded-md border p-3">
-            <p className="mb-2 text-xs font-semibold text-muted-foreground">Models on {modelsFor}</p>
-            {models.length ? (
-              <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto text-sm">
-                {models.map((m) => (
-                  <li key={m} className="truncate">
-                    • {m}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-muted-foreground">No models returned.</p>
-            )}
-          </div>
-        )}
-
-        {editing !== null || Object.keys(form).length > 0 ? (
-          <div className="flex flex-col gap-3 rounded-md border p-3">
-            <p className="text-sm font-semibold">{editing ? `Edit ${editing.name}` : "Add provider"}</p>
-            {!editing ? (
-              <Input placeholder="name (e.g. my-openai)" value={form.name ?? ""} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-            ) : null}
+        {adding ? (
+          <div className="flex flex-col gap-3 rounded-md border border-primary/40 p-3">
+            <p className="text-sm font-semibold">Add provider</p>
+            <Input
+              placeholder="name (e.g. my-lms)"
+              value={form.name ?? ""}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
             <div className="flex flex-col gap-2 sm:flex-row">
               <Select value={form.kind ?? "custom"} onValueChange={(v) => setForm((f) => ({ ...f, kind: v }))}>
-                <SelectTrigger>
+                <SelectTrigger className="sm:w-40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -732,22 +779,48 @@ function ProvidersManager({ onActiveChanged }: { onActiveChanged: (name: string)
                   ))}
                 </SelectContent>
               </Select>
-              <Input placeholder="API base URL" value={form.apiBase ?? ""} onChange={(e) => setForm((f) => ({ ...f, apiBase: e.target.value }))} />
+              <Input
+                placeholder="API base URL (e.g. http://localhost:1234/v1)"
+                value={form.apiBase ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, apiBase: e.target.value }))}
+              />
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Input placeholder="API key (leave blank to keep)" value={form.apiKey ?? ""} onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))} />
-              <Input placeholder="Label" value={form.label ?? ""} onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))} />
+              <Input
+                placeholder="API key (optional)"
+                value={form.apiKey ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))}
+              />
+              <Input
+                placeholder="Label (optional)"
+                value={form.label ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
+              />
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={() => void submit()} disabled={busy}>
-                {editing ? "Save" : "Add"}
+              <Button size="sm" onClick={() => void submitAdd()} disabled={busy}>
+                {busy ? "Adding…" : "Add"}
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => { setEditing(null); setForm({}); }}>
+              <Button size="sm" variant="ghost" onClick={() => { setAdding(false); setForm({}); }}>
                 Cancel
               </Button>
             </div>
           </div>
         ) : null}
+
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" /> Loading providers…
+          </div>
+        ) : providers.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No providers configured.</p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {providers.map((p) => (
+              <ProviderCard key={p.name} provider={p} onChanged={refresh} />
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

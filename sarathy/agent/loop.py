@@ -2215,7 +2215,7 @@ Remaining: ~{remaining:,} tokens
                 mark = "→" if name == s["provider"] else " "
                 lines.append(f" {mark} {name}")
             lines.append("")
-            lines.append("Usage: /provider list · /provider set <name> [model] · /provider models <name> · /provider role main|local|image <name> [model] · /provider roles")
+            lines.append("Usage: /provider list · /provider set <name> [model] · /provider models <name> · /provider role main|local|image|none <name> [model] · /provider roles")
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
 
         if sub == "list":
@@ -2281,19 +2281,21 @@ Remaining: ~{remaining:,} tokens
         if sub == "role" and rest:
             rparts = rest.split()
             role = rparts[0].lower()
+            if role == "none":
+                role = ""
             pname = rparts[1] if len(rparts) > 1 else None
             model = rparts[2] if len(rparts) > 2 else None
-            if role not in ("main", "local", "image"):
+            if role not in ("", "main", "local", "image"):
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content="Usage: /provider role main|local|image <provider-name> [model]",
+                    content="Usage: /provider role main|local|image|none <provider-name> [model]",
                 )
             if not pname:
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content="Usage: /provider role main|local|image <provider-name> [model]",
+                    content="Usage: /provider role main|local|image|none <provider-name> [model]",
                 )
             try:
                 self.runtime.set_role(role, pname, model)
@@ -2301,6 +2303,12 @@ Remaining: ~{remaining:,} tokens
                 return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"⚠️ {e}")
             async with self._global_lock:
                 self._refresh_runtime()
+            if role == "":
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"✅ Cleared the role on {pname}.",
+                )
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
@@ -2314,7 +2322,7 @@ Remaining: ~{remaining:,} tokens
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
-            content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name> · /provider add <name> [--api-base <url>] [--kind <kind>] [--set-active] · /provider role main|local|image <name> [model] · /provider roles",
+            content="Usage: /provider [status] · /provider list · /provider set <name> [model] · /provider models <name> · /provider add <name> [--api-base <url>] [--kind <kind>] [--set-active] · /provider role main|local|image|none <name> [model] · /provider roles",
         )
 
     async def _handle_provider_add(

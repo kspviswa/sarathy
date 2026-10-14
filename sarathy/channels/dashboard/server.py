@@ -108,6 +108,13 @@ _ARCHIVE_NAME_RE = re.compile(r"^session-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2})\.jsonl$
 _ARCHIVE_PREVIEW_CHARS = 280
 
 
+def _is_openai_v1_base(base: str | None) -> bool:
+    """True when ``base`` looks like an OpenAI-compatible ``…/v1`` endpoint."""
+    if not base:
+        return False
+    return base.rstrip("/").endswith("/v1")
+
+
 def _media_type_from_path(path: str) -> str:
     ext = Path(path).suffix.lower()
     if ext in _IMAGE_EXTS:
@@ -1365,12 +1372,17 @@ class DashboardChannel(BaseChannel):
             return web.json_response(
                 {"error": f"unknown kind '{kind}'"}, status=400
             )
+        api_base = (data.get("apiBase") or "").strip() or None
+        if kind == "custom" and not _is_openai_v1_base(api_base):
+            return web.json_response(
+                {"error": "API base URL must end with /v1"}, status=400
+            )
         cfg = self._load_full_config()
         if name in cfg.providers:
             return web.json_response({"error": "provider already exists"}, status=409)
         cfg.providers[name] = ProviderConfig(
             kind=kind,
-            api_base=(data.get("apiBase") or "").strip() or None,
+            api_base=api_base,
             api_key=(data.get("apiKey") or "").strip() or "dummy",
             label=(data.get("label") or "").strip() or name.title(),
             extra_headers=dict(data.get("extraHeaders") or {}),
@@ -1395,7 +1407,12 @@ class DashboardChannel(BaseChannel):
             return web.json_response({"error": "provider not found"}, status=404)
         p = cfg.providers[name]
         if "apiBase" in data:
-            p.api_base = (data.get("apiBase") or "").strip() or None
+            new_base = (data.get("apiBase") or "").strip() or None
+            if p.kind == "custom" and not _is_openai_v1_base(new_base):
+                return web.json_response(
+                    {"error": "API base URL must end with /v1"}, status=400
+                )
+            p.api_base = new_base
         if "apiKey" in data:
             p.api_key = (data.get("apiKey") or "").strip() or p.api_key
         if "label" in data:

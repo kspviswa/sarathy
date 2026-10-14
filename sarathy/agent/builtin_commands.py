@@ -116,6 +116,11 @@ BUILTIN_COMMANDS = {
         description="Ask a side question using the local provider/model",
         subcommands=[],
     ),
+    "diary": BuiltinCommand(
+        name="diary",
+        description="Capture a life entry into your Charitham diary (local biographer model)",
+        subcommands=[],
+    ),
 }
 
 

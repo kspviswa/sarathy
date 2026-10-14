@@ -14,6 +14,12 @@ _TRUNCATE_TEXT_CHARS = 200
 _TRUNCATE_SUFFIX = "…[truncated]"
 _TOOL_RESULT_OMITTED = "[tool result omitted]"
 
+# Marker for the media paths a turn carries. Deliberately NOT `[image: …]`:
+# that marker is the image pipeline's split token (see
+# `AgentLoop._describe_images_with_image_provider`), and colliding with it
+# would make the describe pass re-interpret the hint as a fresh image part.
+ATTACHED_MEDIA_MARKER = "[attached media: {paths}]"
+
 
 def trim_history(
     history: list[dict[str, Any]],
@@ -236,13 +242,27 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         chat_id: str | None = None,
         history_budget_tokens: int | None = None,
         model: str | None = None,
+        system_prompt_override: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Build the complete message list for an LLM call."""
+        """Build the complete message list for an LLM call.
+
+        ``system_prompt_override`` replaces the assembled ~19k-token prompt with
+        a caller-supplied one, verbatim. Used by narrow side turns (the
+        `/diary` biographer) where the full prompt drowns a small local model.
+        ``None`` (the default everywhere else) keeps the normal behaviour.
+
+        When ``media`` is given, the user message also carries an
+        ``[attached media: <abs paths>]`` line: the image pipeline replaces the
+        image parts with ``[image description: …]`` hints and drops the path
+        entirely, so this line is the only way a turn can still name the files
+        it was given.
+        """
         if history_budget_tokens is not None:
             history = trim_history(
                 history, budget_tokens=history_budget_tokens, model=model
             )
         runtime_context = self._build_runtime_context(channel, chat_id)
+        current_message = self._with_attached_media_marker(current_message, media)
         user_content = self._build_user_content(current_message, media)
 
         # Combine Runtime Context with user message into a single user message
@@ -257,11 +277,43 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
                 "content": [{"type": "text", "text": runtime_context}, *user_content],
             }
 
+        system_prompt = (
+            system_prompt_override
+            if system_prompt_override is not None
+            else self.build_system_prompt(skill_names, channel=channel)
+        )
+
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names, channel=channel)},
+            {"role": "system", "content": system_prompt},
             *history,
             user_message,
         ]
+
+    def _resolve_media_path(self, path: str) -> Path:
+        """Resolve an inbound media path the same way the image pipeline does.
+
+        Relative paths (the shape channels send) resolve against
+        ``workspace/media``; absolute paths are kept as-is.
+        """
+        p = Path(path)
+        if not p.is_absolute():
+            p = self.workspace / "media" / path
+        return p
+
+    def _with_attached_media_marker(
+        self, text: str, media: list[str] | None
+    ) -> str:
+        """Append an ``[attached media: …]`` line naming the turn's files.
+
+        Purely additive and a no-op when there is no media, so every caller that
+        does not pass ``media`` is byte-identical to before.
+        """
+        if not media:
+            return text
+        paths = [str(self._resolve_media_path(p)) for p in media if p and str(p).strip()]
+        if not paths:
+            return text
+        return f"{text}\n{ATTACHED_MEDIA_MARKER.format(paths=', '.join(paths))}"
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
         """Build user message content with optional (downscaled) images.

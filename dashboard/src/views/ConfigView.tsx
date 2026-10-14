@@ -1,10 +1,19 @@
-import { Check, Loader2, RefreshCw, RotateCw, Save } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Loader2, Pencil, Plus, RefreshCw, RotateCw, Save, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -80,7 +89,7 @@ function setPath(obj: ConfigResponse, path: string, value: unknown): void {
 }
 
 function toFormValue(v: unknown, type: FieldType): string {
-  if (v === undefined || v === null) return type === "select" ? "" : "";
+  if (v === undefined || v === null) return "";
   if (type === "boolean") return v ? "true" : "false";
   return String(v);
 }
@@ -94,11 +103,16 @@ function fromFormValue(v: string, field: FieldDef): unknown {
   }
   if (field.type === "select") {
     if (v === "") return null;
-    if (v === "off" || v === "low" || v === "medium" || v === "high" || v === "xhigh") return v;
     return v;
   }
   return v;
 }
+
+const MODALITIES: { role: "main" | "local" | "image"; label: string; blurb: string }[] = [
+  { role: "main", label: "Main (Sarathy)", blurb: "The default voice for chat and voice turns." },
+  { role: "local", label: "Local", blurb: "Used by /local and cheap async side turns." },
+  { role: "image", label: "Image", blurb: "Vision / image-understanding requests." },
+];
 
 export function ConfigView() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -113,12 +127,12 @@ export function ConfigView() {
   const [modelSuggestions, setModelSuggestions] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
 
-  const reloadProviders = () => {
-    api
+  const reloadProviders = useCallback(() => {
+    return api
       .providers()
       .then((res) => setProviders(res.providers))
       .catch(() => setProviders([]));
-  };
+  }, []);
 
   useEffect(() => {
     api
@@ -135,8 +149,8 @@ export function ConfigView() {
       .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load config"))
       .finally(() => setLoading(false));
 
-    reloadProviders();
-  }, []);
+    void reloadProviders();
+  }, [reloadProviders]);
 
   const setField = (path: string, value: string) => {
     setFormState((prev) => ({ ...prev, [path]: value }));
@@ -252,12 +266,10 @@ export function ConfigView() {
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-4 p-4">
-      <ProvidersManager
-        onActiveChanged={(name) => {
-          setFormState((prev) => ({ ...prev, "agents.defaults.provider": name }));
-          setModelSuggestions([]);
-        }}
-      />
+      <ProvidersSection providers={providers} reload={reloadProviders} />
+
+      <ModalitiesSection providers={providers} reload={reloadProviders} />
+
       {restartRequired ? (
         <Card className="border-primary/40 bg-primary/5">
           <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -424,118 +436,70 @@ function FieldRow({
   );
 }
 
-const KINDS = ["custom", "ollama", "lmstudio", "vllm", "litellm"] as const;
+// ---------------------------------------------------------------------------
+// Providers
+// ---------------------------------------------------------------------------
 
-const ROLE_OPTIONS: { value: string; label: string }[] = [
-  { value: "none", label: "No role" },
-  { value: "main", label: "Main — default voice" },
-  { value: "local", label: "Local — /local & async" },
-  { value: "image", label: "Image — vision" },
-];
+const slugOk = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+const v1Ok = (base: string) => base.trim().replace(/\/+$/, "").endsWith("/v1");
 
-function roleBadge(role: string): { label: string; variant: "default" | "secondary" | "outline" } | null {
-  switch (role) {
-    case "main":
-      return { label: "main", variant: "default" };
-    case "local":
-      return { label: "local", variant: "secondary" };
-    case "image":
-      return { label: "image", variant: "outline" };
-    default:
-      return null;
-  }
-}
-
-function ProviderCard({ provider, onChanged }: { provider: ProviderInfo; onChanged: () => void }) {
-  const [role, setRole] = useState(provider.role || "none");
-  const [model, setModel] = useState(provider.model || "");
-  const [models, setModels] = useState<string[]>([]);
+function ProvidersSection({
+  providers,
+  reload,
+}: {
+  providers: ProviderInfo[];
+  reload: () => Promise<void>;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<ProviderInfo | null>(null);
+  const [form, setForm] = useState({ name: "", apiBase: "", apiKey: "", label: "" });
   const [busy, setBusy] = useState(false);
-  const [roleBusy, setRoleBusy] = useState(false);
-  const [loadingModels, setLoadingModels] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState<Record<string, string>>({});
 
-  useEffect(() => setRole(provider.role || "none"), [provider.role]);
-  useEffect(() => setModel(provider.model || ""), [provider.model]);
+  const openAdd = () => {
+    setEditing(null);
+    setForm({ name: "", apiBase: "", apiKey: "", label: "" });
+    setDialogOpen(true);
+  };
 
-  const datalistId = `models-${provider.name}`;
-  const badge = roleBadge(provider.role);
+  const openEdit = (p: ProviderInfo) => {
+    setEditing(p);
+    setForm({ name: p.name, apiBase: p.apiBase ?? "", apiKey: "", label: p.label });
+    setDialogOpen(true);
+  };
 
-  async function applyRole(next: string) {
-    setRole(next);
-    setRoleBusy(true);
-    try {
-      await api.setProviderRole(provider.name, next === "none" ? "" : next);
-      toast.success(
-        next === "none" ? `Cleared the role on ${provider.label}` : `${provider.label} set as ${next}`,
-      );
-      onChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to set role");
-      setRole(provider.role || "none");
-    } finally {
-      setRoleBusy(false);
-    }
-  }
+  const nameError = form.name && !slugOk(form.name) ? "Use letters, digits and underscores" : "";
+  const baseError =
+    form.apiBase && !v1Ok(form.apiBase)
+      ? "Base URL must end with /v1"
+      : !editing && !form.apiBase
+        ? "Base URL is required"
+        : "";
+  const canSubmit = !!form.name && !nameError && !!form.apiBase && !baseError && !busy;
 
-  async function loadModels() {
-    setLoadingModels(true);
-    try {
-      const res = await api.providerModels(provider.name);
-      setModels(res.models);
-      if (!res.models.length) toast.warning(`No models returned by '${provider.name}'`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to fetch models from '${provider.name}'`);
-    } finally {
-      setLoadingModels(false);
-    }
-  }
-
-  async function saveModel() {
+  async function submit() {
+    if (!canSubmit) return;
     setBusy(true);
     try {
-      const value = model.trim();
-      await api.setProviderModel(provider.name, value);
-      toast.success(
-        value ? `Model for ${provider.label} set to ${value}` : `Model override cleared for ${provider.label}`,
-      );
-      onChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to set model");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove() {
-    if (!window.confirm(`Remove provider '${provider.name}'?`)) return;
-    setBusy(true);
-    try {
-      await api.removeProvider(provider.name);
-      toast.success(`Provider '${provider.name}' removed`);
-      onChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to remove provider");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitEdit() {
-    setBusy(true);
-    try {
-      const body: Record<string, unknown> = {
-        apiBase: form.apiBase ?? "",
-        label: form.label ?? "",
-        kind: form.kind ?? provider.kind,
-      };
-      if ((form.apiKey ?? "").trim()) body.apiKey = (form.apiKey ?? "").trim();
-      await api.editProvider(provider.name, body);
-      toast.success(`Provider '${provider.name}' updated`);
-      setEditing(false);
-      setForm({});
-      onChanged();
+      if (editing) {
+        const body: Record<string, unknown> = {
+          apiBase: form.apiBase.trim(),
+          label: form.label.trim() || form.name,
+        };
+        if (form.apiKey.trim()) body.apiKey = form.apiKey.trim();
+        await api.editProvider(editing.name, body);
+        toast.success(`Provider '${editing.name}' updated`);
+      } else {
+        await api.addProvider({
+          name: form.name.trim(),
+          kind: "custom",
+          apiBase: form.apiBase.trim(),
+          apiKey: form.apiKey.trim() || undefined,
+          label: form.label.trim() || form.name.trim(),
+        });
+        toast.success(`Provider '${form.name.trim()}' added`);
+      }
+      setDialogOpen(false);
+      await reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save provider");
     } finally {
@@ -543,285 +507,337 @@ function ProviderCard({ provider, onChanged }: { provider: ProviderInfo; onChang
     }
   }
 
-  return (
-    <div className="flex flex-col gap-3 rounded-md border p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-            {provider.label}
-            {provider.active ? (
-              <Badge variant="outline" className="text-[10px]">
-                active
-              </Badge>
-            ) : null}
-            {badge ? (
-              <Badge variant={badge.variant} className="text-[10px]">
-                {badge.label}
-              </Badge>
-            ) : null}
-          </p>
-          <p className="truncate text-xs text-muted-foreground">
-            {provider.name} · {provider.kind} · {provider.apiBase ?? "no endpoint"}
-            {provider.hasApiKey ? " · apiKey set" : ""}
-          </p>
-        </div>
-        <div className="flex shrink-0 gap-1">
-          <Button size="sm" variant="ghost" onClick={() => {
-            setEditing((v) => !v);
-            setForm({ kind: provider.kind, apiBase: provider.apiBase ?? "", apiKey: "", label: provider.label });
-          }}>
-            Edit
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-destructive"
-            onClick={() => void remove()}
-            disabled={provider.active || busy}
-          >
-            Remove
-          </Button>
-        </div>
-      </div>
-
-      {editing ? (
-        <div className="flex flex-col gap-2 rounded-md bg-muted/40 p-2">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Select value={form.kind ?? provider.kind} onValueChange={(v) => setForm((f) => ({ ...f, kind: v }))}>
-              <SelectTrigger className="sm:w-40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {KINDS.map((k) => (
-                  <SelectItem key={k} value={k}>
-                    {k}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Input
-              placeholder="API base URL"
-              value={form.apiBase ?? ""}
-              onChange={(e) => setForm((f) => ({ ...f, apiBase: e.target.value }))}
-            />
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Input
-              placeholder="API key (leave blank to keep)"
-              value={form.apiKey ?? ""}
-              onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))}
-            />
-            <Input
-              placeholder="Label"
-              value={form.label ?? ""}
-              onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
-            />
-          </div>
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => void submitEdit()} disabled={busy}>
-              {busy ? "Saving…" : "Save"}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setForm({}); }}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={`role-${provider.name}`}>Role</Label>
-          <Select value={role} onValueChange={(v) => void applyRole(v)} disabled={roleBusy}>
-            <SelectTrigger id={`role-${provider.name}`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ROLE_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={`model-${provider.name}`}>Model</Label>
-          <div className="flex items-center gap-2">
-            <Input
-              id={`model-${provider.name}`}
-              list={datalistId}
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="provider default"
-              spellCheck={false}
-            />
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => void loadModels()}
-              disabled={loadingModels}
-              title="List models from this provider"
-            >
-              <RefreshCw className={loadingModels ? "animate-spin" : ""} />
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => void saveModel()}
-              disabled={busy}
-              title="Save model for this provider"
-            >
-              <Check />
-            </Button>
-          </div>
-          {models.length > 0 && (
-            <datalist id={datalistId}>
-              {models.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ProvidersManager({ onActiveChanged }: { onActiveChanged: (name: string) => void }) {
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-
-  const refresh = () => {
-    api
-      .providers()
-      .then((res) => {
-        setProviders(res.providers);
-        const active = res.providers.find((p) => p.active);
-        if (active) onActiveChanged(active.name);
-      })
-      .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load providers"))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const openAdd = () => {
-    setAdding(true);
-    setForm({ kind: "custom", apiBase: "", apiKey: "", label: "" });
-  };
-
-  async function submitAdd() {
-    const name = (form.name ?? "").trim();
-    if (!name) {
-      toast.error("Provider name is required");
-      return;
-    }
-    setBusy(true);
+  async function remove(p: ProviderInfo) {
+    if (!window.confirm(`Remove provider '${p.name}'?`)) return;
     try {
-      await api.addProvider({
-        name,
-        kind: form.kind ?? "custom",
-        apiBase: form.apiBase ?? "",
-        apiKey: (form.apiKey ?? "").trim() || undefined,
-        label: (form.label ?? "").trim() || name,
-      });
-      toast.success(`Provider '${name}' added`);
-      setAdding(false);
-      setForm({});
-      refresh();
+      await api.removeProvider(p.name);
+      toast.success(`Provider '${p.name}' removed`);
+      await reload();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to add provider");
-    } finally {
-      setBusy(false);
+      toast.error(err instanceof Error ? err.message : "Failed to remove provider");
     }
   }
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-2">
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
         <div>
           <CardTitle>Providers</CardTitle>
-          <CardDescription>
-            Add an endpoint, list its models, pick a model, and tag it main / local / image.
-            Tagging is independent of model choice.
-          </CardDescription>
+          <CardDescription>OpenAI-compatible endpoints Sarathy can talk to.</CardDescription>
         </div>
-        <Button size="sm" variant="outline" onClick={openAdd}>
+        <Button size="sm" onClick={openAdd}>
+          <Plus />
           Add provider
         </Button>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {adding ? (
-          <div className="flex flex-col gap-3 rounded-md border border-primary/40 p-3">
-            <p className="text-sm font-semibold">Add provider</p>
-            <Input
-              placeholder="name (e.g. my-lms)"
-              value={form.name ?? ""}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            />
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Select value={form.kind ?? "custom"} onValueChange={(v) => setForm((f) => ({ ...f, kind: v }))}>
-                <SelectTrigger className="sm:w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {KINDS.map((k) => (
-                    <SelectItem key={k} value={k}>
-                      {k}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                placeholder="API base URL (e.g. http://localhost:1234/v1)"
-                value={form.apiBase ?? ""}
-                onChange={(e) => setForm((f) => ({ ...f, apiBase: e.target.value }))}
-              />
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Input
-                placeholder="API key (optional)"
-                value={form.apiKey ?? ""}
-                onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))}
-              />
-              <Input
-                placeholder="Label (optional)"
-                value={form.label ?? ""}
-                onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
-              />
-            </div>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={() => void submitAdd()} disabled={busy}>
-                {busy ? "Adding…" : "Add"}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => { setAdding(false); setForm({}); }}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
-        {loading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading providers…
-          </div>
-        ) : providers.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No providers configured.</p>
+      <CardContent>
+        {providers.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No providers configured yet.</p>
         ) : (
-          <div className="flex flex-col gap-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             {providers.map((p) => (
-              <ProviderCard key={p.name} provider={p} onChanged={refresh} />
+              <div key={p.name} className="flex flex-col gap-2 rounded-md border p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                      <span className="truncate">{p.label}</span>
+                      {p.role ? (
+                        <Badge variant={p.role === "main" ? "default" : "secondary"} className="text-[10px]">
+                          {p.role}
+                        </Badge>
+                      ) : null}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">{p.name}</p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <Button size="icon" variant="ghost" className="size-7" onClick={() => openEdit(p)} title="Edit">
+                      <Pencil className="size-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-7 text-destructive"
+                      onClick={() => void remove(p)}
+                      disabled={p.role === "main"}
+                      title={p.role === "main" ? "Cannot remove the main provider" : "Remove"}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+                <p className="truncate text-xs text-muted-foreground" title={p.apiBase ?? ""}>
+                  {p.apiBase ?? "no endpoint"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {p.hasApiKey ? "API key set" : "no API key"}
+                </p>
+              </div>
             ))}
           </div>
         )}
       </CardContent>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editing ? "Edit provider" : "Add provider"}</DialogTitle>
+            <DialogDescription>
+              Point Sarathy at an OpenAI-compatible endpoint. The base URL must end in{" "}
+              <code className="rounded bg-muted px-1">/v1</code>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="pv-name">Name</Label>
+              <Input
+                id="pv-name"
+                value={form.name}
+                disabled={!!editing}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="openrouter"
+                spellCheck={false}
+              />
+              {nameError ? <p className="text-xs text-destructive">{nameError}</p> : null}
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="pv-base">Base URL</Label>
+              <Input
+                id="pv-base"
+                value={form.apiBase}
+                onChange={(e) => setForm((f) => ({ ...f, apiBase: e.target.value }))}
+                placeholder="https://openrouter.ai/api/v1"
+                spellCheck={false}
+              />
+              {baseError ? <p className="text-xs text-destructive">{baseError}</p> : null}
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="pv-key">API key</Label>
+              <Input
+                id="pv-key"
+                type="password"
+                value={form.apiKey}
+                onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))}
+                placeholder={editing?.hasApiKey ? "•••••• (leave blank to keep)" : "dummy"}
+                spellCheck={false}
+              />
+              <p className="text-xs text-muted-foreground">Optional — use “dummy” for local servers.</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDialogOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button onClick={() => void submit()} disabled={!canSubmit}>
+              {busy ? "Saving…" : editing ? "Save changes" : "Add provider"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Modalities
+// ---------------------------------------------------------------------------
+
+function ModalitiesSection({
+  providers,
+  reload,
+}: {
+  providers: ProviderInfo[];
+  reload: () => Promise<void>;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Modalities</CardTitle>
+        <CardDescription>
+          Assign a provider and model to each role. The pairing is what Sarathy uses.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col divide-y">
+        {MODALITIES.map((m) => (
+          <ModalityRow key={m.role} role={m.role} label={m.label} blurb={m.blurb} providers={providers} reload={reload} />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ModalityRow({
+  role,
+  label,
+  blurb,
+  providers,
+  reload,
+}: {
+  role: "main" | "local" | "image";
+  label: string;
+  blurb: string;
+  providers: ProviderInfo[];
+  reload: () => Promise<void>;
+}) {
+  const current = providers.find((p) => p.role === role);
+  const [providerName, setProviderName] = useState(current?.name ?? "");
+  const [model, setModel] = useState(current?.model ?? "");
+  const [models, setModels] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setProviderName(current?.name ?? "");
+    setModel(current?.model ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.name, current?.model]);
+
+  const loadModels = useCallback(async (name: string) => {
+    if (!name) return;
+    setLoading(true);
+    setError(false);
+    try {
+      const res = await api.providerModels(name);
+      setModels(res.models);
+    } catch {
+      setModels([]);
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (providerName) void loadModels(providerName);
+    else setModels([]);
+  }, [providerName, loadModels]);
+
+  async function chooseProvider(next: string) {
+    if (!next) {
+      // Clear this modality.
+      const holder = current?.name;
+      setProviderName("");
+      if (holder) {
+        try {
+          await api.setProviderRole(holder, "");
+          toast.success(`${label} cleared`);
+          await reload();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Failed to clear role");
+        }
+      }
+      return;
+    }
+    setProviderName(next);
+    setModel("");
+    setBusy(true);
+    try {
+      await api.setProviderRole(next, role);
+      toast.success(`${label} → ${next}`);
+      await reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set role");
+      setProviderName(current?.name ?? "");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function chooseModel(next: string) {
+    setModel(next);
+    if (!providerName || !next) return;
+    setBusy(true);
+    try {
+      await api.setProviderRole(providerName, role, next);
+      toast.success(`${label} → ${providerName}/${next}`);
+      await reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set model");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const providerOptions: ComboboxOption[] = providers.map((p) => ({
+    value: p.name,
+    label: p.label,
+    hint: p.role && p.role !== role ? p.role : undefined,
+  }));
+
+  const modelOptions: ComboboxOption[] = [];
+  if (model && !models.includes(model)) modelOptions.push({ value: model, label: model, hint: "current" });
+  for (const m of models) modelOptions.push({ value: m, label: m });
+
+  return (
+    <div className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0">
+      <div>
+        <p className="flex items-center gap-2 text-sm font-medium">
+          {label}
+          {busy ? <Loader2 className="size-3.5 animate-spin text-muted-foreground" /> : null}
+        </p>
+        <p className="text-xs text-muted-foreground">{blurb}</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <Label>Provider</Label>
+          <Combobox
+            value={providerName}
+            onChange={(v) => void chooseProvider(v)}
+            options={providerOptions}
+            placeholder="Select provider…"
+            searchPlaceholder="Search providers…"
+            emptyText="No providers configured."
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label>Model</Label>
+          {error ? (
+            <div className="flex items-center gap-2">
+              <Input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="Type a model id"
+                spellCheck={false}
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => void chooseModel(model)}
+                disabled={!providerName || !model || busy}
+                title="Save model"
+              >
+                <Save />
+              </Button>
+            </div>
+          ) : (
+            <Combobox
+              value={model}
+              onChange={(v) => void chooseModel(v)}
+              options={modelOptions}
+              placeholder={providerName ? "Select model…" : "Pick a provider first"}
+              searchPlaceholder="Search models…"
+              emptyText={providerName ? "No models — check the endpoint." : "Pick a provider first"}
+              disabled={!providerName}
+              loading={loading}
+            />
+          )}
+          {!error && providerName ? (
+            <button
+              type="button"
+              className="self-start text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+              onClick={() => void loadModels(providerName)}
+            >
+              {models.length ? `${models.length} models — refresh` : "refresh models"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Using{" "}
+        <code className="rounded bg-muted px-1">
+          {providerName ? `${providerName}/${model || "—"}` : "not configured"}
+        </code>
+      </p>
+    </div>
   );
 }

@@ -1007,3 +1007,52 @@ async def test_set_provider_model_unknown_provider_404(tmp_path) -> None:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_add_provider_requires_v1_base(tmp_path) -> None:
+    client, _ = await _authed_client_with_runtime(tmp_path)
+    async with client:
+        token = await _pair(client)
+        h = {"Authorization": f"Bearer {token}"}
+
+        bad = await client.post(
+            "/api/providers",
+            json={"name": "nope", "kind": "custom", "apiBase": "https://x.ai/api"},
+            headers=h,
+        )
+        assert bad.status == 400
+        assert "v1" in (await bad.json())["error"]
+
+        ok = await client.post(
+            "/api/providers",
+            json={"name": "good", "kind": "custom", "apiBase": "https://x.ai/api/v1"},
+            headers=h,
+        )
+        assert ok.status == 200
+
+        # Trailing slash is tolerated.
+        ok2 = await client.post(
+            "/api/providers",
+            json={"name": "good2", "kind": "custom", "apiBase": "https://y.ai/v1/"},
+            headers=h,
+        )
+        assert ok2.status == 200
+
+
+@pytest.mark.asyncio
+async def test_edit_provider_requires_v1_base(tmp_path) -> None:
+    client, _ = await _authed_client_with_runtime(tmp_path)
+    async with client:
+        token = await _pair(client)
+        h = {"Authorization": f"Bearer {token}"}
+
+        bad = await client.put(
+            "/api/providers/adhoc", json={"apiBase": "http://localhost:1234"}, headers=h
+        )
+        assert bad.status == 400
+
+        ok = await client.put(
+            "/api/providers/adhoc", json={"apiBase": "http://localhost:1234/v1"}, headers=h
+        )
+        assert ok.status == 200

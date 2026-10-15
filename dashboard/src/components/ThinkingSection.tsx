@@ -123,35 +123,50 @@ export function ThinkingSection({
 
   return (
     <div className="think-header" data-testid="thinking-section">
-      <button
-        type="button"
-        onClick={() => setInternalOpen(!internalOpen)}
-        aria-expanded={isOpen}
-        aria-label="Thinking"
-        className="flex w-full items-center gap-1.5 rounded-md py-1.5 text-left text-xs text-muted-foreground/80 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        data-testid="thinking-toggle"
-      >
-        <ChevronRight
-          className={cn("size-3 shrink-0 transition-transform duration-200", isOpen && "rotate-90")}
-        />
-        {done ? (
-          <Check className="size-3 shrink-0 text-green-500" />
-        ) : (
-          /* The live pulse lives IN this row: animated dots replace the old
-             static spinner, the word shimmers. Both stand still under
-             prefers-reduced-motion. */
+      {hasContent ? (
+        <button
+          type="button"
+          onClick={() => setInternalOpen(!internalOpen)}
+          aria-expanded={isOpen}
+          aria-label="Thinking"
+          className="flex w-full items-center gap-1.5 rounded-md py-1.5 text-left text-xs text-muted-foreground/80 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          data-testid="thinking-toggle"
+        >
+          <ChevronRight
+            className={cn("size-3 shrink-0 transition-transform duration-200", isOpen && "rotate-90")}
+          />
+          {done ? (
+            <Check className="size-3 shrink-0 text-green-500" />
+          ) : (
+            /* The live pulse lives IN this row: animated dots replace the old
+               static spinner, the word shimmers. Both stand still under
+               prefers-reduced-motion. */
+            <ThinkingIndicator showLabel={false} className="shrink-0" />
+          )}
+          <span className={cn("font-medium", !done && "thinking-shimmer")}>Thinking</span>
+          {showMeta && (
+            <span
+              className="ml-auto shrink-0 tabular-nums text-muted-foreground/50"
+              data-testid="thinking-meta"
+            >
+              {meta}
+            </span>
+          )}
+        </button>
+      ) : (
+        /* Nothing to reveal: the row is a STATUS LINE, not a control. A live
+           turn's bubble with no prose yet still needs the slim row (spec 135
+           §A) — but a chevron that expands onto nothing is a dead control, and
+           a page reloaded mid-turn has no chips to show until the next frame. */
+        <div
+          className="flex w-full items-center gap-1.5 py-1.5 text-xs text-muted-foreground/80"
+          data-testid="thinking-status"
+        >
+          <span className="size-3 shrink-0" aria-hidden="true" />
           <ThinkingIndicator showLabel={false} className="shrink-0" />
-        )}
-        <span className={cn("font-medium", !done && "thinking-shimmer")}>Thinking</span>
-        {showMeta && (
-          <span
-            className="ml-auto shrink-0 tabular-nums text-muted-foreground/50"
-            data-testid="thinking-meta"
-          >
-            {meta}
-          </span>
-        )}
-      </button>
+          <span className="font-medium thinking-shimmer">Thinking</span>
+        </div>
+      )}
       {isOpen && hasContent && (
         <div className="space-y-2 pb-2.5 pl-5" data-testid="thinking-body">
           {thinkingContent && (

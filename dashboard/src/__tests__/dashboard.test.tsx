@@ -166,9 +166,10 @@ describe("ThinkingSection — the turn's ONE collapse header (spec 135 §A)", ()
 
   it("shows the one slim row for a live turn that has said nothing yet", () => {
     // `alwaysShow` is what keeps the empty state a single row instead of an
-    // empty bubble (spec 135 §A).
+    // empty bubble (spec 135 §A). With nothing to reveal it is a STATUS line,
+    // not a chevron that would open onto nothing (spec 139 §A).
     render(<ThinkingSection toolHints={[]} thinkingContent="" done={false} alwaysShow />);
-    expect(screen.getByTestId("thinking-toggle")).toBeInTheDocument();
+    expect(screen.getByTestId("thinking-status")).toBeInTheDocument();
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.queryByTestId("assistant-turn-segments")).toBeNull();
   });

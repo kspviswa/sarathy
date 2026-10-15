@@ -2,7 +2,11 @@ import { Check, ChevronsUpDown, Loader2, Search } from "lucide-react";
 import * as React from "react";
 
 import { cn } from "@/lib/utils";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 export interface ComboboxOption {
   value: string;
@@ -55,7 +59,11 @@ export function Combobox({
 
   const q = query.trim().toLowerCase();
   const matched = q
-    ? options.filter((o) => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
+    ? options.filter(
+        (o) =>
+          o.label.toLowerCase().includes(q) ||
+          o.value.toLowerCase().includes(q),
+      )
     : options;
   const visible = matched.slice(0, maxRows);
   const truncated = matched.length > visible.length;
@@ -82,11 +90,20 @@ export function Combobox({
           aria-expanded={open}
           disabled={disabled}
           className={cn(
-            "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+            // `h-auto min-h-9`, not `h-9`: a long selected value — a model id,
+            // say — wraps instead of clipping, and the trigger grows to fit it
+            // rather than cutting it off (spec 142 §A). With a short value the
+            // `min-h-9` keeps the original height exactly.
+            "flex h-auto min-h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
             className,
           )}
         >
-          <span className={cn("truncate text-left", !selected && "text-muted-foreground")}>
+          <span
+            className={cn(
+              "min-w-0 text-left",
+              !selected && "text-muted-foreground",
+            )}
+          >
             {selected ? selected.label : placeholder}
           </span>
           {loading ? (
@@ -113,9 +130,13 @@ export function Combobox({
         </div>
         <div className="max-h-64 overflow-y-auto overscroll-contain p-1">
           {loading ? (
-            <p className="px-2 py-6 text-center text-sm text-muted-foreground">Loading models…</p>
+            <p className="px-2 py-6 text-center text-sm text-muted-foreground">
+              Loading models…
+            </p>
           ) : visible.length === 0 ? (
-            <p className="px-2 py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
+            <p className="px-2 py-6 text-center text-sm text-muted-foreground">
+              {emptyText}
+            </p>
           ) : (
             groups.map((g, gi) => (
               <div key={g.name ?? `g${gi}`}>
@@ -138,11 +159,16 @@ export function Combobox({
                     )}
                   >
                     <Check
-                      className={cn("size-4 shrink-0", opt.value === value ? "opacity-100" : "opacity-0")}
+                      className={cn(
+                        "size-4 shrink-0",
+                        opt.value === value ? "opacity-100" : "opacity-0",
+                      )}
                     />
-                    <span className="truncate">{opt.label}</span>
+                    <span className="min-w-0">{opt.label}</span>
                     {opt.hint ? (
-                      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{opt.hint}</span>
+                      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                        {opt.hint}
+                      </span>
                     ) : null}
                   </button>
                 ))}
@@ -151,7 +177,8 @@ export function Combobox({
           )}
           {truncated ? (
             <p className="px-2 py-2 text-center text-[11px] text-muted-foreground">
-              Showing {visible.length} of {matched.length} — keep typing to narrow
+              Showing {visible.length} of {matched.length} — keep typing to
+              narrow
             </p>
           ) : null}
         </div>

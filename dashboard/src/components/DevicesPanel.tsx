@@ -40,14 +40,18 @@ export function DevicesPanel() {
         const next = sortDevices(res.devices ?? []);
         setDevices(next);
         // Drop any selected ids that no longer exist (or are now current).
-        const selectable = new Set(next.filter((d) => !d.current).map((d) => d.id));
+        const selectable = new Set(
+          next.filter((d) => !d.current).map((d) => d.id),
+        );
         setSelected((prev) => {
           const pruned = new Set([...prev].filter((id) => selectable.has(id)));
           return pruned.size === prev.size ? prev : pruned;
         });
       })
       .catch((err) => {
-        toast.error(err instanceof Error ? err.message : "Failed to load devices");
+        toast.error(
+          err instanceof Error ? err.message : "Failed to load devices",
+        );
         setDevices([]);
       });
   }, []);
@@ -62,7 +66,8 @@ export function DevicesPanel() {
     [devices],
   );
   const selectedCount = selectable.filter((d) => selected.has(d.id)).length;
-  const allSelected = selectable.length > 0 && selectedCount === selectable.length;
+  const allSelected =
+    selectable.length > 0 && selectedCount === selectable.length;
 
   function toggleOne(id: string) {
     setSelected((prev) => {
@@ -108,7 +113,9 @@ export function DevicesPanel() {
       });
       refresh();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to revoke device");
+      toast.error(
+        err instanceof Error ? err.message : "Failed to revoke device",
+      );
     } finally {
       setBusyId(null);
     }
@@ -138,7 +145,9 @@ export function DevicesPanel() {
     if (failed === 0) {
       toast.success(`Revoked ${ok} ${ok === 1 ? "device" : "devices"}`);
     } else if (ok === 0) {
-      toast.error(`Failed to revoke ${failed} ${failed === 1 ? "device" : "devices"}`);
+      toast.error(
+        `Failed to revoke ${failed} ${failed === 1 ? "device" : "devices"}`,
+      );
     } else {
       toast.error(`Revoked ${ok}, failed ${failed}`);
     }
@@ -154,7 +163,9 @@ export function DevicesPanel() {
   }
 
   if (devices.length === 0) {
-    return <p className="py-2 text-sm text-muted-foreground">No paired devices.</p>;
+    return (
+      <p className="py-2 text-sm text-muted-foreground">No paired devices.</p>
+    );
   }
 
   return (
@@ -174,7 +185,12 @@ export function DevicesPanel() {
               {allSelected ? "Deselect all" : "Select all"}
             </Button>
           ) : null}
-          <Button size="sm" variant="ghost" onClick={refresh} aria-label="Refresh devices">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={refresh}
+            aria-label="Refresh devices"
+          >
             <RefreshCw className="size-3.5" />
           </Button>
         </div>
@@ -229,7 +245,7 @@ export function DevicesPanel() {
                 ) : null}
                 <div className="min-w-0">
                   <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
-                    <span className="truncate">{label}</span>
+                    <span className="min-w-0">{label}</span>
                     {device.current ? (
                       <Badge variant="default" className="text-[10px]">
                         this device
@@ -241,7 +257,10 @@ export function DevicesPanel() {
                       </Badge>
                     ) : null}
                   </p>
-                  <p className="truncate text-xs text-muted-foreground">
+                  {/* Wraps instead of clipping: "b491d2 · notifications on ·
+                      seen 14m ago" is a sentence, and one line of it does not fit
+                      a 390px row (spec 142 §A). */}
+                  <p className="text-xs text-muted-foreground">
                     <span className="font-mono">{device.shortId}</span>
                     {" · "}
                     {device.notificationsEnabled === false

@@ -27,6 +27,16 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 /** How close to the bottom still counts as "at the bottom". */
 const NEAR_BOTTOM_PX = 100;
 
+/** Fraction of the remaining distance covered per animation frame. */
+const GLIDE_EASE = 0.25;
+
+/**
+ * Floor on the per-frame step, so a very long hop still finishes in reasonable
+ * time instead of crawling the last few hundred pixels at 25% of an ever-smaller
+ * remainder.
+ */
+const GLIDE_MIN_STEP = 24;
+
 export interface ChatScroll {
   /** True when the reader is away from the newest content. */
   showJump: boolean;
@@ -62,19 +72,29 @@ export function useChatScroll(
   /** Message count at the last moment we were pinned — the baseline for the badge. */
   const seenCountRef = useRef(messages.length);
   /**
-   * True while a programmatic scroll to the bottom is in flight. A long hop can
-   * take hundreds of milliseconds and passes through "not at the bottom" on the
-   * way down; those frames are ours and must not flash the pill.
+   * True while our own glide to the bottom is running. Its frames pass through
+   * "not at the bottom" on the way down, so they must not be read as a
+   * scroll-away and must not flash the pill.
    *
-   * Cleared by ARRIVAL or by the reader taking over — never by a timer. A timer
-   * is wrong in both directions: too short and a long scroll re-shows the pill
-   * it just dismissed (measured on mobile: an 8k-pixel hop outlived a 600ms
-   * window), too long and a reader who grabs the scrollbar mid-flight gets no
-   * pill while they are reading history.
+   * While it is set, auto-follow stays ON: our own frames are not the reader's
+   * doing, and if the transcript grows under us the follow pins to the new
+   * bottom rather than leaving the reader stranded with the pill showing.
    */
   const jumpingRef = useRef(false);
+  /** The glide's animation frame handle, so it can be cancelled. */
+  const glideRef = useRef<number | null>(null);
   /** Last observed scroll offset — the sign of the delta tells us who scrolled. */
   const lastTopRef = useRef(0);
+
+  const stopGlide = useCallback(() => {
+    if (glideRef.current !== null) {
+      cancelAnimationFrame(glideRef.current);
+      glideRef.current = null;
+    }
+  }, []);
+
+  // A glide outlives the render that started it, so cancel it on unmount.
+  useEffect(() => stopGlide, [stopGlide]);
 
   const isNearBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -88,39 +108,91 @@ export function useChatScroll(
     const near = isNearBottom();
     const top = el.scrollTop;
 
-    if (near) {
-      nearBottomRef.current = true;
-      seenCountRef.current = messages.length;
-      setNewCount(0);
-    } else {
-      nearBottomRef.current = false;
-    }
-
     if (jumpingRef.current) {
-      // Arrived, or the reader pulled the viewport back up mid-flight (a
-      // decreasing offset is never ours — a scroll to the bottom only descends).
-      if (near || top < lastTopRef.current) jumpingRef.current = false;
-      else {
+      // A DECREASING offset is never ours — a glide to the bottom only descends
+      // — so it means the reader took over and the glide must yield.
+      if (top < lastTopRef.current) {
+        jumpingRef.current = false;
+        stopGlide();
+        nearBottomRef.current = false;
         lastTopRef.current = top;
+        setShowJump(true);
         return;
       }
+      lastTopRef.current = top;
+      if (near) {
+        jumpingRef.current = false;
+        stopGlide();
+        nearBottomRef.current = true;
+        seenCountRef.current = messages.length;
+        setNewCount(0);
+        setShowJump(false);
+      }
+      return;
     }
 
+    nearBottomRef.current = near;
+    if (near) {
+      seenCountRef.current = messages.length;
+      setNewCount(0);
+    }
     lastTopRef.current = top;
     setShowJump(!near);
-  }, [isNearBottom, scrollRef, messages.length]);
+  }, [isNearBottom, scrollRef, stopGlide, messages.length]);
 
+  /**
+   * Glide to the bottom, aiming at a LIVE target.
+   *
+   * This used to be `scrollTo({ top: scrollHeight, behavior: "smooth" })`, which
+   * aims at the height measured when it is called. The transcript can grow while
+   * it animates — a late transcript fetch resolving, a streaming turn writing —
+   * and then the hop lands short of the bottom it was aimed at and stays there:
+   * measured 141px short on a real transcript, which left the reader just above
+   * the bottom with the pill showing again. Re-reading `scrollHeight` every
+   * frame cannot go stale.
+   */
   const jumpToLatest = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    stopGlide();
     jumpingRef.current = true;
     lastTopRef.current = el.scrollTop;
     nearBottomRef.current = true;
     seenCountRef.current = messages.length;
     setShowJump(false);
     setNewCount(0);
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [scrollRef, messages.length]);
+
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const step = () => {
+      const node = scrollRef.current;
+      if (!node) {
+        glideRef.current = null;
+        return;
+      }
+      const max = node.scrollHeight - node.clientHeight;
+      const delta = max - node.scrollTop;
+      if (delta <= 1) {
+        glideRef.current = null;
+        jumpingRef.current = false;
+        lastTopRef.current = node.scrollTop;
+        return;
+      }
+      node.scrollTop = node.scrollTop + Math.max(delta * GLIDE_EASE, GLIDE_MIN_STEP);
+      glideRef.current = requestAnimationFrame(step);
+    };
+
+    if (reduceMotion) {
+      el.scrollTop = el.scrollHeight;
+      jumpingRef.current = false;
+      lastTopRef.current = el.scrollTop;
+      return;
+    }
+    glideRef.current = requestAnimationFrame(step);
+  }, [scrollRef, stopGlide, messages.length]);
 
   // What landed while the reader was away. Counted in MESSAGES, not frames: a
   // streaming turn is one message growing, and the pill is already visible for
@@ -140,6 +212,7 @@ export function useChatScroll(
     const el = scrollRef.current;
     if (!el || !nearBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
+    lastTopRef.current = el.scrollTop;
     seenCountRef.current = messages.length;
   }, [messages, streaming, scrollRef]);
 

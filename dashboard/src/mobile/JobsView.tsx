@@ -55,7 +55,9 @@ function formatRelativeTime(ts: string): string {
 export function JobsView() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedJob, setSelectedJob] = useState<JobDetailResponse | null>(null);
+  const [selectedJob, setSelectedJob] = useState<JobDetailResponse | null>(
+    null,
+  );
   const [loadingDetail, setLoadingDetail] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingJobIdRef = useRef<number | null>(null);
@@ -67,7 +69,7 @@ export function JobsView() {
 
       if (pendingJobIdRef.current) {
         const jobId = pendingJobIdRef.current;
-        const job = res.jobs.find(j => j.id === jobId);
+        const job = res.jobs.find((j) => j.id === jobId);
         if (job) {
           await openJob(jobId);
         }
@@ -103,7 +105,7 @@ export function JobsView() {
     const handleOpenJob = (event: CustomEvent<{ id: number }>) => {
       const jobId = event.detail.id;
       if (jobs.length > 0) {
-        const job = jobs.find(j => j.id === jobId);
+        const job = jobs.find((j) => j.id === jobId);
         if (job) {
           openJob(jobId);
         }
@@ -115,7 +117,10 @@ export function JobsView() {
     window.addEventListener("sarathy:open-job", handleOpenJob as EventListener);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      window.removeEventListener("sarathy:open-job", handleOpenJob as EventListener);
+      window.removeEventListener(
+        "sarathy:open-job",
+        handleOpenJob as EventListener,
+      );
     };
   }, [jobs]);
 
@@ -123,21 +128,28 @@ export function JobsView() {
     if (selectedJob) {
       const handleNotification = () => fetchJobs();
       window.addEventListener("sarathy:notification", handleNotification);
-      return () => window.removeEventListener("sarathy:notification", handleNotification);
+      return () =>
+        window.removeEventListener("sarathy:notification", handleNotification);
     }
   }, [selectedJob]);
 
   const statusBadge = (status: string) => (
     <Badge
       variant="outline"
-      className={cn("text-xs font-medium", STATUS_COLORS[status] || "bg-gray-100 text-gray-800 border-gray-200")}
+      className={cn(
+        "text-xs font-medium",
+        STATUS_COLORS[status] || "bg-gray-100 text-gray-800 border-gray-200",
+      )}
     >
       {status.replace("_", " ")}
     </Badge>
   );
 
   const levelBadge = (level: string) => (
-    <Badge variant="outline" className={cn("text-xs", LEVEL_COLORS[level] || "text-muted-foreground")}>
+    <Badge
+      variant="outline"
+      className={cn("text-xs", LEVEL_COLORS[level] || "text-muted-foreground")}
+    >
       {level}
     </Badge>
   );
@@ -146,7 +158,12 @@ export function JobsView() {
     return (
       <div className="flex h-full flex-col" data-testid="mobile-jobs">
         <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
-          <Button variant="ghost" size="sm" onClick={closeDetail} className="gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={closeDetail}
+            className="gap-1"
+          >
             <ChevronLeft className="size-4" />
             Jobs
           </Button>
@@ -158,39 +175,55 @@ export function JobsView() {
               <div className="p-4 space-y-3">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <h2 className="text-lg font-semibold">{selectedJob.job.title}</h2>
+                    <h2 className="text-lg font-semibold">
+                      {selectedJob.job.title}
+                    </h2>
                     <div className="flex items-center gap-2 mt-1">
                       {statusBadge(selectedJob.job.status)}
-                      <span className="text-xs text-muted-foreground">{selectedJob.job.kind}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {selectedJob.job.kind}
+                      </span>
                     </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
                     <span className="text-muted-foreground">Repo</span>
-                    <p className="font-mono text-xs truncate">{selectedJob.job.repo || "—"}</p>
+                    <p className="font-mono text-xs truncate">
+                      {selectedJob.job.repo || "—"}
+                    </p>
                   </div>
                   <div>
                     <span className="text-muted-foreground">Model</span>
-                    <p className="font-mono text-xs truncate">{selectedJob.job.model || "—"}</p>
+                    <p className="font-mono text-xs truncate">
+                      {selectedJob.job.model || "—"}
+                    </p>
                   </div>
                   <div>
                     <span className="text-muted-foreground">Created</span>
-                    <p className="font-mono text-xs">{formatDate(selectedJob.job.created_at)}</p>
+                    <p className="font-mono text-xs">
+                      {formatDate(selectedJob.job.created_at)}
+                    </p>
                   </div>
                   <div>
                     <span className="text-muted-foreground">Updated</span>
-                    <p className="font-mono text-xs">{formatDate(selectedJob.job.updated_at)}</p>
+                    <p className="font-mono text-xs">
+                      {formatDate(selectedJob.job.updated_at)}
+                    </p>
                   </div>
                   {selectedJob.job.closed_at && (
                     <div>
                       <span className="text-muted-foreground">Closed</span>
-                      <p className="font-mono text-xs">{formatDate(selectedJob.job.closed_at)}</p>
+                      <p className="font-mono text-xs">
+                        {formatDate(selectedJob.job.closed_at)}
+                      </p>
                     </div>
                   )}
                   <div>
                     <span className="text-muted-foreground">Events</span>
-                    <p className="font-mono text-xs">{selectedJob.job.event_count}</p>
+                    <p className="font-mono text-xs">
+                      {selectedJob.job.event_count}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -204,19 +237,28 @@ export function JobsView() {
                 ) : (
                   <ul className="space-y-2">
                     {selectedJob.events.map((event: JobEvent) => (
-                      <li key={event.id} className="flex flex-col gap-1 p-3 bg-muted/50 rounded-lg border">
+                      <li
+                        key={event.id}
+                        className="flex flex-col gap-1 p-3 bg-muted/50 rounded-lg border"
+                      >
                         <div className="flex items-center gap-2 text-xs">
-                          <span className="font-mono text-muted-foreground">{formatDate(event.ts)}</span>
+                          <span className="font-mono text-muted-foreground">
+                            {formatDate(event.ts)}
+                          </span>
                           <span className="px-1.5 py-0.5 bg-muted rounded text-[10px] font-mono">
                             {event.event_type}
                           </span>
                           {levelBadge(event.level)}
-                          <span className="text-muted-foreground">{formatRelativeTime(event.ts)}</span>
+                          <span className="text-muted-foreground">
+                            {formatRelativeTime(event.ts)}
+                          </span>
                         </div>
                         <p className="text-sm ml-6">{event.message}</p>
                         {event.payload && (
                           <details className="ml-6">
-                            <summary className="text-xs text-muted-foreground cursor-pointer">Payload</summary>
+                            <summary className="text-xs text-muted-foreground cursor-pointer">
+                              Payload
+                            </summary>
                             <pre className="mt-1 text-xs bg-background p-2 rounded overflow-auto">
                               {JSON.stringify(event.payload, null, 2)}
                             </pre>
@@ -271,7 +313,13 @@ export function JobsView() {
       <div className="border-b px-4 py-3">
         <div className="flex items-center justify-between">
           <h1 className="text-base font-semibold">Jobs</h1>
-          <Button variant="ghost" size="sm" onClick={fetchJobs} disabled={loading} className="gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={fetchJobs}
+            disabled={loading}
+            className="gap-1"
+          >
             <Loader2 className={cn("size-4", loading && "animate-spin")} />
             Refresh
           </Button>
@@ -299,25 +347,46 @@ export function JobsView() {
                 )}
                 onClick={() => openJob(job.id)}
               >
+                {/* ONE column, and every line wraps (spec 142 §A).
+                    It used to be two: the text, plus a fixed 200px column on the
+                    right for the last event. On a 390px screen that left the
+                    title about 146px — a job title is easily 1000px of text, so
+                    `truncate` turned it into an unreadable stub. The event moves
+                    BELOW the metadata, which gives the title the full width, and
+                    `line-clamp-2` matches what the desktop card already does. */}
                 <div className="flex-1 min-w-0">
                   <div className="flex flex-wrap items-center gap-2 mb-1">
-                    <span className="font-mono text-sm font-medium">#{job.id}</span>
+                    <span className="font-mono text-sm font-medium">
+                      #{job.id}
+                    </span>
                     {statusBadge(job.status)}
-                    <span className="text-xs text-muted-foreground min-w-0 truncate">{job.kind}</span>
+                    <span className="min-w-0 text-xs text-muted-foreground">
+                      {job.kind}
+                    </span>
                   </div>
-                  <h3 className="font-medium truncate">{job.title}</h3>
-                  <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-muted-foreground">
-                    {job.repo && <span className="font-mono min-w-0 truncate">{job.repo}</span>}
-                    {job.model && <span className="font-mono min-w-0 truncate">{job.model}</span>}
-                    <span className="whitespace-nowrap">{formatRelativeTime(job.updated_at)}</span>
+                  <h3 className="font-medium leading-snug line-clamp-2">
+                    {job.title}
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground">
+                    {job.repo && (
+                      <span className="font-mono min-w-0">{job.repo}</span>
+                    )}
+                    {job.model && (
+                      <span className="font-mono min-w-0">{job.model}</span>
+                    )}
+                    <span className="whitespace-nowrap">
+                      {formatRelativeTime(job.updated_at)}
+                    </span>
                   </div>
+                  {job.last_event && (
+                    <div className="mt-1.5 text-xs text-muted-foreground">
+                      <p className="line-clamp-2">{job.last_event.message}</p>
+                      <span className="text-[10px]">
+                        {formatRelativeTime(job.last_event.ts)}
+                      </span>
+                    </div>
+                  )}
                 </div>
-                {job.last_event && (
-                  <div className="text-right text-xs text-muted-foreground max-w-[200px] min-w-0">
-                    <p className="truncate">{job.last_event.message}</p>
-                    <span className="text-[10px]">{formatRelativeTime(job.last_event.ts)}</span>
-                  </div>
-                )}
               </Button>
             ))}
           </div>

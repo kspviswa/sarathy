@@ -112,7 +112,8 @@ export function UsageCard() {
         if (mounted) setSummary(data);
       })
       .catch((err) => {
-        if (mounted) setError(err instanceof Error ? err.message : "Failed to load");
+        if (mounted)
+          setError(err instanceof Error ? err.message : "Failed to load");
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -164,7 +165,9 @@ export function UsageCard() {
   const { totals, by_model, timeseries } = summary;
 
   // Unique model ids for the filter dropdown (providers may repeat a model id).
-  const modelOptions = Array.from(new Set(by_model.map((m) => m.model))).filter(Boolean);
+  const modelOptions = Array.from(new Set(by_model.map((m) => m.model))).filter(
+    Boolean,
+  );
 
   // Prepare time-series data for chart: plot both prompt and cached tokens.
   const promptSeries = timeseries.map((d) => d.prompt_tokens);
@@ -183,7 +186,10 @@ export function UsageCard() {
           <div className="flex items-center gap-2">
             {modelOptions.length > 0 && (
               <Select value={model} onValueChange={setModel}>
-                <SelectTrigger className="w-auto min-w-[150px]" aria-label="Filter by model">
+                <SelectTrigger
+                  className="w-auto min-w-[150px]"
+                  aria-label="Filter by model"
+                >
                   <Filter className="size-4 opacity-50" />
                   <SelectValue placeholder="All models" />
                   <ChevronDown className="size-4 opacity-50" />
@@ -198,8 +204,14 @@ export function UsageCard() {
                 </SelectContent>
               </Select>
             )}
-            <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-              <SelectTrigger className="w-auto min-w-[140px]" aria-label="Time window">
+            <Select
+              value={String(days)}
+              onValueChange={(v) => setDays(Number(v))}
+            >
+              <SelectTrigger
+                className="w-auto min-w-[140px]"
+                aria-label="Time window"
+              >
                 <SelectValue placeholder="Window" />
                 <ChevronDown className="size-4 opacity-50" />
               </SelectTrigger>
@@ -212,22 +224,32 @@ export function UsageCard() {
         </div>
         <div className="text-sm text-muted-foreground">
           Window: {days} day{days > 1 ? "s" : ""}
-          {model !== ALL_MODELS ? ` · ${TruncateModelId(model, 40)}` : " · all models"}
+          {model !== ALL_MODELS
+            ? ` · ${TruncateModelId(model, 40)}`
+            : " · all models"}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Headline stats */}
-        <div className="grid grid-cols-3 gap-4 text-center">
-          <div className="p-3 rounded-lg bg-muted/50">
-            <div className="text-2xl font-bold text-foreground">{formatNumber(totals.total_tokens)}</div>
+        {/* Three headline numbers in a third of a 390px card: at `text-2xl` in a
+            `p-3` cell a value like "469.8M" is wider than its own box (measured
+            +13px). One step smaller and a tighter pad on narrow screens keeps the
+            figure inside its cell without shrinking the desktop layout. */}
+        <div className="grid grid-cols-3 gap-3 text-center sm:gap-4">
+          <div className="min-w-0 rounded-lg bg-muted/50 p-2 sm:p-3">
+            <div className="text-xl font-bold tabular-nums text-foreground sm:text-2xl">
+              {formatNumber(totals.total_tokens)}
+            </div>
             <div className="text-xs text-muted-foreground">Total Tokens</div>
           </div>
-          <div className="p-3 rounded-lg bg-muted/50">
-            <div className="text-2xl font-bold text-primary">{formatNumber(totals.cached_tokens)}</div>
+          <div className="min-w-0 rounded-lg bg-muted/50 p-2 sm:p-3">
+            <div className="text-xl font-bold tabular-nums text-primary sm:text-2xl">
+              {formatNumber(totals.cached_tokens)}
+            </div>
             <div className="text-xs text-muted-foreground">Cached Tokens</div>
           </div>
-          <div className="p-3 rounded-lg bg-muted/50">
-            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+          <div className="min-w-0 rounded-lg bg-muted/50 p-2 sm:p-3">
+            <div className="text-xl font-bold tabular-nums text-emerald-600 dark:text-emerald-400 sm:text-2xl">
               {totals.cache_hit_pct.toFixed(1)}%
             </div>
             <div className="text-xs text-muted-foreground">Cache Hit %</div>
@@ -282,29 +304,48 @@ export function UsageCard() {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium">Per Model</span>
-              <span className="text-xs text-muted-foreground">{by_model.length} model(s)</span>
+              <span className="text-xs text-muted-foreground">
+                {by_model.length} model(s)
+              </span>
             </div>
             <div className="space-y-1 max-h-60 overflow-y-auto">
               {by_model.map((m, i) => (
                 <button
                   type="button"
                   key={`${m.model}-${m.provider}-${i}`}
-                  onClick={() => setModel(model === m.model ? ALL_MODELS : m.model)}
-                  title={model === m.model ? "Clear filter" : `Show only ${m.model}`}
+                  onClick={() =>
+                    setModel(model === m.model ? ALL_MODELS : m.model)
+                  }
+                  title={
+                    model === m.model ? "Clear filter" : `Show only ${m.model}`
+                  }
                   className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded text-sm hover:bg-muted/50 ${
-                    model === m.model ? "bg-muted/60 ring-1 ring-primary/40" : ""
+                    model === m.model
+                      ? "bg-muted/60 ring-1 ring-primary/40"
+                      : ""
                   }`}
                 >
                   <div className="flex items-center gap-2 min-w-0 flex-1 text-left">
-                    <Badge variant="outline" className="text-xs font-mono whitespace-nowrap shrink-0">
-                      {TruncateModelId(m.model)}
+                    {/* `shrink-0` + `whitespace-nowrap` made this the one part
+                        of the row that could not yield, so on a narrow screen the
+                        badge ran past the card's edge (measured +86px on a 390px
+                        viewport). It now shrinks and wraps, and shows the model id
+                        WHOLE — truncating a model name to 40 chars hides the thing
+                        the row exists to identify (spec 142 §A). */}
+                    <Badge
+                      variant="outline"
+                      className="min-w-0 text-xs font-mono"
+                    >
+                      {m.model}
                     </Badge>
-                    <span className="text-xs text-muted-foreground truncate">
+                    <span className="min-w-0 text-xs text-muted-foreground">
                       {m.provider}
                     </span>
                   </div>
                   <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
-                    <span className="font-medium text-foreground">{m.requests} req</span>
+                    <span className="font-medium text-foreground">
+                      {m.requests} req
+                    </span>
                     <span className="font-medium text-primary">
                       {m.cache_hit_pct.toFixed(1)}%
                     </span>

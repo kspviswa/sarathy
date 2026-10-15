@@ -12,7 +12,9 @@ import {
   applyOutbound,
   deriveLiveTurnStatus,
   formatTurnDuration,
+  groupStoredTurns,
   LIVE_FALLBACK_LABEL,
+  splitTurnDisplay,
   summarizeToolHint,
   turnSegments,
   turnStepCount,
@@ -570,5 +572,136 @@ describe("summarizeToolHint — tool calls as chips (spec 135 §A)", () => {
     expect(chip.name).toBe("echo");
     expect(chip.summary.length).toBeLessThanOrEqual(49);
     expect(chip.summary.endsWith("…")).toBe(true);
+  });
+});
+
+/**
+ * Spec 139 §B — a stored transcript reconstructs into ONE bubble per turn.
+ *
+ * The session file is written per ITERATION, not per turn: a turn that called
+ * three tools is four assistant records. The client mapped each to its own
+ * bubble, so reloading a session turned one turn into a dozen bubbles, each with
+ * its own "Thinking" header. Viswa caught it: "if I reload the chat of current
+ * session, the completed turns will still show as separate bubbles?" They did.
+ *
+ * The records carry no turn id, so the boundary is positional: a run of
+ * consecutive assistant records between two user records is one turn, and within
+ * a run the last record is the answer.
+ */
+describe("groupStoredTurns — one bubble per stored turn (spec 139 §B)", () => {
+  const user = (content: string): ChatMessage => ({ role: "user", content });
+  const assistant = (content: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+    role: "assistant",
+    content,
+    ...extra,
+  });
+
+  it("folds a turn's per-iteration records into one bubble", () => {
+    const grouped = groupStoredTurns([
+      user("fix the bug"),
+      assistant("Now the failing test that pins the defect:"),
+      assistant("Green. Now the full suite:"),
+      assistant("Fixed and live, sir."),
+    ]);
+
+    expect(grouped).toHaveLength(2);
+    expect(grouped[1].role).toBe("assistant");
+    expect(grouped[1].segments?.map((s) => s.text)).toEqual([
+      "Now the failing test that pins the defect:",
+      "Green. Now the full suite:",
+      "Fixed and live, sir.",
+    ]);
+    // The monologue is the notes, the last record is the answer — exactly the
+    // shape the live reducer builds from `_seal`/`_final`.
+    expect(grouped[1].segments?.map((s) => s.kind)).toEqual(["note", "note", "answer"]);
+    expect(grouped[1].segments?.every((s) => s.sealed)).toBe(true);
+    expect(grouped[1].progress).toBe(false);
+  });
+
+  it("never merges across a user message", () => {
+    const grouped = groupStoredTurns([
+      user("one"),
+      assistant("answer one"),
+      user("two"),
+      assistant("answer two"),
+    ]);
+    expect(grouped).toHaveLength(4);
+    expect(grouped.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+  });
+
+  it("treats a lone assistant record as the answer", () => {
+    const grouped = groupStoredTurns([user("hi"), assistant("Hello, sir.")]);
+    expect(grouped[1].segments).toEqual([
+      { text: "Hello, sir.", sealed: true, kind: "answer" },
+    ]);
+  });
+
+  it("keeps attachment-only records and unions their media", () => {
+    // A voice reply persists with empty content and a media path (spec 127 §B).
+    const grouped = groupStoredTurns([
+      user("say it"),
+      assistant("Generating the audio…"),
+      assistant("", { media: ["/x/reply.ogg"] }),
+    ]);
+    expect(grouped).toHaveLength(2);
+    expect(grouped[1].media).toEqual(["/x/reply.ogg"]);
+    expect(grouped[1].segments?.map((s) => s.kind)).toEqual(["note"]);
+  });
+
+  it("does not swallow an out-of-band notice into a turn", () => {
+    const grouped = groupStoredTurns([
+      user("go"),
+      assistant("working"),
+      { role: "assistant", content: "Stopped.", notice: true },
+    ]);
+    expect(grouped).toHaveLength(3);
+    expect(grouped[2].notice).toBe(true);
+    expect(grouped[2].segments).toBeUndefined();
+  });
+
+  it("is a no-op on a transcript that is already one bubble per turn", () => {
+    const one = groupStoredTurns([user("hi"), assistant("Hello, sir.")]);
+    const again = groupStoredTurns(one);
+    expect(again.map((m) => m.segments?.map((s) => s.text))).toEqual(
+      one.map((m) => m.segments?.map((s) => s.text)),
+    );
+  });
+});
+
+/**
+ * Spec 139 §A — which prose is inline, and which tucks into the collapse.
+ */
+describe("splitTurnDisplay — the settled turn shows its answer", () => {
+  const seg = (text: string, kind: "note" | "answer", sealed = true) => ({ text, kind, sealed });
+
+  it("tucks the notes once the turn has settled", () => {
+    const { inline, tucked } = splitTurnDisplay(
+      [seg("step one", "note"), seg("step two", "note"), seg("Done.", "answer")],
+      false,
+    );
+    expect(inline.map((s) => s.text)).toEqual(["Done."]);
+    expect(tucked.map((s) => s.text)).toEqual(["step one", "step two"]);
+  });
+
+  it("tucks nothing while the turn is live", () => {
+    const segments = [seg("step one", "note"), seg("draft", "answer", false)];
+    const { inline, tucked } = splitTurnDisplay(segments, true);
+    expect(inline).toEqual(segments);
+    expect(tucked).toEqual([]);
+  });
+
+  it("keeps the prose inline when there is no answer to show instead", () => {
+    const segments = [seg("Halfway through.", "note")];
+    const { inline, tucked } = splitTurnDisplay(segments, false);
+    expect(inline).toEqual(segments);
+    expect(tucked).toEqual([]);
+  });
+
+  it("tucks the prose when the bubble has other content to show", () => {
+    // A voice turn: no answer prose, but the audio is the reply.
+    const segments = [seg("Generating the audio…", "note")];
+    const { inline, tucked } = splitTurnDisplay(segments, false, true);
+    expect(inline).toEqual([]);
+    expect(tucked).toEqual(segments);
   });
 });

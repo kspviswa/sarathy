@@ -114,29 +114,24 @@ describe.each([
   });
 
   it("stacks the turn's prose in order, separated by the trail divider", () => {
-    render(<View {...props} streaming={false} messages={toolCallingTurn()} />);
+    // While the turn is LIVE the whole trail is inline: the monologue packed as
+    // notes, the divider, then the answer. Once it settles the monologue moves
+    // into the collapse (spec 139 §A — see turnSettling139).
+    render(<View {...props} streaming messages={toolCallingTurn()} />);
 
     const segments = screen.getByTestId("assistant-turn-segments");
     expect(within(segments).getByText(/Two images; let me look at both\./)).toBeInTheDocument();
     expect(within(segments).getByText("The first is a cat.")).toBeInTheDocument();
     expect(within(segments).getByText("The second is a bus.")).toBeInTheDocument();
 
-    // Spec 138 §A: the two narration segments are packed as ONE muted notes
-    // block, and the divider marks the step from process to reply. The trail is
-    // still there — it is just no longer drawn between *every* pair.
     const notes = screen.getByTestId("trail-notes");
     expect(within(notes).getAllByTestId("trail-note")).toHaveLength(2);
-    expect(within(notes).getByText(/Two images; let me look at both\./)).toBeInTheDocument();
-    expect(within(notes).getByText("The first is a cat.")).toBeInTheDocument();
 
+    // One divider: process → reply. The trail is still there — it is just no
+    // longer drawn between *every* pair of segments.
     const dividers = screen.getAllByTestId("trail-divider");
     expect(dividers).toHaveLength(1);
     expect(dividers[0]).toHaveTextContent("⁂");
-
-    // The answer is NOT in the notes block: it keeps the bubble's full prose.
-    const answer = screen.getByTestId("trail-answer");
-    expect(within(answer).getByText("The second is a bus.")).toBeInTheDocument();
-    expect(within(notes).queryByText("The second is a bus.")).toBeNull();
   });
 
   it("keeps reasoning and tool calls in the ONE collapse header, as chips", () => {

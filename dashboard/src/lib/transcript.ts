@@ -538,6 +538,109 @@ export function turnSegments(m: ChatMessage): TurnSegment[] {
 }
 
 /**
+ * Split the turn's prose into its two halves (spec 139 §A).
+ *
+ * `note` is the loop's between-tool narration; `answer` is the reply. A segment
+ * still streaming counts as an answer, so a live turn's trailing draft stays at
+ * full prose weight until the loop commits it one way or the other.
+ */
+export function splitTurnProse(segments: TurnSegment[]): {
+  notes: TurnSegment[];
+  answers: TurnSegment[];
+} {
+  const notes: TurnSegment[] = [];
+  const answers: TurnSegment[] = [];
+  for (const seg of segments) (seg.kind === "note" ? notes : answers).push(seg);
+  return { notes, answers };
+}
+
+/**
+ * Which prose the bubble shows inline, and which tucks into the collapse
+ * (spec 139 §A).
+ *
+ * Telegram parity: on Telegram the monologue is a draft — you watch it stream,
+ * and when the turn ends the draft is discarded so only the answer remains. The
+ * dashboard keeps the record, but once a turn has SETTLED its monologue moves
+ * out of the bubble's prose and into the collapse: a finished turn reads as its
+ * answer (Viswa: "once the turn is over I'm not that concerned about
+ * monologues"). While the turn is LIVE nothing tucks — you watch it work.
+ *
+ * A settled turn with no answer of its own (voice replies, `/stop`) keeps its
+ * prose inline unless the bubble has something else to show (`hasOther`: media,
+ * quotes) — otherwise the bubble would be empty.
+ */
+export function splitTurnDisplay(
+  segments: TurnSegment[],
+  live: boolean,
+  hasOther = false,
+): { inline: TurnSegment[]; tucked: TurnSegment[] } {
+  if (live) return { inline: segments, tucked: [] };
+  const { notes, answers } = splitTurnProse(segments);
+  const hasAnswer = answers.some((s) => s.text.trim().length > 0);
+  if (!hasAnswer && !hasOther) return { inline: segments, tucked: [] };
+  return { inline: answers, tucked: notes };
+}
+
+/**
+ * Rebuild one bubble per turn from a stored transcript (spec 139 §B).
+ *
+ * The session file is written per ITERATION, not per turn: a turn that called
+ * three tools is four assistant records. The transcript endpoint returns them
+ * as-is, and the client mapped each to its own bubble — so a reload turned one
+ * turn into a dozen bubbles, each with its own "Thinking" header. Viswa caught
+ * it: "if I reload the chat of current session, the completed turns will still
+ * show as separate bubbles?" They did.
+ *
+ * The records carry no turn id, so the boundary is positional: a run of
+ * consecutive assistant records between two user records is ONE turn. Within a
+ * run the last record is the answer and the rest are the monologue — the same
+ * shape the live reducer builds from `_seal`/`_final`, so a reloaded turn
+ * renders like a live one.
+ */
+export function groupStoredTurns(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  let run: ChatMessage[] = [];
+
+  const flush = () => {
+    if (!run.length) return;
+    out.push(mergeStoredTurn(run));
+    run = [];
+  };
+
+  for (const m of messages) {
+    if (m.role === "assistant" && !m.notice) run.push(m);
+    else {
+      flush();
+      out.push(m);
+    }
+  }
+  flush();
+  return out;
+}
+
+/** One stored turn's records → the single bubble the live reducer would build. */
+function mergeStoredTurn(run: ChatMessage[]): ChatMessage {
+  const last = run[run.length - 1];
+  const segments: TurnSegment[] = [
+    ...run.slice(0, -1).map((m) => ({ text: m.content, sealed: true, kind: "note" as const })),
+    { text: last.content, sealed: true, kind: "answer" as const },
+  ].filter((s) => s.text.trim().length > 0);
+
+  // Attachments can be persisted on any record of the run (spec 127 §B), so the
+  // merged bubble keeps them all.
+  const media = run.flatMap((m) => m.media ?? []);
+
+  return {
+    ...last,
+    segments,
+    content: segments.map((s) => s.text).join(SEGMENT_JOIN),
+    sealed: true,
+    progress: false,
+    media: media.length ? media : undefined,
+  };
+}
+
+/**
  * Steps shown in the collapse header. A tool call is a step; the reasoning pass
  * that produced it is not (reasoning is what the steps are FOR).
  */

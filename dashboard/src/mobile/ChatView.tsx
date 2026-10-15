@@ -45,7 +45,7 @@ import {
   type QuoteChip,
 } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
-import { deriveLiveTurnStatus, liveBubbleIndex, turnSegments } from "@/lib/transcript";
+import { deriveLiveTurnStatus, liveBubbleIndex, splitTurnDisplay, turnSegments } from "@/lib/transcript";
 import type { ChatMessage } from "@/views/ChatView";
 import { DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 
@@ -653,6 +653,19 @@ function MobileMessage({
   // caret blinking on a turn that ended without a `_final` frame.
   const live = !isUser && !isNotice && liveProp;
 
+  // A settled turn shows its answer; the monologue tucks into the collapse
+  // (spec 139 §A). Shared with desktop, so the two cannot disagree about which
+  // prose is the reply.
+  const { inline: inlineSegments, tucked: tuckedSegments } = useMemo(
+    () =>
+      splitTurnDisplay(
+        segments,
+        live,
+        (message.media?.length ?? 0) > 0 || (message.quotes?.length ?? 0) > 0,
+      ),
+    [segments, live, message.media?.length, message.quotes?.length],
+  );
+
   // The collapse header is the turn's only status row: it shows whenever the
   // turn has anything to reveal, and also while a live turn has said nothing
   // yet — that empty state is one slim row, not a placeholder + a chip.
@@ -690,6 +703,7 @@ function MobileMessage({
           <ThinkingSection
             toolHints={message.toolHints || []}
             thinkingContent={message.thinkingContent || ""}
+            notes={tuckedSegments}
             done={!live}
             alwaysShow
             onOpenFile={onOpenFile}
@@ -734,10 +748,11 @@ function MobileMessage({
              `content` (no segments) — same plain body as before spec 135. */
           <AssistantBody content={cleanContent} onOpenFile={onOpenFile} onSend={onSend} />
         ) : (
-          /* The turn's prose, segment by segment, with the trail divider between
-             them — the same shared component desktop renders (spec 135 §A). */
+          /* The turn's prose — every segment while it is live, the answer alone
+             once it has settled (spec 135 §A, spec 139 §A). The same shared
+             component desktop renders. */
           <TurnSegments
-            segments={segments}
+            segments={inlineSegments}
             live={live}
             renderSegment={(text, isStreaming) => (
               <AssistantBody

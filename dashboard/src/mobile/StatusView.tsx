@@ -14,7 +14,9 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
       <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="truncate text-sm font-medium">{value}</span>
+      {/* Wraps rather than clips: a workspace path or a model id is exactly the
+          kind of long token that used to be cut off here (spec 142 §A). */}
+      <span className="min-w-0 text-right text-sm font-medium">{value}</span>
     </div>
   );
 }
@@ -26,7 +28,11 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
     api
       .status()
       .then(setStatus)
-      .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load status"));
+      .catch((err) =>
+        toast.error(
+          err instanceof Error ? err.message : "Failed to load status",
+        ),
+      );
   }, []);
 
   async function logout() {
@@ -64,7 +70,12 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
           >
             <Laptop />
           </Button>
-          <Button variant="ghost" size="icon" aria-label="Log out" onClick={() => void logout()}>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Log out"
+            onClick={() => void logout()}
+          >
             <LogOut />
           </Button>
         </div>
@@ -75,7 +86,9 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
           <Logo size={44} />
           <div>
             <h2 className="text-lg font-bold leading-tight">Sarathy</h2>
-            <p className="text-sm text-muted-foreground">v{status?.version ?? "…"}</p>
+            <p className="text-sm text-muted-foreground">
+              v{status?.version ?? "…"}
+            </p>
           </div>
         </div>
 
@@ -92,16 +105,27 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
                   <span
                     className={`inline-block size-2.5 rounded-full ${status.gateway.running ? "bg-emerald-500" : "bg-destructive"}`}
                   />
-                  <Badge variant={status.gateway.running ? "default" : "destructive"}>
+                  <Badge
+                    variant={status.gateway.running ? "default" : "destructive"}
+                  >
                     {status.gateway.running ? "Running" : "Stopped"}
                   </Badge>
                 </div>
                 <Row label="Model" value={status.model || "—"} />
                 <Row label="Provider" value={status.provider || "—"} />
-                <Row label="Workspace" value={<span className="font-mono text-xs">{status.workspace}</span>} />
+                <Row
+                  label="Workspace"
+                  value={
+                    <span className="font-mono text-xs">
+                      {status.workspace}
+                    </span>
+                  }
+                />
               </>
             ) : (
-              <p className="text-sm text-muted-foreground">Status unavailable</p>
+              <p className="text-sm text-muted-foreground">
+                Status unavailable
+              </p>
             )}
           </CardContent>
         </Card>
@@ -122,7 +146,9 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No channels active</p>
+              <p className="text-sm text-muted-foreground">
+                No channels active
+              </p>
             )}
           </CardContent>
         </Card>
@@ -138,12 +164,19 @@ export function StatusView({ onLoggedOut }: { onLoggedOut: () => void }) {
               <>
                 <Row
                   label="Address"
-                  value={<span className="font-mono text-xs">{`${status.dashboard.host}:${status.dashboard.port}`}</span>}
+                  value={
+                    <span className="font-mono text-xs">{`${status.dashboard.host}:${status.dashboard.port}`}</span>
+                  }
                 />
-                <Row label="Streaming" value={status.dashboard.streaming ? "Enabled" : "Disabled"} />
+                <Row
+                  label="Streaming"
+                  value={status.dashboard.streaming ? "Enabled" : "Disabled"}
+                />
               </>
             ) : (
-              <p className="text-sm text-muted-foreground">Dashboard info unavailable</p>
+              <p className="text-sm text-muted-foreground">
+                Dashboard info unavailable
+              </p>
             )}
           </CardContent>
         </Card>

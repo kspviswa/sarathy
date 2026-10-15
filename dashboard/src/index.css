@@ -79,6 +79,23 @@
   }
   html {
     -webkit-tap-highlight-color: transparent;
+    /* Long unbreakable tokens — model ids, SHAs, repo paths, host:port — wrap
+       instead of running past the edge of their box (spec 142 §A).
+       Viswa: "could you also word wrap happens globally? I still find places
+       like jobs tab, dashboard tab showing long words (eg model names) overflow
+       and looking ugly."
+
+       `anywhere`, not `break-word`: both break a word only when it cannot fit
+       on its own line, but `anywhere` ALSO contributes to min-content sizing, so
+       a flex or grid item may shrink below its longest word instead of forcing
+       its container wider. `break-word` leaves that automatic minimum size
+       alone, which is exactly how a `font-mono` model id in a flex row pushes
+       itself out of the card. Set on `html` because `overflow-wrap` inherits.
+
+       Elements that opt out are unaffected: `white-space: nowrap` (Tailwind's
+       `truncate`, `whitespace-nowrap`) forbids wrapping outright, so deliberate
+       one-line clips — ids, timestamps — keep working. */
+    overflow-wrap: anywhere;
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -129,7 +146,10 @@
  */
 .openui-gallery__modal .openui-gallery__modal-content {
   padding-top: max(var(--openui-space-xl, 1.5rem), env(safe-area-inset-top));
-  padding-bottom: max(var(--openui-space-xl, 1.5rem), env(safe-area-inset-bottom));
+  padding-bottom: max(
+    var(--openui-space-xl, 1.5rem),
+    env(safe-area-inset-bottom)
+  );
 }
 
 /* Markdown chat rendering */
@@ -284,8 +304,14 @@
 }
 
 @keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
 }
 
 .streaming-caret {
@@ -434,8 +460,12 @@
    Under prefers-reduced-motion the shimmer is dropped for a solid colour and
    the dots hold still, so the indicator stays readable without animating. */
 @keyframes think-shimmer {
-  0% { background-position: 200% 50%; }
-  100% { background-position: -200% 50%; }
+  0% {
+    background-position: 200% 50%;
+  }
+  100% {
+    background-position: -200% 50%;
+  }
 }
 
 .thinking-shimmer {
@@ -453,8 +483,16 @@
 }
 
 @keyframes think-dot {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-3px); opacity: 1; }
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
 }
 
 .thinking-dot {
@@ -482,8 +520,12 @@
    which drains the emoji of their colour. Under prefers-reduced-motion the
    label just swaps, which is all the information the fade carries. */
 @keyframes hint-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .live-hint {
@@ -530,7 +572,15 @@
   stroke-width: 2.25;
 }
 
-.emoji-icon[data-variant="success"] { color: var(--emoji-success); }
-.emoji-icon[data-variant="danger"]  { color: var(--emoji-danger); }
-.emoji-icon[data-variant="warning"] { color: var(--emoji-warning); }
-.emoji-icon[data-variant="info"]    { color: var(--emoji-info); }
+.emoji-icon[data-variant="success"] {
+  color: var(--emoji-success);
+}
+.emoji-icon[data-variant="danger"] {
+  color: var(--emoji-danger);
+}
+.emoji-icon[data-variant="warning"] {
+  color: var(--emoji-warning);
+}
+.emoji-icon[data-variant="info"] {
+  color: var(--emoji-info);
+}

@@ -17,7 +17,7 @@
  * drive the REAL views through the real hook rather than a harness, so a view
  * that forgets to attach `onScroll` fails here.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 
@@ -67,18 +67,36 @@ const props = { streaming: false, onSend: vi.fn(), onStop: vi.fn(), onNewChat: v
 
 const SCROLL_HEIGHT = 1000;
 const CLIENT_HEIGHT = 500;
+/** The furthest a 1000px transcript can scroll in a 500px window. */
+const BOTTOM = SCROLL_HEIGHT - CLIENT_HEIGHT;
 /** 1000 - 500 - 100 = 400 — anything above 400 is "away from the bottom". */
-const AT_BOTTOM = 500;
+const AT_BOTTOM = BOTTOM;
 const SCROLLED_UP = 100;
+
+/** The bottom of a transcript of a given height. */
+const bottomOf = (scrollHeight: number) => scrollHeight - CLIENT_HEIGHT;
 
 /**
  * Give an element the geometry jsdom refuses to compute, and a `scrollTo` that
  * records the call instead of throwing "Not implemented".
+ *
+ * `scrollTop` CLAMPS, as a real element does. Without that the glide's last
+ * frame — which may overshoot by a few pixels — would settle past the end of the
+ * transcript, and a test asserting the final offset would be asserting an
+ * artefact of the stub rather than where the reader actually ends up.
  */
-function stubGeometry(el: HTMLElement, scrollTop: number) {
-  Object.defineProperty(el, "scrollHeight", { value: SCROLL_HEIGHT, configurable: true });
+function stubGeometry(el: HTMLElement, scrollTop: number, scrollHeight = SCROLL_HEIGHT) {
+  let top = scrollTop;
+  Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
   Object.defineProperty(el, "clientHeight", { value: CLIENT_HEIGHT, configurable: true });
-  Object.defineProperty(el, "scrollTop", { value: scrollTop, writable: true, configurable: true });
+  Object.defineProperty(el, "scrollTop", {
+    configurable: true,
+    get: () => top,
+    set: (v: number) => {
+      const max = (el.scrollHeight || 0) - (el.clientHeight || 0);
+      top = Math.max(0, Math.min(v, max));
+    },
+  });
   (el as unknown as { scrollTo: (o: ScrollToOptions) => void }).scrollTo = vi.fn(function (
     this: HTMLElement,
     opts: ScrollToOptions,
@@ -86,6 +104,16 @@ function stubGeometry(el: HTMLElement, scrollTop: number) {
     this.scrollTop = opts.top ?? 0;
   });
 }
+
+/**
+ * A STABLE empty transcript.
+ *
+ * The auto-follow effect keys off the identity of `messages`, so a harness that
+ * built `{ messages: [] }` inline made the effect run on every render — pinning
+ * the viewport to the bottom the instant the pill was clicked, before the glide
+ * had drawn a single frame. No real view does that; they pass React state.
+ */
+const NO_MESSAGES: unknown[] = [];
 
 /** The scroll container — the one element that owns the transcript. */
 function scroller(): HTMLElement {
@@ -98,11 +126,49 @@ function scroller(): HTMLElement {
   return el;
 }
 
-/** Scroll the transcript to `scrollTop` and let React see the event. */
-function scrollTo(scrollTop: number) {
+/**
+ * Scroll the transcript to `scrollTop` and let React see the event.
+ *
+ * `scrollHeight` is a parameter because the transcript GROWS while a smooth
+ * scroll animates, and a helper that always reset it to the original height made
+ * a "lands short" case impossible to express — which quietly turned the test
+ * below into a no-op.
+ */
+function scrollTo(scrollTop: number, scrollHeight = SCROLL_HEIGHT) {
   const el = scroller();
-  stubGeometry(el, scrollTop);
+  stubGeometry(el, scrollTop, scrollHeight);
   fireEvent.scroll(el);
+}
+
+/**
+ * Timers the glide needs faked.
+ *
+ * `requestAnimationFrame` is NOT in vitest's default `toFake` list, so without
+ * naming it here the glide runs on real frames and `advanceTimersByTime` does
+ * nothing to it — which is exactly how this test first passed while asserting a
+ * single frame of movement.
+ */
+const GLIDE_TIMERS = [
+  "setTimeout",
+  "clearTimeout",
+  "setInterval",
+  "clearInterval",
+  "Date",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+] as const;
+
+/**
+ * Run the jump-to-latest glide to completion.
+ *
+ * The hop is animation-frame driven and aims at a live target, so it takes a few
+ * frames to arrive — asserting the final offset synchronously would only ever
+ * catch frame one.
+ */
+function settleGlide(ms = 2500) {
+  act(() => {
+    vi.advanceTimersByTime(ms);
+  });
 }
 
 describe("jumpLabel", () => {
@@ -131,7 +197,10 @@ describe("useChatScroll — the anchor's contract", () => {
   }
 
   beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers({ toFake: [...GLIDE_TIMERS] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("is hidden while pinned to the bottom", () => {
@@ -168,7 +237,8 @@ describe("useChatScroll — the anchor's contract", () => {
     rerender(<Harness messages={["a", "b", "c"]} />);
 
     act(() => fireEvent.click(screen.getByTestId("jump-to-latest")));
-    expect(scroller().scrollTop).toBe(SCROLL_HEIGHT);
+    settleGlide();
+    expect(scroller().scrollTop).toBe(BOTTOM);
     expect(screen.queryByTestId("jump-to-latest")).toBeNull();
   });
 });
@@ -226,11 +296,18 @@ describe.each([
     const { rerender } = render(<View {...props} messages={convo()} />);
     act(() => scrollTo(AT_BOTTOM));
     rerender(<View {...props} messages={[...convo(), { role: "assistant", content: "a reply" }]} />);
-    expect(scroller().scrollTop).toBe(SCROLL_HEIGHT);
+    expect(scroller().scrollTop).toBe(BOTTOM);
   });
 });
 
 describe("a long smooth scroll does not re-show the pill it dismissed (spec 141 §A)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: [...GLIDE_TIMERS] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   /**
    * Measured on mobile: an 8k-pixel hop to the bottom outlived a 600ms
    * settle-guard, so the frames after the guard expired read "away from the
@@ -240,7 +317,7 @@ describe("a long smooth scroll does not re-show the pill it dismissed (spec 141 
    */
   function Harness() {
     const ref = React.useRef<HTMLDivElement>(null);
-    const { showJump, newCount, jumpToLatest, onScroll } = useChatScroll(ref, { messages: [] });
+    const { showJump, newCount, jumpToLatest, onScroll } = useChatScroll(ref, { messages: NO_MESSAGES });
     React.useEffect(() => {
       if (ref.current) stubGeometry(ref.current, AT_BOTTOM);
     }, []);
@@ -259,11 +336,15 @@ describe("a long smooth scroll does not re-show the pill it dismissed (spec 141 
 
     act(() => fireEvent.click(screen.getByTestId("jump-to-latest")));
 
-    // The smooth scroll's intermediate frames: descending, so they are ours.
+    // The glide's intermediate frames: descending, so they are ours.
     for (const top of [300, 380, 440]) act(() => scrollTo(top));
     expect(screen.queryByTestId("jump-to-latest")).toBeNull();
 
-    act(() => scrollTo(AT_BOTTOM));
+    // …and it arrives on its own, without the pill ever coming back. The glide
+    // yields as soon as the position counts as "at the bottom", so the assertion
+    // is a threshold, not an exact offset.
+    settleGlide();
+    expect(BOTTOM - scroller().scrollTop).toBeLessThanOrEqual(100);
     expect(screen.queryByTestId("jump-to-latest")).toBeNull();
   });
 
@@ -277,5 +358,61 @@ describe("a long smooth scroll does not re-show the pill it dismissed (spec 141 
 
     act(() => scrollTo(120)); // the reader took over and pulled back up
     expect(screen.getByTestId("jump-to-latest")).toBeInTheDocument();
+
+    // …and the glide yields for good: it must not drag them back down.
+    settleGlide();
+    expect(scroller().scrollTop).toBe(120);
+    expect(screen.getByTestId("jump-to-latest")).toBeInTheDocument();
+  });
+});
+
+describe("a hop that lands short still leaves the reader at the latest (spec 141 §A)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: [...GLIDE_TIMERS] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * The transcript can grow while a long smooth scroll is animating, which makes
+   * the target it was aimed at stale — the hop lands short of the bottom. The
+   * frames of our own flight must not be read as a scroll-away, or the reader is
+   * left stranded just above the bottom with the pill showing and a growing turn
+   * no longer followed. Measured on a long transcript: 141px short.
+   */
+  function Harness({ messages }: { messages: unknown[] }) {
+    const ref = React.useRef<HTMLDivElement>(null);
+    const { showJump, newCount, jumpToLatest, onScroll } = useChatScroll(ref, { messages });
+    React.useEffect(() => {
+      if (ref.current) stubGeometry(ref.current, AT_BOTTOM);
+    }, []);
+    return (
+      <div>
+        <div ref={ref} onScroll={onScroll} className="overflow-y-auto" data-testid="scroller" />
+        <JumpToLatest show={showJump} newCount={newCount} onClick={jumpToLatest} />
+      </div>
+    );
+  }
+
+  it("re-pins to the bottom when the content grew mid-flight", () => {
+    const { rerender } = render(<Harness messages={["a", "b"]} />);
+    act(() => scrollTo(SCROLLED_UP));
+    act(() => fireEvent.click(screen.getByTestId("jump-to-latest")));
+
+    // The content grew, and the hop stopped short of the new bottom: 1200 - 600
+    // - 500 = 100, which is not "near" at a threshold of 100.
+    const el = scroller();
+    act(() => scrollTo(600, 1200));
+    // Still our flight — no pill, and the follow is still armed.
+    expect(screen.queryByTestId("jump-to-latest")).toBeNull();
+
+    // More content arrives: because the follow was never disarmed, it pins.
+    act(() => {
+      Object.defineProperty(el, "scrollHeight", { value: 1400, configurable: true });
+      rerender(<Harness messages={["a", "b", "c"]} />);
+    });
+    expect(scroller().scrollTop).toBe(bottomOf(1400));
+    expect(screen.queryByTestId("jump-to-latest")).toBeNull();
   });
 });

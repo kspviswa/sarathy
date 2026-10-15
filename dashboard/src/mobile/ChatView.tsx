@@ -18,7 +18,13 @@ import { toast } from "sonner";
 
 import { Logo } from "@/components/logo";
 import { MarkdownBubble } from "@/components/MarkdownBubble";
-import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
+import {
+  QuoteActionBar,
+  QuoteChips,
+  useTextSelection,
+} from "@/components/QuoteAsk";
+import { JumpToLatest } from "@/components/JumpToLatest";
+import { useChatScroll } from "@/lib/useChatScroll";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CodeBlock } from "@/components/CodeBlock";
@@ -45,7 +51,12 @@ import {
   type QuoteChip,
 } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
-import { deriveLiveTurnStatus, liveBubbleIndex, splitTurnDisplay, turnSegments } from "@/lib/transcript";
+import {
+  deriveLiveTurnStatus,
+  liveBubbleIndex,
+  splitTurnDisplay,
+  turnSegments,
+} from "@/lib/transcript";
 import type { ChatMessage } from "@/views/ChatView";
 import { DASHBOARD_SESSION_KEY } from "@/lib/useLastSession";
 
@@ -57,7 +68,15 @@ interface PendingMedia {
   preview?: string;
 }
 
-const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"]);
+const IMAGE_EXTS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".svg",
+]);
 const AUDIO_EXTS = new Set([".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"]);
 
 function getMediaKind(p: string): "image" | "audio" | "file" {
@@ -85,7 +104,11 @@ function MediaAttachment({ path }: { path: string }) {
   }
   if (kind === "audio") {
     return (
-      <audio controls src={`/api/media?path=${encodeURIComponent(path)}`} className="my-1 w-full" />
+      <audio
+        controls
+        src={`/api/media?path=${encodeURIComponent(path)}`}
+        className="my-1 w-full"
+      />
     );
   }
   return (
@@ -163,7 +186,6 @@ export function ChatView({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isNearBottomRef = useRef(true);
 
   // Quote-and-ask (spec §F): selection inside the message list surfaces the
   // "Add to follow-up" bar. Shared hook — the desktop ChatView uses the same
@@ -203,23 +225,18 @@ export function ChatView({
     onFollowUpSeedConsumed?.();
   }, [followUpSeed?.nonce, followUpSeed?.text, onFollowUpSeedConsumed]);
 
-  const checkNearBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-  }, []);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.addEventListener("scroll", checkNearBottom, { passive: true });
-    return () => el?.removeEventListener("scroll", checkNearBottom);
-  }, [checkNearBottom]);
-
-  useEffect(() => {
-    if (isNearBottomRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, streaming]);
+  // Auto-follow while pinned, and the "jump to latest" state when not
+  // (spec 141 §A). Shared with desktop — see `lib/useChatScroll.ts`. Mobile
+  // reaches the pill by thumb, so it matters here at least as much: a long
+  // reply scrolls the viewport and the way back must be one tap.
+  const { showJump, newCount, jumpToLatest, onScroll } = useChatScroll(
+    scrollRef,
+    {
+      messages,
+      streaming,
+      threshold: 120,
+    },
+  );
 
   // The live strip's label: the turn's newest narrated phase, or the fallback
   // (spec 134 §B). Derived in `lib/transcript.ts`, shared with desktop.
@@ -253,7 +270,10 @@ export function ChatView({
   useEffect(() => {
     return () => {
       if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state !== "inactive"
+      ) {
         mediaRecorderRef.current.stop();
       }
     };
@@ -265,7 +285,9 @@ export function ChatView({
       id: crypto.randomUUID(),
       file,
       uploading: false,
-      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+      preview: file.type.startsWith("image/")
+        ? URL.createObjectURL(file)
+        : undefined,
     }));
     setPendingMedia((prev) => [...prev, ...items]);
     for (const item of items) uploadMedia(item);
@@ -278,7 +300,9 @@ export function ChatView({
     try {
       const result = await api.uploadMedia(item.file);
       setPendingMedia((prev) =>
-        prev.map((p) => (p.id === item.id ? { ...p, uploading: false, path: result.path } : p)),
+        prev.map((p) =>
+          p.id === item.id ? { ...p, uploading: false, path: result.path } : p,
+        ),
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed");
@@ -297,14 +321,18 @@ export function ChatView({
   const startRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+      const mr = new MediaRecorder(stream, {
+        mimeType: "audio/webm;codecs=opus",
+      });
       const chunks: Blob[] = [];
       mr.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
       mr.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        const file = new File(chunks, `voice-${Date.now()}.webm`, { type: "audio/webm" });
+        const file = new File(chunks, `voice-${Date.now()}.webm`, {
+          type: "audio/webm",
+        });
         addFiles([file]);
       };
       mediaRecorderRef.current = mr;
@@ -316,7 +344,10 @@ export function ChatView({
   }, [addFiles]);
 
   const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
       mediaRecorderRef.current.stop();
     }
     setIsRecording(false);
@@ -332,7 +363,8 @@ export function ChatView({
     [pendingMedia],
   );
 
-  const showSlashMenu = /^\/[^\s]*$/.test(input.trim()) && input.trimStart().startsWith("/");
+  const showSlashMenu =
+    /^\/[^\s]*$/.test(input.trim()) && input.trimStart().startsWith("/");
 
   async function send() {
     const content = input.trim();
@@ -367,53 +399,86 @@ export function ChatView({
         <h1 className="text-base font-semibold">Chat</h1>
         <div className="flex items-center gap-1">
           {streaming && (
-            <Button variant="destructive" size="sm" onClick={() => void onStop()} title="Stop">
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => void onStop()}
+              title="Stop"
+            >
               <Square className="size-4" />
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={onNewChat} title="New chat">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onNewChat}
+            title="New chat"
+          >
             <Plus className="size-5" />
             <span className="hidden">New chat</span>
           </Button>
         </div>
       </div>
 
-      <div ref={scrollRef} className="no-scrollbar flex-1 overflow-y-auto px-3 pb-3">
-        {messages.length === 0 ? (
-          loading ? (
-            <div className="flex items-center justify-center gap-2 py-20 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Loading…
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-3 py-20 text-center">
-              <Logo size={64} />
-              <p className="text-muted-foreground">Say hello to Sarathy anywhere.</p>
-            </div>
-          )
-        ) : null}
-        <div ref={messageListRef} className="flex w-full flex-col gap-3" data-testid="mobile-message-list">
-          {messages.map((m, i) => (
-            <MobileMessage
-              key={m.bubbleId ?? m.turnId ?? m.messageId ?? i}
-              message={m}
-              /* Parity with desktop: the live treatment belongs to the bubble the
+      {/* `relative` so the jump-to-latest pill can float over the transcript's
+          bottom edge, just above the composer (spec 141 §A). */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="no-scrollbar flex-1 overflow-y-auto px-3 pb-3"
+        >
+          {messages.length === 0 ? (
+            loading ? (
+              <div className="flex items-center justify-center gap-2 py-20 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                Loading…
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3 py-20 text-center">
+                <Logo size={64} />
+                <p className="text-muted-foreground">
+                  Say hello to Sarathy anywhere.
+                </p>
+              </div>
+            )
+          ) : null}
+          <div
+            ref={messageListRef}
+            className="flex w-full flex-col gap-3"
+            data-testid="mobile-message-list"
+          >
+            {messages.map((m, i) => (
+              <MobileMessage
+                key={m.bubbleId ?? m.turnId ?? m.messageId ?? i}
+                message={m}
+                /* Parity with desktop: the live treatment belongs to the bubble the
                  turn in flight is writing, never to every bubble because the
                  SESSION is streaming (spec 135 §A follow-up). */
-              live={streaming && i === liveIndex}
-              onOpenFile={onOpenFile}
-              onRegenerate={m.role === "assistant" && !streaming ? onRegenerate : undefined}
-              onReply={!streaming ? () => setReplyToMsg(m) : undefined}
-              onSend={(text) => void onSend(text, undefined)}
-            />
-          ))}
+                live={streaming && i === liveIndex}
+                onOpenFile={onOpenFile}
+                onRegenerate={
+                  m.role === "assistant" && !streaming
+                    ? onRegenerate
+                    : undefined
+                }
+                onReply={!streaming ? () => setReplyToMsg(m) : undefined}
+                onSend={(text) => void onSend(text, undefined)}
+              />
+            ))}
 
-          {/* Parity with the desktop ChatView: a live status strip while the
+            {/* Parity with the desktop ChatView: a live status strip while the
               turn is running. It reads the turn's newest narrated phase —
               "🔍 Sending image to VLM…", a tool call — falling back to
               "Sarathy is responding…". Both SPAs render the same component off
               the same `deriveLiveTurnStatus` (spec 134 §B). */}
-          {streaming && liveStatus && <LiveStatus {...liveStatus} />}
+            {streaming && liveStatus && <LiveStatus {...liveStatus} />}
+          </div>
+          <JumpToLatest
+            show={showJump}
+            newCount={newCount}
+            onClick={jumpToLatest}
+          />
         </div>
       </div>
 
@@ -444,8 +509,13 @@ export function ChatView({
             data-testid="reply-preview"
           >
             <span className="mt-0.5 shrink-0 opacity-60">↩</span>
-            <span className="flex-1 truncate"><EmojiText text={replyToMsg.content} /></span>
-            <button onClick={() => setReplyToMsg(null)} aria-label="Cancel reply">
+            <span className="flex-1 truncate">
+              <EmojiText text={replyToMsg.content} />
+            </span>
+            <button
+              onClick={() => setReplyToMsg(null)}
+              aria-label="Cancel reply"
+            >
               <X className="size-3.5" />
             </button>
           </div>
@@ -458,14 +528,21 @@ export function ChatView({
                 className="relative flex items-center gap-2 rounded-lg border border-border bg-card px-2 py-1.5 text-xs"
               >
                 {pm.preview ? (
-                  <img src={pm.preview} alt="" className="size-10 rounded object-cover" />
+                  <img
+                    src={pm.preview}
+                    alt=""
+                    className="size-10 rounded object-cover"
+                  />
                 ) : (
                   <span className="flex size-10 items-center justify-center rounded bg-muted text-[10px] text-muted-foreground">
                     {pm.file.name.slice(0, 4)}
                   </span>
                 )}
                 <span className="max-w-[80px] truncate">{pm.file.name}</span>
-                <button onClick={() => removePending(pm.id)} className="text-muted-foreground">
+                <button
+                  onClick={() => removePending(pm.id)}
+                  className="text-muted-foreground"
+                >
                   ×
                 </button>
               </div>
@@ -520,7 +597,9 @@ export function ChatView({
                   }
                   if (e.key === "Tab") {
                     e.preventDefault();
-                    const match = commands.find((c) => input.trim() === `/${c.name}`);
+                    const match = commands.find(
+                      (c) => input.trim() === `/${c.name}`,
+                    );
                     if (match) setInput(`/${match.name} `);
                     return;
                   }
@@ -540,7 +619,10 @@ export function ChatView({
                 — the send button used to be a circle among rounded squares,
                 which is what made the row look unresolved. Footprint stays
                 44px here (spec 126 §F touch target); desktop is 36px. */}
-            <div className="flex items-center justify-between gap-2" data-testid="mobile-composer-actions">
+            <div
+              className="flex items-center justify-between gap-2"
+              data-testid="mobile-composer-actions"
+            >
               <div className="flex items-center gap-0.5">
                 <label
                   htmlFor="attach-file-input"
@@ -558,14 +640,20 @@ export function ChatView({
                   aria-label={isRecording ? "Stop recording" : "Record voice"}
                   data-testid="mobile-mic"
                 >
-                  {isRecording ? <Square className="size-5" /> : <Mic className="size-5" />}
+                  {isRecording ? (
+                    <Square className="size-5" />
+                  ) : (
+                    <Mic className="size-5" />
+                  )}
                 </Button>
               </div>
               <Button
                 size="icon"
                 className="size-11 shrink-0 rounded-lg"
                 onClick={() => void send()}
-                disabled={!input.trim() && !mediaPaths.length && quoteChips.length === 0}
+                disabled={
+                  !input.trim() && !mediaPaths.length && quoteChips.length === 0
+                }
                 aria-label="Send"
                 data-testid="mobile-send"
               >
@@ -643,7 +731,10 @@ function MobileMessage({
 
   // The turn's ordered prose (spec 135 §A) — ONE bubble per turn, with the
   // desktop rendering the same `segments` through the same `TurnSegments`.
-  const segments = useMemo(() => (isUser || isNotice ? [] : turnSegments(message)), [message, isUser, isNotice]);
+  const segments = useMemo(
+    () => (isUser || isNotice ? [] : turnSegments(message)),
+    [message, isUser, isNotice],
+  );
   const hasContent = segments.length > 0;
 
   // Parity with the desktop MessageRow: the thinking strip's live state tracks
@@ -752,7 +843,11 @@ function MobileMessage({
         ) : isNotice ? (
           /* Out-of-band acks are standalone messages carrying their own
              `content` (no segments) — same plain body as before spec 135. */
-          <AssistantBody content={cleanContent} onOpenFile={onOpenFile} onSend={onSend} />
+          <AssistantBody
+            content={cleanContent}
+            onOpenFile={onOpenFile}
+            onSend={onSend}
+          />
         ) : (
           /* The turn's prose — every segment while it is live, the answer alone
              once it has settled (spec 135 §A, spec 139 §A). The same shared
@@ -777,7 +872,11 @@ function MobileMessage({
               className="inline-flex items-center gap-1.5 active:text-foreground"
               title="Copy"
             >
-              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              {copied ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Copy className="size-3.5" />
+              )}
               {copied ? "Copied" : "Copy"}
             </button>
             {!isUser && onRegenerate && (
@@ -832,7 +931,10 @@ function AssistantBody({
   const body = usage ? usage.prose : content;
 
   const hasUI = useMemo(() => hasOpenUIBlock(body), [body]);
-  const chunks = useMemo(() => (hasUI ? extractProse(body) : [body]), [body, hasUI]);
+  const chunks = useMemo(
+    () => (hasUI ? extractProse(body) : [body]),
+    [body, hasUI],
+  );
 
   const markdown = useMemo(
     () =>

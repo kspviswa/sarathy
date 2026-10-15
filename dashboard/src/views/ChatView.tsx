@@ -24,14 +24,24 @@ import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
 import { CodeBlock } from "@/components/CodeBlock";
-import { GreetingState, DEFAULT_SUGGESTIONS, type Suggestion } from "@/components/GreetingState";
+import {
+  GreetingState,
+  DEFAULT_SUGGESTIONS,
+  type Suggestion,
+} from "@/components/GreetingState";
 import { LiveStatus } from "@/components/LiveStatus";
 import { MarkdownBubble } from "@/components/MarkdownBubble";
 import { PresenceIndicator } from "@/components/Presence";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
 import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
 import { EmojiText } from "@/lib/emojiIcons";
-import { QuoteActionBar, QuoteChips, useTextSelection } from "@/components/QuoteAsk";
+import {
+  QuoteActionBar,
+  QuoteChips,
+  useTextSelection,
+} from "@/components/QuoteAsk";
+import { useChatScroll } from "@/lib/useChatScroll";
+import { JumpToLatest } from "@/components/JumpToLatest";
 import { ThinkingSection } from "@/components/ThinkingSection";
 import { TurnSegments } from "@/components/AssistantTurn";
 import { SlashAutocomplete } from "@/components/CommandPalette";
@@ -39,7 +49,11 @@ import { SlashUsageCard, useSlashUsage } from "@/components/SlashUsageCard";
 import { UsageFooter } from "@/components/UsageFooter";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import {
   addQuote,
@@ -51,7 +65,13 @@ import {
   type Quote,
   type QuoteChip,
 } from "@/lib/quotes";
-import { deriveLiveTurnStatus, liveBubbleIndex, splitTurnDisplay, turnSegments, type TurnSegment } from "@/lib/transcript";
+import {
+  deriveLiveTurnStatus,
+  liveBubbleIndex,
+  splitTurnDisplay,
+  turnSegments,
+  type TurnSegment,
+} from "@/lib/transcript";
 import type { SlashCommand } from "@/lib/palette";
 import type { ReactionState } from "@/lib/reactions";
 import { UIBlock, extractProse, hasOpenUIBlock } from "@/lib/uiBlocks";
@@ -121,7 +141,15 @@ interface PendingMedia {
   preview?: string;
 }
 
-const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"]);
+const IMAGE_EXTS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".svg",
+]);
 const AUDIO_EXTS = new Set([".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"]);
 
 /** Composer height bounds (px). Small enough to stay a composer, tall enough
@@ -132,14 +160,20 @@ export const COMPOSER_DEFAULT_HEIGHT = 96;
 export const COMPOSER_HEIGHT_KEY = "sarathy_composer_height";
 
 function clampComposerHeight(px: number): number {
-  return Math.min(COMPOSER_MAX_HEIGHT, Math.max(COMPOSER_MIN_HEIGHT, Math.round(px)));
+  return Math.min(
+    COMPOSER_MAX_HEIGHT,
+    Math.max(COMPOSER_MIN_HEIGHT, Math.round(px)),
+  );
 }
 
 /** Remember the drag height across reloads; a bad/hostile value falls back to
  *  the default instead of rendering a 0px or 100000px composer. */
 export function loadComposerHeight(): number {
   try {
-    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(COMPOSER_HEIGHT_KEY);
+    const raw =
+      typeof localStorage === "undefined"
+        ? null
+        : localStorage.getItem(COMPOSER_HEIGHT_KEY);
     const n = raw === null ? NaN : Number(raw);
     if (Number.isFinite(n)) return clampComposerHeight(n);
   } catch {
@@ -173,7 +207,11 @@ function MediaAttachment({ path }: { path: string }) {
   }
   if (kind === "audio") {
     return (
-      <audio controls src={`/api/media?path=${encodeURIComponent(path)}`} className="my-1 w-full max-w-xs" />
+      <audio
+        controls
+        src={`/api/media?path=${encodeURIComponent(path)}`}
+        className="my-1 w-full max-w-xs"
+      />
     );
   }
   return (
@@ -206,7 +244,11 @@ interface MessageActionsProps {
   onReply?: () => void;
 }
 
-function MessageActions({ content, onRegenerate, onReply }: MessageActionsProps) {
+function MessageActions({
+  content,
+  onRegenerate,
+  onReply,
+}: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
 
   const copyMessage = useCallback(() => {
@@ -226,7 +268,15 @@ function MessageActions({ content, onRegenerate, onReply }: MessageActionsProps)
               className="size-7 text-muted-foreground hover:text-foreground"
               onClick={onReply}
             >
-              <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                className="size-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <polyline points="9 14 4 9 9 4" />
                 <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
               </svg>
@@ -242,7 +292,11 @@ function MessageActions({ content, onRegenerate, onReply }: MessageActionsProps)
         onClick={copyMessage}
         title="Copy"
       >
-        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        {copied ? (
+          <Check className="size-3.5" />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
       </Button>
       {onRegenerate && (
         <Button
@@ -290,7 +344,10 @@ function MessageBody({
   // ordinary text replies. When a block IS present, prose (fences stripped) is
   // shown alongside it; otherwise the whole body renders as markdown.
   const hasUI = useMemo(() => hasOpenUIBlock(body), [body]);
-  const chunks = useMemo(() => (hasUI ? extractProse(body) : [body]), [body, hasUI]);
+  const chunks = useMemo(
+    () => (hasUI ? extractProse(body) : [body]),
+    [body, hasUI],
+  );
 
   const markdown = useMemo(
     () =>
@@ -414,10 +471,11 @@ export function ChatView({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const isNearBottomRef = useRef(true);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
-  const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(
+    null,
+  );
 
   const setComposerHeight = useCallback((px: number) => {
     const next = clampComposerHeight(px);
@@ -432,7 +490,10 @@ export function ChatView({
   const startResize = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       e.preventDefault();
-      resizeDragRef.current = { startY: e.clientY, startHeight: composerHeight };
+      resizeDragRef.current = {
+        startY: e.clientY,
+        startHeight: composerHeight,
+      };
       setResizing(true);
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -498,24 +559,15 @@ export function ChatView({
   // Quote-and-ask: only for assistant messages, never while streaming.
   const selection = useTextSelection(messageListRef, !streaming);
 
-  const checkNearBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-  }, [scrollRef]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.addEventListener("scroll", checkNearBottom, { passive: true });
-    return () => el?.removeEventListener("scroll", checkNearBottom);
-  }, [checkNearBottom, scrollRef]);
-
-  useEffect(() => {
-    if (isNearBottomRef.current) {
-      const el = scrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-    }
-  }, [messages, streaming, scrollRef]);
+  // Auto-follow while pinned, and the "jump to latest" state when not
+  // (spec 141 §A). Shared with mobile — see `lib/useChatScroll.ts`.
+  const { showJump, newCount, jumpToLatest, onScroll } = useChatScroll(
+    scrollRef,
+    {
+      messages,
+      streaming,
+    },
+  );
 
   // The live strip's label: the turn's newest narrated phase, or the fallback
   // (spec 134 §B). Derived in `lib/transcript.ts`, shared with mobile.
@@ -532,18 +584,25 @@ export function ChatView({
   useEffect(() => {
     return () => {
       if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state !== "inactive"
+      ) {
         mediaRecorderRef.current.stop();
       }
     };
   }, []);
 
   const uploadPending = useCallback(async (item: PendingMedia) => {
-    setPendingMedia((prev) => prev.map((p) => (p.id === item.id ? { ...p, uploading: true } : p)));
+    setPendingMedia((prev) =>
+      prev.map((p) => (p.id === item.id ? { ...p, uploading: true } : p)),
+    );
     try {
       const result = await api.uploadMedia(item.file);
       setPendingMedia((prev) =>
-        prev.map((p) => (p.id === item.id ? { ...p, uploading: false, path: result.path } : p)),
+        prev.map((p) =>
+          p.id === item.id ? { ...p, uploading: false, path: result.path } : p,
+        ),
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed");
@@ -557,7 +616,9 @@ export function ChatView({
         id: crypto.randomUUID(),
         file,
         uploading: false,
-        preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+        preview: file.type.startsWith("image/")
+          ? URL.createObjectURL(file)
+          : undefined,
       }));
       setPendingMedia((prev) => [...prev, ...items]);
       for (const item of items) void uploadPending(item);
@@ -602,16 +663,22 @@ export function ChatView({
   const startRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+      const mr = new MediaRecorder(stream, {
+        mimeType: "audio/webm;codecs=opus",
+      });
       const chunks: Blob[] = [];
       mr.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
       mr.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        const file = new File([new Blob(chunks, { type: "audio/webm" })], `voice-${Date.now()}.webm`, {
-          type: "audio/webm",
-        });
+        const file = new File(
+          [new Blob(chunks, { type: "audio/webm" })],
+          `voice-${Date.now()}.webm`,
+          {
+            type: "audio/webm",
+          },
+        );
         addFiles([file]);
       };
       mediaRecorderRef.current = mr;
@@ -623,7 +690,10 @@ export function ChatView({
   }, [addFiles]);
 
   const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
       mediaRecorderRef.current.stop();
     }
     setIsRecording(false);
@@ -713,7 +783,8 @@ export function ChatView({
     onFollowUpSeedConsumed?.();
   }, [followUpSeed?.nonce, followUpSeed?.text, onFollowUpSeedConsumed]);
 
-  const showSlashMenu = /^\/[^\s]*$/.test(input.trim()) && input.trimStart().startsWith("/");
+  const showSlashMenu =
+    /^\/[^\s]*$/.test(input.trim()) && input.trimStart().startsWith("/");
 
   const composer = (
     <div
@@ -744,21 +815,31 @@ export function ChatView({
         <span
           className={cn(
             "h-1 w-12 rounded-full transition-colors",
-            resizing ? "bg-primary" : "bg-border group-hover:bg-muted-foreground/40",
+            resizing
+              ? "bg-primary"
+              : "bg-border group-hover:bg-muted-foreground/40",
           )}
         />
       </div>
       {/* Full-width band: no max-width cap, so it reflows with the window. */}
       <div className="w-full">
-        <QuoteChips chips={quoteChips} onRemove={(id) => setQuoteChips((c) => removeQuote(c, id))} />
+        <QuoteChips
+          chips={quoteChips}
+          onRemove={(id) => setQuoteChips((c) => removeQuote(c, id))}
+        />
 
         {(pendingMedia.length > 0 || replyToMsg) && (
           <div className="mb-2 flex flex-col gap-1 rounded-xl border border-border bg-muted/30 p-2">
             {replyToMsg && (
               <div className="flex items-start gap-2 rounded-t-xl text-xs text-muted-foreground">
                 <span className="mt-0.5 shrink-0 opacity-60">↩</span>
-                <span className="flex-1 truncate"><EmojiText text={replyToMsg.content} /></span>
-                <button onClick={() => setReplyToMsg(null)} aria-label="Cancel reply">
+                <span className="flex-1 truncate">
+                  <EmojiText text={replyToMsg.content} />
+                </span>
+                <button
+                  onClick={() => setReplyToMsg(null)}
+                  aria-label="Cancel reply"
+                >
                   <X className="size-3" />
                 </button>
               </div>
@@ -771,18 +852,29 @@ export function ChatView({
                     className="relative flex items-center gap-2 rounded-lg border border-border bg-card px-2 py-1.5 text-xs"
                   >
                     {pm.preview ? (
-                      <img src={pm.preview} alt="" className="size-10 rounded object-cover" />
+                      <img
+                        src={pm.preview}
+                        alt=""
+                        className="size-10 rounded object-cover"
+                      />
                     ) : (
                       <span className="size-10 flex items-center justify-center rounded bg-muted text-[10px]">
                         {pm.file.name.slice(0, 4)}
                       </span>
                     )}
-                    <span className="max-w-[100px] truncate text-foreground">{pm.file.name}</span>
+                    <span className="max-w-[100px] truncate text-foreground">
+                      {pm.file.name}
+                    </span>
                     {pm.uploading && (
                       <span className="size-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                     )}
-                    {!pm.uploading && pm.path && <Check className="size-3 text-green-500" />}
-                    <button onClick={() => removePending(pm.id)} aria-label={`Remove ${pm.file.name}`}>
+                    {!pm.uploading && pm.path && (
+                      <Check className="size-3 text-green-500" />
+                    )}
+                    <button
+                      onClick={() => removePending(pm.id)}
+                      aria-label={`Remove ${pm.file.name}`}
+                    >
                       <X className="size-3" />
                     </button>
                   </div>
@@ -835,10 +927,16 @@ export function ChatView({
                     variant={isRecording ? "destructive" : "ghost"}
                     size="icon"
                     className="size-9 shrink-0 rounded-lg"
-                    onClick={isRecording ? stopRecording : () => void startRecording()}
+                    onClick={
+                      isRecording ? stopRecording : () => void startRecording()
+                    }
                     aria-label={isRecording ? "Stop recording" : "Record voice"}
                   >
-                    {isRecording ? <Square className="size-4" /> : <Mic className="size-4" />}
+                    {isRecording ? (
+                      <Square className="size-4" />
+                    ) : (
+                      <Mic className="size-4" />
+                    )}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="top">
@@ -874,7 +972,9 @@ export function ChatView({
                   }
                   if (e.key === "Tab") {
                     e.preventDefault();
-                    const match = commands.find((c) => input.trim() === `/${c.name}`);
+                    const match = commands.find(
+                      (c) => input.trim() === `/${c.name}`,
+                    );
                     if (match) setInput(`/${match.name} `);
                     return;
                   }
@@ -897,7 +997,11 @@ export function ChatView({
                   size="icon"
                   className="size-9 shrink-0 rounded-lg"
                   onClick={() => void send()}
-                  disabled={!input.trim() && !mediaPaths.length && quoteChips.length === 0}
+                  disabled={
+                    !input.trim() &&
+                    !mediaPaths.length &&
+                    quoteChips.length === 0
+                  }
                   aria-label="Send"
                 >
                   <Send className="size-4" />
@@ -956,7 +1060,9 @@ export function ChatView({
         <div className="flex items-center gap-2">
           <PresenceIndicator state={reaction} />
           <div className="min-w-0">
-            <span className="block text-sm font-semibold leading-tight">Sarathy</span>
+            <span className="block text-sm font-semibold leading-tight">
+              Sarathy
+            </span>
             {messages.length > 0 && (
               <span className="block truncate text-[11px] leading-tight text-muted-foreground">
                 {messages[messages.length - 1].role === "assistant"
@@ -968,74 +1074,105 @@ export function ChatView({
         </div>
         <div className="flex items-center gap-2">
           {streaming && (
-            <Button variant="destructive" size="sm" onClick={() => void onStop()} title="Stop processing">
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => void onStop()}
+              title="Stop processing"
+            >
               <Square className="size-4" />
               <span className="hidden sm:inline">Stop</span>
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={onNewChat} title="Start a new chat">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onNewChat}
+            title="Start a new chat"
+          >
             <Plus className="size-4" />
             <span className="hidden sm:inline">New chat</span>
           </Button>
         </div>
       </div>
 
-      <div ref={scrollRef} className="no-scrollbar flex-1 overflow-y-auto">
-        {/* Generous cap so wide windows use their width, still readable (spec §B). */}
+      {/* `relative` so the jump-to-latest pill can float over the transcript's
+          bottom edge, just above the composer (spec 141 §A). */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
         <div
-          ref={messageListRef}
-          className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-4"
-          data-testid="message-list"
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="no-scrollbar flex-1 overflow-y-auto"
         >
-          {messages.length === 0 ? (
-            loading ? (
-              <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                Loading…
-              </div>
-            ) : (
-              <GreetingState
-                suggestions={suggestions}
-                onPick={(prompt) => {
-                  setInput(prompt);
-                  textareaRef.current?.focus();
-                }}
-              />
-            )
-          ) : null}
+          {/* Generous cap so wide windows use their width, still readable (spec §B). */}
+          <div
+            ref={messageListRef}
+            className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-4"
+            data-testid="message-list"
+          >
+            {messages.length === 0 ? (
+              loading ? (
+                <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  Loading…
+                </div>
+              ) : (
+                <GreetingState
+                  suggestions={suggestions}
+                  onPick={(prompt) => {
+                    setInput(prompt);
+                    textareaRef.current?.focus();
+                  }}
+                />
+              )
+            ) : null}
 
-          {messages.map((m, i) => (
-            <MessageRow
-              key={m.bubbleId ?? m.turnId ?? m.messageId ?? i}
-              message={m}
-              /* The live treatment belongs to the bubble the turn in flight is
+            {messages.map((m, i) => (
+              <MessageRow
+                key={m.bubbleId ?? m.turnId ?? m.messageId ?? i}
+                message={m}
+                /* The live treatment belongs to the bubble the turn in flight is
                  writing — never to every bubble because the SESSION is streaming
                  (spec 135 §A follow-up: the pulse and the caret used to appear on
                  finished answers too). */
-              live={streaming && i === liveIndex}
-              /* Only the NEWEST bubble animates in (job 132 §E): the class is
+                live={streaming && i === liveIndex}
+                /* Only the NEWEST bubble animates in (job 132 §E): the class is
                  on a stable keyed node, so it fires once on mount and a
                  streaming reply does not re-trigger it frame by frame. */
-              animate={i === messages.length - 1}
-              onOpenFile={onOpenFile}
-              onRegenerate={m.role === "assistant" && !streaming ? onRegenerate : undefined}
-              onReply={() => setReplyToMsg(m)}
-              onSend={(text) => void onSend(text)}
-            />
-          ))}
+                animate={i === messages.length - 1}
+                onOpenFile={onOpenFile}
+                onRegenerate={
+                  m.role === "assistant" && !streaming
+                    ? onRegenerate
+                    : undefined
+                }
+                onReply={() => setReplyToMsg(m)}
+                onSend={(text) => void onSend(text)}
+              />
+            ))}
 
-          {streaming && liveStatus && (
-            /* Narration, not decoration (spec 134 §B): the label is the newest
+            {streaming && liveStatus && (
+              /* Narration, not decoration (spec 134 §B): the label is the newest
                `_tool_hint` the loop published — "🔍 Sending image to VLM…" while
                an image is being described, a tool call while it works — with
                "Sarathy is responding…" as the fallback. Identical markup on
                mobile; the decision lives in `deriveLiveTurnStatus`. */
-            <LiveStatus {...liveStatus} elapsedMs={elapsed} />
-          )}
+              <LiveStatus {...liveStatus} elapsedMs={elapsed} />
+            )}
+          </div>
+          <JumpToLatest
+            show={showJump}
+            newCount={newCount}
+            onClick={jumpToLatest}
+          />
         </div>
       </div>
 
-      <QuoteActionBar visible={selection.visible} rect={selection.rect} onAdd={addSelectionAsQuote} />
+      <QuoteActionBar
+        visible={selection.visible}
+        rect={selection.rect}
+        onAdd={addSelectionAsQuote}
+      />
 
       {composer}
     </div>
@@ -1069,7 +1206,10 @@ function MessageRow({
 }) {
   const isUser = message.role === "user";
   const isNotice = !isUser && Boolean(message.notice);
-  const segments = useMemo(() => (isUser || isNotice ? [] : turnSegments(message)), [message, isUser, isNotice]);
+  const segments = useMemo(
+    () => (isUser || isNotice ? [] : turnSegments(message)),
+    [message, isUser, isNotice],
+  );
   const hasContent = segments.length > 0;
   const live = !isUser && !isNotice && liveProp;
 
@@ -1183,7 +1323,9 @@ function MessageRow({
             )}
           >
             <span className="opacity-60">↩ </span>
-            {message.replyToContent.length > 80 ? `${message.replyToContent.slice(0, 80)}…` : message.replyToContent}
+            {message.replyToContent.length > 80
+              ? `${message.replyToContent.slice(0, 80)}…`
+              : message.replyToContent}
           </div>
         )}
 
@@ -1202,7 +1344,11 @@ function MessageRow({
           /* Out-of-band acks (`/stop`, `/steer`, `/btw`) are standalone
              messages, not turn segments: they carry their own `content` and no
              segments, so they keep the plain body renderer. */
-          <MessageBody content={cleanContent} onOpenFile={onOpenFile} onSend={onSend} />
+          <MessageBody
+            content={cleanContent}
+            onOpenFile={onOpenFile}
+            onSend={onSend}
+          />
         ) : (
           /* The turn's prose — every segment while it is live, the answer alone
              once it has settled (spec 135 §A, spec 139 §A). Shared with mobile:
@@ -1212,14 +1358,23 @@ function MessageRow({
             segments={inlineSegments}
             live={live}
             renderSegment={(text, isStreaming) => (
-              <MessageBody content={cleanRenderedContent(text)} streaming={isStreaming} onOpenFile={onOpenFile} onSend={onSend} />
+              <MessageBody
+                content={cleanRenderedContent(text)}
+                streaming={isStreaming}
+                onOpenFile={onOpenFile}
+                onSend={onSend}
+              />
             )}
           />
         )}
 
         {!isUser && !isNotice && hasContent && (
           <div className="mt-1 -mb-1">
-            <MessageActions content={cleanContent} onRegenerate={onRegenerate} onReply={onReply} />
+            <MessageActions
+              content={cleanContent}
+              onRegenerate={onRegenerate}
+              onReply={onReply}
+            />
           </div>
         )}
         {isUser && (

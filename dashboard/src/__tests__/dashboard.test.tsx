@@ -186,7 +186,24 @@ describe("ThinkingSection — the turn's ONE collapse header (spec 135 §A)", ()
     expect(document.querySelector(".thinking-shimmer")).toBeNull();
   });
 
-  it("shows a Check icon and the frozen duration when done", () => {
+  it("reports the turn's length once it is done (spec 140 §A)", () => {
+    render(
+      <ThinkingSection
+        toolHints={[]}
+        thinkingContent="reasoning..."
+        done={true}
+        durationMs={134_000}
+      />,
+    );
+    // The row reads as the turn's own report of itself, not a status word with
+    // a completion tick beside it.
+    expect(screen.getByTestId("thinking-label")).toHaveTextContent("Thought for 2m 14s");
+    expect(screen.getByTestId("thinking-label")).not.toHaveClass("thinking-shimmer");
+  });
+
+  it("says a bare \"Thought\" when the duration is unknown", () => {
+    // A turn rebuilt from the session file has no clock, and a turn that ended
+    // without a `_final` never gets one — neither may invent a number.
     render(
       <ThinkingSection
         toolHints={[]}
@@ -194,16 +211,11 @@ describe("ThinkingSection — the turn's ONE collapse header (spec 135 §A)", ()
         done={true}
       />,
     );
-    // The label stays "Thinking" — the row is the turn's toggle, not a status
-    // sentence. What changes when the turn ends is the live affordance: the
-    // shimmer stops and the dots become a Check.
-    expect(screen.getByText("Thinking")).not.toHaveClass("thinking-shimmer");
-    expect(document.querySelector(".text-green-500")).toBeInTheDocument();
-    // Spec 135 §A: the elapsed time lives in the header's meta row.
-    expect(screen.getByTestId("thinking-meta")).toHaveTextContent(/^\d+s$/);
+    expect(screen.getByTestId("thinking-label")).toHaveTextContent("Thought");
+    expect(screen.getByTestId("thinking-label")).not.toHaveTextContent("for");
   });
 
-  it("shows elapsed time counting up while streaming, then freezes when done", () => {
+  it("counts up while streaming, then reports the turn's length once done", () => {
     const { rerender } = render(
       <ThinkingSection
         toolHints={[]}
@@ -212,26 +224,34 @@ describe("ThinkingSection — the turn's ONE collapse header (spec 135 §A)", ()
       />,
     );
 
+    // While the turn runs the label is a status and the meta row carries the
+    // only clock available — the ticking elapsed time.
+    expect(screen.getByTestId("thinking-label")).toHaveTextContent("Thinking");
     act(() => {
       vi.advanceTimersByTime(3000);
     });
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("3s");
 
+    // Once done, the duration moves into the label and stops being a clock.
     act(() => {
       rerender(
         <ThinkingSection
           toolHints={[]}
           thinkingContent="reasoning..."
           done={true}
+          durationMs={3000}
         />,
       );
     });
-
-    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("3s");
+    expect(screen.getByTestId("thinking-label")).toHaveTextContent("Thought for 3s");
+    // …and the meta row is gone: with no steps to report there is nothing left
+    // for it to carry.
+    expect(screen.queryByTestId("thinking-meta")).toBeNull();
 
     act(() => {
       vi.advanceTimersByTime(5000);
     });
-    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("3s");
+    expect(screen.getByTestId("thinking-label")).toHaveTextContent("Thought for 3s");
   });
 
   it("counts steps in the header and renders tool calls as chips", () => {

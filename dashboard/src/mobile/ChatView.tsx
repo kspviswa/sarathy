@@ -705,6 +705,7 @@ function MobileMessage({
             thinkingContent={message.thinkingContent || ""}
             notes={tuckedSegments}
             done={!live}
+            durationMs={message.durationMs}
             /* The slim row exists for the LIVE turn — it is the turn's status
                line while the bubble has no prose yet (spec 135 §A). A SETTLED
                turn shows it only when it has something to reveal; otherwise the

@@ -637,9 +637,12 @@ describe("Mobile — thinking strip tracks the live turn (parity with desktop)",
       />,
     );
 
-    expect(screen.getByRole("button", { name: /thinking/i })).toBeInTheDocument();
+    // Done: the label reports the turn's length (spec 140 §A) and the pulse is
+    // gone. `threaded` carries no `durationMs`, so this is the unknown case.
+    expect(screen.getByRole("button", { name: /thought/i })).toBeInTheDocument();
     expect(screen.queryByTestId("thinking-indicator")).toBeNull();
-    expect(screen.getByTestId("thinking-meta")).toHaveTextContent(/1 step · \d+s/);
+    expect(screen.getByTestId("thinking-label")).toHaveTextContent("Thought");
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("1 step");
   });
 });
 

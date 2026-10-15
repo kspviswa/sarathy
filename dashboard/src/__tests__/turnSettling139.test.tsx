@@ -154,8 +154,10 @@ describe.each([
     render(<View {...props} streaming={false} messages={settledTurn()} />);
 
     expect(screen.getAllByTestId("thinking-toggle")).toHaveLength(1);
-    expect(screen.getByTestId("thinking-toggle")).toHaveTextContent("Thinking");
-    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("2 steps ·");
+    // Spec 140 §A: the label reports the turn's length, not a status word with
+    // a completion tick beside it. The reducer stamped the duration.
+    expect(screen.getByTestId("thinking-label")).toHaveTextContent(/^Thought for \d+s$/);
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("2 steps");
   });
 
   it("draws no trail divider once settled — there is one prose block", () => {
@@ -218,7 +220,7 @@ describe("the split lives in the shared module", () => {
  * report is time-since-mount, not time-on-turn).
  */
 describe("a stored turn's collapse reports nothing it does not know", () => {
-  it("omits the meta row when there are no steps and no reasoning", () => {
+  it("omits the meta row when there are no steps to report", () => {
     render(
       <ThinkingSection
         toolHints={[]}
@@ -227,13 +229,14 @@ describe("a stored turn's collapse reports nothing it does not know", () => {
         done
       />,
     );
-    expect(screen.getByTestId("thinking-toggle")).toHaveTextContent("Thinking");
+    expect(screen.getByTestId("thinking-label")).toHaveTextContent("Thought");
     expect(screen.queryByTestId("thinking-meta")).toBeNull();
   });
 
-  it("still reports the duration when the collapse holds reasoning", () => {
-    render(<ThinkingSection toolHints={[]} thinkingContent="reasoning..." done />);
-    expect(screen.getByTestId("thinking-meta")).toHaveTextContent(/^\d+s$/);
+  it("carries the step count, and no invented duration, when steps are known", () => {
+    render(<ThinkingSection toolHints={["read_file a.ts"]} thinkingContent="" done />);
+    expect(screen.getByTestId("thinking-meta")).toHaveTextContent("1 step");
+    expect(screen.getByTestId("thinking-meta")).not.toHaveTextContent("s ·");
   });
 });
 

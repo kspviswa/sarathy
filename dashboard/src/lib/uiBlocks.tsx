@@ -34,6 +34,15 @@ import {
 export const CONTINUE_CONVERSATION = "continue_conversation";
 export const OPEN_URL = "open_url";
 
+/**
+ * The custom `@OpenPortal(slug)` action and its allowlist.
+ *
+ * The spec + slug->URL table live once in `./openPortal.js` (plain ESM, no
+ * openUI import) so the renderer and the prompt generator share them. Re-exported
+ * here because this is the light adapter the rest of the app imports from.
+ */
+export { OPEN_PORTAL, resolvePortal } from "./openPortal.js";
+
 export interface UIBlockAction {
   type: string;
   params: Record<string, unknown>;

@@ -51,7 +51,7 @@ import {
   type Quote,
   type QuoteChip,
 } from "@/lib/quotes";
-import { deriveLiveTurnStatus, liveBubbleIndex, turnSegments, type TurnSegment } from "@/lib/transcript";
+import { deriveLiveTurnStatus, liveBubbleIndex, splitTurnDisplay, turnSegments, type TurnSegment } from "@/lib/transcript";
 import type { SlashCommand } from "@/lib/palette";
 import type { ReactionState } from "@/lib/reactions";
 import { UIBlock, extractProse, hasOpenUIBlock } from "@/lib/uiBlocks";
@@ -1092,6 +1092,19 @@ function MessageRow({
     return extractMediaPaths(message.content);
   }, [message.media, message.content]);
 
+  // A settled turn shows its answer; the monologue tucks into the collapse
+  // (spec 139 §A). Shared, so desktop and mobile cannot disagree about which
+  // prose is the reply.
+  const { inline: inlineSegments, tucked: tuckedSegments } = useMemo(
+    () =>
+      splitTurnDisplay(
+        segments,
+        live,
+        displayMedia.length > 0 || (message.quotes?.length ?? 0) > 0,
+      ),
+    [segments, live, displayMedia.length, message.quotes?.length],
+  );
+
   return (
     <div
       className={cn(
@@ -1137,6 +1150,7 @@ function MessageRow({
           <ThinkingSection
             toolHints={message.toolHints || []}
             thinkingContent={message.thinkingContent || ""}
+            notes={tuckedSegments}
             done={!live}
             alwaysShow
             onOpenFile={onOpenFile}
@@ -1172,11 +1186,12 @@ function MessageRow({
              segments, so they keep the plain body renderer. */
           <MessageBody content={cleanContent} onOpenFile={onOpenFile} onSend={onSend} />
         ) : (
-          /* Every segment of the turn, in order, separated by the trail
-             divider (spec 135 §A). Shared with mobile — the frame around the
-             prose is identical on both surfaces; only the body renderer is not. */
+          /* The turn's prose — every segment while it is live, the answer alone
+             once it has settled (spec 135 §A, spec 139 §A). Shared with mobile:
+             the frame around the prose is identical on both surfaces; only the
+             body renderer is not. */
           <TurnSegments
-            segments={segments}
+            segments={inlineSegments}
             live={live}
             renderSegment={(text, isStreaming) => (
               <MessageBody content={cleanRenderedContent(text)} streaming={isStreaming} onOpenFile={onOpenFile} onSend={onSend} />

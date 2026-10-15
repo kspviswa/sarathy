@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, cleanup, act } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act, within, fireEvent } from "@testing-library/react";
 import React from "react";
 
 vi.mock("@/lib/api", () => ({
@@ -195,6 +195,51 @@ describe("Last session load — desktop App", () => {
 
     expect(await screen.findByText("hello prior")).toBeInTheDocument();
     expect(screen.getByText("hi back prior")).toBeInTheDocument();
+  });
+
+  it("rebuilds a stored turn as ONE bubble, showing its answer (spec 139 §B)", async () => {
+    // The real dashboard:console shape: one assistant record per iteration.
+    // Before spec 139 each became its own bubble — a reload of a tool-calling
+    // turn came back as a dozen bubbles, each with its own "Thinking" header.
+    // (The api mock is untyped in this suite; cast so this spec does not add to
+    // the pre-existing tsc noise.)
+    const sessionsMock = api.sessions as unknown as {
+      mockReset: () => void;
+      mockResolvedValue: (v: unknown) => void;
+    };
+    const sessionMock = api.session as unknown as {
+      mockReset: () => void;
+      mockResolvedValue: (v: unknown) => void;
+    };
+    sessionsMock.mockReset();
+    sessionsMock.mockResolvedValue({
+      sessions: [{ key: "dashboard:console", created_at: "t", updated_at: "t" }],
+    });
+    sessionMock.mockReset();
+    sessionMock.mockResolvedValue({
+      key: "dashboard:console",
+      createdAt: "t",
+      messages: [
+        { role: "user", content: "fix the bug", timestamp: "t1" },
+        { role: "assistant", content: "Now the failing test that pins the defect:", timestamp: "t2" },
+        { role: "assistant", content: "Green. Now the full suite:", timestamp: "t3" },
+        { role: "assistant", content: "Fixed and live, sir.", timestamp: "t4" },
+      ],
+    });
+
+    render(<DesktopApp />);
+
+    expect(await screen.findByText("Fixed and live, sir.")).toBeInTheDocument();
+    // ONE bubble for the turn, not three.
+    expect(screen.getAllByTestId("message-row-assistant")).toHaveLength(1);
+    // The answer is the bubble's prose; the monologue is not.
+    const segments = screen.getByTestId("assistant-turn-segments");
+    expect(within(segments).queryByText("Now the failing test that pins the defect:")).toBeNull();
+    // …it is tucked into the collapse, which survives the reload.
+    fireEvent.click(screen.getByTestId("thinking-toggle"));
+    const tucked = screen.getByTestId("thinking-notes");
+    expect(within(tucked).getByText("Now the failing test that pins the defect:")).toBeInTheDocument();
+    expect(within(tucked).getByText("Green. Now the full suite:")).toBeInTheDocument();
   });
 });
 

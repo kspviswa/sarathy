@@ -236,3 +236,52 @@ describe("a stored turn's collapse reports nothing it does not know", () => {
     expect(screen.getByTestId("thinking-meta")).toHaveTextContent(/^\d+s$/);
   });
 });
+
+/**
+ * A turn whose iterations never narrated has no monologue to tuck — and no
+ * steps or reasoning either, once rebuilt from the session file. Its "Thinking"
+ * chevron would expand to nothing, so it must not be drawn at all.
+ */
+describe("a settled turn with nothing to reveal draws no dead toggle", () => {
+  it("omits the row when a settled turn has no notes, chips or reasoning", () => {
+    let msgs: ChatMessage[] = [{ role: "user", content: "hi" }];
+    msgs = applyOutbound(msgs, frame("Hello, sir.", { _final: true, turn_id: "T" }));
+    render(<DesktopChatView {...props} streaming={false} messages={msgs} />);
+
+    expect(screen.queryByTestId("thinking-toggle")).toBeNull();
+    expect(screen.getByText("Hello, sir.")).toBeInTheDocument();
+  });
+
+  it("still draws it while that same turn is LIVE — it is the status row", () => {
+    let msgs: ChatMessage[] = [{ role: "user", content: "hi" }];
+    msgs = applyOutbound(msgs, frame("Hello, sir.", { _progress: true, turn_id: "T" }));
+    render(<DesktopChatView {...props} streaming messages={msgs} />);
+
+    // No tool hints and no reasoning yet, so there is nothing to expand — the
+    // row is the turn's status line, not a chevron onto nothing.
+    expect(screen.getByTestId("thinking-status")).toHaveTextContent("Thinking");
+    expect(screen.queryByTestId("thinking-toggle")).toBeNull();
+    expect(screen.getByTestId("assistant-turn-segments")).toBeInTheDocument();
+  });
+});
+
+/**
+ * A live turn's bubble with nothing to reveal yet still needs the slim status
+ * row (spec 135 §A) — but a chevron that opens onto nothing is a dead control.
+ * A page reloaded mid-turn is exactly this: the turn is live, and the API gave
+ * it no tool hints, so there is nothing to expand.
+ */
+describe("the slim row is a status line when there is nothing to reveal", () => {
+  it("draws no chevron for a live turn with nothing to expand", () => {
+    render(<ThinkingSection toolHints={[]} thinkingContent="" done={false} alwaysShow />);
+    expect(screen.getByTestId("thinking-status")).toHaveTextContent("Thinking");
+    expect(screen.queryByTestId("thinking-toggle")).toBeNull();
+    expect(screen.queryByTestId("thinking-body")).toBeNull();
+  });
+
+  it("is a real toggle as soon as there is something to reveal", () => {
+    render(<ThinkingSection toolHints={["🔍 Sending image to VLM…"]} thinkingContent="" alwaysShow />);
+    expect(screen.getByTestId("thinking-toggle")).toBeInTheDocument();
+    expect(screen.queryByTestId("thinking-status")).toBeNull();
+  });
+});

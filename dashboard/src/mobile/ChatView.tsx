@@ -705,7 +705,12 @@ function MobileMessage({
             thinkingContent={message.thinkingContent || ""}
             notes={tuckedSegments}
             done={!live}
-            alwaysShow
+            /* The slim row exists for the LIVE turn — it is the turn's status
+               line while the bubble has no prose yet (spec 135 §A). A SETTLED
+               turn shows it only when it has something to reveal; otherwise the
+               chevron would expand to nothing. A turn rebuilt from the session
+               file whose iterations never narrated is exactly that case. */
+            alwaysShow={live}
             onOpenFile={onOpenFile}
           />
         )}

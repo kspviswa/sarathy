@@ -140,8 +140,9 @@ describe.each([
     // One header, one toggle, for the entire turn.
     expect(screen.getAllByTestId("thinking-toggle")).toHaveLength(1);
     const header = screen.getByTestId("thinking-toggle");
-    expect(header).toHaveTextContent("Thinking");
-    expect(within(header).getByTestId("thinking-meta")).toHaveTextContent("3 steps ·");
+    // Done, and `toolCallingTurn()` carries no `durationMs`: a bare "Thought".
+    expect(within(header).getByTestId("thinking-label")).toHaveTextContent("Thought");
+    expect(within(header).getByTestId("thinking-meta")).toHaveTextContent("3 steps");
 
     // Collapsed by default: the tool calls are NOT on screen as raw text.
     expect(screen.queryByTestId("tool-chips")).toBeNull();

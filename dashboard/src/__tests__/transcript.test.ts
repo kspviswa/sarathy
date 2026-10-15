@@ -6,7 +6,7 @@
  * `_progress` frame overwrote them. Telegram shows each ack as its own message,
  * so the dashboard ended up with no ack at all.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 import {
   applyOutbound,
@@ -703,5 +703,52 @@ describe("splitTurnDisplay — the settled turn shows its answer", () => {
     const { inline, tucked } = splitTurnDisplay(segments, false, true);
     expect(inline).toEqual([]);
     expect(tucked).toEqual(segments);
+  });
+});
+
+/**
+ * Spec 140 §A — the turn's length, and where it comes from.
+ *
+ * The header used to read "Thinking" with a green check forever, and took its
+ * duration from a clock local to the component. That clock is wrong twice over:
+ * a remount restarts it at zero ("Thought for 0s"), and a turn rebuilt from the
+ * session file has no clock at all. So the reducer stamps the length on the
+ * message when the turn ends, and the header reports it — or says a bare
+ * "Thought" when it genuinely cannot know.
+ */
+describe("the turn's clock (spec 140 §A)", () => {
+  const user: ChatMessage = { role: "user", content: "go" };
+
+  it("stamps the duration on the turn's bubble when it ends", () => {
+    vi.useFakeTimers();
+    try {
+      let msgs: ChatMessage[] = [user];
+      msgs = applyOutbound(msgs, frame("Working…", { _progress: true, turn_id: "T" }));
+      expect(msgs[1].startedAt).toBeTypeOf("number");
+      expect(msgs[1].durationMs).toBeUndefined();
+
+      vi.advanceTimersByTime(134_000);
+      msgs = applyOutbound(msgs, frame("Done, sir.", { _final: true, turn_id: "T" }));
+      expect(msgs[1].durationMs).toBe(134_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves the duration unknown when the turn never opened a bubble", () => {
+    // A `_final` that mints the bubble itself: the turn ran, but the transcript
+    // never saw it start, so there is no honest number to report.
+    const msgs = applyOutbound([user], frame("Done, sir.", { _final: true, turn_id: "T" }));
+    expect(msgs[1].durationMs).toBeUndefined();
+  });
+
+  it("formats seconds, minutes and hours", () => {
+    expect(formatTurnDuration(0)).toBe("0s");
+    expect(formatTurnDuration(3_400)).toBe("3s");
+    expect(formatTurnDuration(59_000)).toBe("59s");
+    expect(formatTurnDuration(60_000)).toBe("1m 0s");
+    expect(formatTurnDuration(134_000)).toBe("2m 14s");
+    expect(formatTurnDuration(3_600_000)).toBe("1h 0m");
+    expect(formatTurnDuration(3_930_000)).toBe("1h 5m");
   });
 });

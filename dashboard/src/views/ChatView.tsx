@@ -99,6 +99,18 @@ export interface ChatMessage {
    * sub-index only ever distinguishes legacy turns that arrived without one.
    */
   bubbleId?: string;
+  /**
+   * When this turn's bubble was minted — the clock the Thinking header ticks
+   * from (spec 140 §A). Absent on messages rebuilt from the session file.
+   */
+  startedAt?: number;
+  /**
+   * How long the turn took, stamped when it ended (spec 140 §A). Absent while
+   * the turn runs, and absent on messages rebuilt from the session file — the
+   * stored records are all stamped at SAVE time, so the transcript holds no
+   * turn duration and the header says "Thought" without a number.
+   */
+  durationMs?: number;
 }
 
 interface PendingMedia {
@@ -1152,6 +1164,7 @@ function MessageRow({
             thinkingContent={message.thinkingContent || ""}
             notes={tuckedSegments}
             done={!live}
+            durationMs={message.durationMs}
             /* The slim row exists for the LIVE turn — it is the turn's status
                line while the bubble has no prose yet (spec 135 §A). A SETTLED
                turn shows it only when it has something to reveal; otherwise the

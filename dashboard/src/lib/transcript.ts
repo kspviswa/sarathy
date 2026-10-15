@@ -74,6 +74,15 @@ function replaceLast(prev: ChatMessage[], patch: Partial<ChatMessage>): ChatMess
   return [...prev.slice(0, -1), { ...prev[prev.length - 1], ...patch }];
 }
 
+/**
+ * How long the turn has been running, from the clock its bubble was minted with
+ * (spec 140 §A). `undefined` when the bubble predates the clock — a replayed or
+ * legacy frame — so the UI can say "Thought" instead of inventing a duration.
+ */
+function sinceStart(startedAt: number | undefined): number | undefined {
+  return startedAt === undefined ? undefined : Math.max(0, Date.now() - startedAt);
+}
+
 /** Replace the bubble at `idx` with an updated copy. */
 function replaceAt(prev: ChatMessage[], idx: number, patch: Partial<ChatMessage>): ChatMessage[] {
   return prev.map((m, i) => (i === idx ? { ...m, ...patch } : m));
@@ -246,6 +255,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
+        startedAt: Date.now(),
         ...segmentsPatch([{ text: m.content, sealed: true, kind: "note" }]),
         progress: false,
         sealed: true,
@@ -268,6 +278,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
+        startedAt: Date.now(),
         ...segmentsPatch([{ text: m.content, sealed: false, kind: "answer" }]),
         media: m.media,
         replyTo: m.replyTo,
@@ -287,6 +298,12 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       return replaceAt(prev, turnIdx, {
         ...withCommittedProse(target, m.content, "answer"),
         progress: false,
+        // The turn is over, so its length is now a fact rather than a ticking
+        // clock (spec 140 §A). Stamped here, on the message, because the
+        // ThinkingSection cannot measure it itself: a remount would restart its
+        // timer at zero, and a turn rebuilt from the session file has no clock
+        // at all.
+        durationMs: sinceStart(target.startedAt),
         media: m.media?.length ? m.media : target.media,
         replyTo: m.replyTo ?? target.replyTo,
       });
@@ -295,6 +312,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       return replaceLast(prev, {
         ...withStreamedProse(last, m.content),
         progress: false,
+        durationMs: sinceStart(last.startedAt),
         media: m.media?.length ? m.media : last.media,
         replyTo: m.replyTo ?? last.replyTo,
       });
@@ -303,6 +321,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       return replaceLast(prev, {
         ...withCommittedProse(last, m.content, "answer"),
         progress: false,
+        durationMs: sinceStart(last.startedAt),
         media: m.media?.length ? m.media : last.media,
         replyTo: m.replyTo ?? last.replyTo,
       });
@@ -311,6 +330,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
+        startedAt: Date.now(),
         ...segmentsPatch([{ text: m.content, sealed: true, kind: "answer" }]),
         media: m.media,
         replyTo: m.replyTo,
@@ -335,6 +355,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
+        startedAt: Date.now(),
         ...segmentsPatch([]),
         thinkingContent: m.content,
         turnId,
@@ -359,6 +380,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
+        startedAt: Date.now(),
         ...segmentsPatch([]),
         toolHint: hint,
         toolHints: [hint],
@@ -381,6 +403,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
       ...prev,
       {
         role: "assistant",
+        startedAt: Date.now(),
         ...segmentsPatch([{ text: m.content, sealed: false, kind: "answer" }]),
         progress: true,
         turnId,
@@ -409,6 +432,7 @@ export function applyOutbound(prev: ChatMessage[], m: OutboundMessage): ChatMess
     ...prev,
     {
       role: "assistant",
+      startedAt: Date.now(),
       ...segmentsPatch([{ text: m.content, sealed: false, kind: "answer" }]),
       media: m.media,
       replyTo: m.replyTo,
@@ -652,7 +676,9 @@ export function turnStepCount(m: ChatMessage): number {
 export function formatTurnDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));
   if (total < 60) return `${total}s`;
-  return `${Math.floor(total / 60)}m ${total % 60}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m ${total % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 /** One tool call, split out of a `_tool_hint` frame for the header's chips. */

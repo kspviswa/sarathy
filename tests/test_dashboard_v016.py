@@ -363,8 +363,9 @@ class TestChannelAwarePrompt:
         1. the renderer *derives* `UI_BLOCK_COMPONENTS` from
            `openuiLibrary.components` instead of declaring a literal array — so
            a hand-written list cannot creep back in and drift;
-        2. it renders through the library's own `<Renderer library={openuiLibrary}>`,
-           so the advertised catalog describes what actually paints;
+        2. it renders through the library's own `<Renderer library={lightboxLibrary}>`,
+           where `lightboxLibrary` is `openuiLibrary.extend(...)`, so the advertised
+           catalog describes what actually paints;
         3. the prompt parses back to a full catalog (not a curated subset) and
            covers the widgets the dashboard's own fixtures render;
         4. every advertised name really occurs in the prompt text.
@@ -389,10 +390,18 @@ class TestChannelAwarePrompt:
         ), "a hand-written UI_BLOCK_COMPONENTS array is exactly the drift this design removed"
 
         # (2) rendering goes through the library renderer, bound to that catalog.
+        # Since openUI 1.0 the renderer derives an extended library (`lightboxLibrary`)
+        # from `openuiLibrary` with `extend()` (zoomable images + the custom
+        # `@OpenPortal` action) and hands THAT to `<Renderer>`. It must still be
+        # the library's own Renderer, and the library must derive from the official
+        # one, otherwise the catalog describes components that never render.
         assert "from \"@openuidev/react-lang\"" in source and "Renderer" in source
-        assert re.search(r"<Renderer[\s\S]*?library=\{openuiLibrary\}", source), (
-            "the renderer must hand the library's own Renderer the same library it "
-            "advertises, otherwise the catalog describes components that never render"
+        assert re.search(r"<Renderer[\s\S]*?library=\{lightboxLibrary\}", source), (
+            "the renderer must hand the library's own Renderer the extended library, "
+            "otherwise the catalog describes components that never render"
+        )
+        assert re.search(r"openuiLibrary\.extend\(", source), (
+            "the renderer must derive the extended library with openuiLibrary.extend()"
         )
 
         # (3) the prompt carries a full catalog, not a stub.
@@ -431,6 +440,22 @@ class TestChannelAwarePrompt:
         prompt = ui_block_prompt().lower()
         for forbidden in ("rawhtml", "dangerouslysetinnerhtml", "iframe", "<script"):
             assert forbidden not in prompt
+
+    def test_prompt_carries_a_nonempty_catalog_and_the_custom_action(self):
+        """The registered `@OpenPortal` action must reach the model.
+
+        The action is defined ONCE in `dashboard/src/lib/openPortal.js` and added
+        to the library with `extend()` by the generator; the prompt is rendered
+        from that extended library, so `open_portal` must appear in the text the
+        dashboard channel is served. Also pin that the catalog did not collapse.
+        """
+        from sarathy.channels.dashboard.uiblocks import ui_block_components, ui_block_prompt
+
+        assert ui_block_components(), "the generated prompt advertises no components"
+
+        prompt = ui_block_prompt()
+        assert "open_portal" in prompt, "the custom @OpenPortal action is not in the prompt"
+        assert "## Component Signatures" in prompt
 
 
 # ------------------------------------------------------------------- http api

@@ -23,7 +23,7 @@ block. Never invent component names.
 ## Component Signatures
 
 Arguments marked with ? are optional. Sub-components can be inline or referenced; prefer references for better streaming.
-Props typed `ActionExpression` accept an Action([@steps...]) expression. See the Action section for available steps (@ToAssistant, @OpenUrl).
+Props typed `ActionExpression` accept one @step, or Action([@steps...]) for several. See the Action section for available steps (@ToAssistant, @OpenUrl, @open_portal).
 Props marked `$binding<type>` accept a `$variable` reference for two-way binding.
 
 ### Layout
@@ -179,19 +179,20 @@ MetricIndicatorWithStrikethrough(value: string, subtext?: string, previousValue?
 
 ## Action — Button Behavior
 
-Action([@steps...]) wires button clicks to operations. Steps are @-prefixed built-in actions. Steps execute in order.
-Buttons without an explicit Action prop automatically send their label to the assistant (equivalent to Action([@ToAssistant(label)])).
+An action wires a button click to operations. Pass one @-prefixed step bare, e.g. Button("Ask", @ToAssistant("Tell me more")). Put several steps in Action([...]), e.g. Button("Read", Action([@OpenUrl("https://example.com"), @ToAssistant("Summarize this page")])). Steps execute in order.
+Buttons without an action automatically send their label to the assistant (equivalent to @ToAssistant(label)).
 
 Available steps:
-- @ToAssistant("message") — Send a message to the assistant (for conversational buttons like "Tell me more", "Explain this")
-- @OpenUrl("https://...") — Navigate to a URL
+- @ToAssistant(message: string, context?: any) — Send a message to the assistant (for conversational buttons like "Tell me more", "Explain this"). The optional context is any value (object, array, string, number) passed to the assistant as hidden data, e.g. @ToAssistant("Show details", {orderId: 42})
+- @OpenUrl(url: string) — Navigate to a URL
+- @open_portal(slug: string) — Open one of Sarathy's portals in a new browser tab. Use it for a portal shortcut button; it acts immediately with no model round-trip.
 
 Example — simple nav:
 ```
-viewBtn = Button("View", Action([@OpenUrl("https://example.com")]))
+viewBtn = Button("View", @OpenUrl("https://example.com"))
 ```
 
-- Action can be assigned to a variable or inlined: Button("Go", onSubmit) and Button("Go", Action([...])) both work
+- An action can be assigned to a variable or inlined: Button("Go", onSubmit) and Button("Go", Action([...])) both work
 
 ## Hoisting & Streaming (CRITICAL)
 
@@ -236,7 +237,7 @@ emailField = FormControl("Email", Input("email", "you@example.com", "email", { r
 countryField = FormControl("Country", Select("country", countryOpts, "Select...", { required: true }))
 msgField = FormControl("Message", TextArea("message", "Tell us more...", 4, { required: true, minLength: 10 }))
 countryOpts = [SelectItem("us", "United States"), SelectItem("uk", "United Kingdom"), SelectItem("de", "Germany")]
-btns = Buttons([Button("Submit", Action([@ToAssistant("Submit")]), "primary"), Button("Cancel", Action([@ToAssistant("Cancel")]), "secondary")])
+btns = Buttons([Button("Submit", @ToAssistant("Submit"), "primary"), Button("Cancel", @ToAssistant("Cancel"), "secondary")])
 
 Example 4 — Tabs with mixed content:
 
@@ -272,13 +273,13 @@ p1header = IconText(p1icon, "neutral", "m", "Widget Pro", "Best seller", true, "
 p1icon = Icon("package", "shopping")
 p1body = MetricIndicatorInline("2,410 units", "Sold this month", { direction: "up", value: 12 })
 p1footer = { price: BoldText("text", "$29.00"), button: p1btn }
-p1btn = Button("View Details", Action([@ToAssistant("Show details for Widget Pro")]), "secondary")
+p1btn = Button("View Details", @ToAssistant("Show details for Widget Pro"), "secondary")
 p2 = CompositeCardItem("widget-mini", p2header, [p2body], p2footer)
 p2header = IconText(p2icon, "neutral", "m", "Widget Mini", "New arrival", true, "horizontal")
 p2icon = Icon("box", "shopping")
 p2body = MetricIndicatorInline("980 units", "Sold this month", { direction: "up", value: 4 })
 p2footer = { price: BoldText("text", "$14.00"), button: p2btn }
-p2btn = Button("View Details", Action([@ToAssistant("Show details for Widget Mini")]), "secondary")
+p2btn = Button("View Details", @ToAssistant("Show details for Widget Mini"), "secondary")
 
 Example 6 — Editable table and a selection form:
 
@@ -308,7 +309,7 @@ tool2 = ChipItem("slack", "Slack", tool2icon)
 tool2icon = Icon("message-square", "communication")
 tool3 = ChipItem("notion", "Notion", tool3icon)
 tool3icon = Icon("notebook", "text")
-formButtons = Buttons([Button("Save", Action([@ToAssistant("Save preferences")]), "primary")])
+formButtons = Buttons([Button("Save", @ToAssistant("Save preferences"), "primary")])
 
 
 ## Inline Mode

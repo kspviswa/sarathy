@@ -8,12 +8,24 @@
  *  - uiBlocks.tsx stays dependency-light (no @openuidev import);
  *  - a text reply never renders as a UI block.
  */
-import { describe, it, expect } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
 
-import { sanitizeUrl, extractProse, extractUIBlocks, hasOpenUIBlock, UIBlock } from "@/lib/uiBlocks";
-import { parseUI, uiLibrary } from "@/lib/openuiRenderer";
+import {
+  sanitizeUrl,
+  extractProse,
+  extractUIBlocks,
+  hasOpenUIBlock,
+  resolvePortal,
+  UIBlock,
+} from "@/lib/uiBlocks";
+import {
+  parseUI,
+  uiLibrary,
+  UI_BLOCK_COMPONENTS,
+  UI_BLOCK_OVERRIDES,
+} from "@/lib/openuiRenderer";
 
 describe("sanitizeUrl", () => {
   it("allows absolute http and https URLs", () => {
@@ -178,4 +190,131 @@ describe("markdown regression guard", () => {
     render(<ReactMarkdown>{"Normal **bold** reply"}</ReactMarkdown>);
     expect(screen.getByText("bold")).toBeInTheDocument();
   });
+});
+
+describe("openUI 1.0: library.extend() catalog", () => {
+  it("overrides exactly ImageBlock and Image, in that order", () => {
+    expect(UI_BLOCK_OVERRIDES).toEqual(["ImageBlock", "Image"]);
+  });
+
+  it("keeps every component from the official catalog", () => {
+    const names = Object.keys(uiLibrary().components);
+    // extend() derives from the base library, so the name set is unchanged.
+    expect([...names].sort()).toEqual([...UI_BLOCK_COMPONENTS].sort());
+    expect(names.length).toBeGreaterThan(60);
+    for (const required of ["Table", "BarChart", "LineChart", "Button", "Form", "Tabs", "Stack"]) {
+      expect(names).toContain(required);
+    }
+  });
+
+  it("actually swapped the Image/ImageBlock renderers (not just listed them)", () => {
+    const lib = uiLibrary().components;
+    // A DerivedComponent keeps its schema but carries our zoomable renderer.
+    for (const name of UI_BLOCK_OVERRIDES) {
+      expect(typeof lib[name].component).toBe("function");
+    }
+  });
+});
+
+describe("resolvePortal (open-portal allowlist)", () => {
+  const ALLOWLISTED: Record<string, string> = {
+    manana: "https://skandpriya.com/manana/",
+    shravana: "https://skandpriya.com/shravana/",
+    vatsalya: "https://skandpriya.com/vatsalya/",
+    smriti: "https://skandpriya.com/smriti/",
+    charitham: "https://skandpriya.com/charitham/",
+    dashboard: "https://skandpriya.com/dashboard/",
+    patra: "https://skandpriya.com/patra/",
+  };
+
+  it("resolves every allowlisted slug to its portal URL", () => {
+    for (const [slug, url] of Object.entries(ALLOWLISTED)) {
+      expect(resolvePortal(slug)).toBe(url);
+    }
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(resolvePortal("  manana  ")).toBe(ALLOWLISTED.manana);
+  });
+
+  it("returns null for unknown, malformed or non-string slugs", () => {
+    for (const bad of [
+      "evil",
+      "http://x",
+      "",
+      "   ",
+      "MANANA", // case-sensitive
+      "manana/",
+      "https://skandpriya.com/manana/",
+      undefined,
+      null,
+      42,
+      {},
+      ["manana"],
+    ]) {
+      expect(resolvePortal(bad)).toBeNull();
+    }
+  });
+});
+
+describe("openUI 1.0: @OpenPortal custom action", () => {
+  // The action is registered as `open_portal` (the step the parser and prompt
+  // use verbatim is `@open_portal(...)`); `@OpenPortal` is just the label.
+  const PORTAL_BLOCK = FENCE(
+    ["root = Stack([btn])", 'btn = Button("Open Manana", @open_portal("manana"))'].join("\n"),
+  );
+
+  const portalBlockFor = (slugLiteral: string) =>
+    FENCE(["root = Stack([btn])", `btn = Button("Go", @open_portal(${slugLiteral}))`].join("\n"));
+
+  it("parses a block carrying the custom action (parser built from the extended library)", () => {
+    const parsed = parseUI(PORTAL_BLOCK);
+    expect(parsed.kind).toBe("ui");
+    if (parsed.kind === "ui") {
+      // Footgun 1: a parser built from the BASE library would flag the unknown
+      // action. Built from the extended one, there are no errors at all.
+      expect(parsed.result.meta.errors ?? []).toEqual([]);
+    }
+  });
+
+  it("dispatches {type:open_portal, params:{slug}} to onAction", async () => {
+    const onAction = vi.fn();
+    render(<UIBlock source={PORTAL_BLOCK} onAction={onAction} />);
+    const btn = await screen.findByRole("button", { name: /open manana/i });
+    fireEvent.click(btn);
+    expect(onAction).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "open_portal", params: { slug: "manana" } }),
+    );
+  });
+
+  it("opens the allowlisted portal URL when no onAction takes ownership", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    try {
+      render(<UIBlock source={PORTAL_BLOCK} />);
+      const btn = await screen.findByRole("button", { name: /open manana/i });
+      fireEvent.click(btn);
+      expect(open).toHaveBeenCalledWith(
+        "https://skandpriya.com/manana/",
+        "_blank",
+        "noopener,noreferrer",
+      );
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it.each(['"evil"', '"http://x"', '""'])(
+    "does NOT open a window for a non-allowlisted slug (%s)",
+    async (slugLiteral) => {
+      const open = vi.spyOn(window, "open").mockImplementation(() => null);
+      try {
+        render(<UIBlock source={portalBlockFor(slugLiteral)} />);
+        const btn = await screen.findByRole("button", { name: /go/i });
+        fireEvent.click(btn);
+        expect(open).not.toHaveBeenCalled();
+      } finally {
+        open.mockRestore();
+      }
+    },
+  );
 });

@@ -29,30 +29,17 @@ export const OPEN_PORTAL_SPEC = Object.freeze({
 });
 
 /**
- * The public origin every portal is served from.
- *
- * The port is NOT optional: the public edge (`skandpriya.com`) terminates TLS on
- * **8443** and does not answer on 443, so a bare-origin URL resolves but never
- * connects — the tab opens onto a connection error, which reads to the user as
- * "the portal didn't open". Confirmed 2026-10-15: `:8443/<slug>/` → 200,
- * `/<slug>/` → connection refused.
- *
- * Declared once so the port cannot drift between the seven entries below.
- */
-export const PORTAL_BASE = "https://skandpriya.com:8443";
-
-/**
  * The hard allowlist. A slug is NEVER treated as a URL — only these keys, and
  * only these URLs, are ever opened. Case-sensitive, trimmed.
  */
 export const PORTALS = Object.freeze({
-  manana: `${PORTAL_BASE}/manana/`,
-  shravana: `${PORTAL_BASE}/shravana/`,
-  vatsalya: `${PORTAL_BASE}/vatsalya/`,
-  smriti: `${PORTAL_BASE}/smriti/`,
-  charitham: `${PORTAL_BASE}/charitham/`,
-  dashboard: `${PORTAL_BASE}/dashboard/`,
-  patra: `${PORTAL_BASE}/patra/`,
+  manana: "https://skandpriya.com/manana/",
+  shravana: "https://skandpriya.com/shravana/",
+  vatsalya: "https://skandpriya.com/vatsalya/",
+  smriti: "https://skandpriya.com/smriti/",
+  charitham: "https://skandpriya.com/charitham/",
+  dashboard: "https://skandpriya.com/dashboard/",
+  patra: "https://skandpriya.com/patra/",
 });
 
 /**

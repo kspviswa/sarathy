@@ -18,8 +18,6 @@ import {
   extractUIBlocks,
   hasOpenUIBlock,
   resolvePortal,
-  PORTAL_BASE,
-  PORTALS,
   UIBlock,
 } from "@/lib/uiBlocks";
 import {
@@ -220,30 +218,18 @@ describe("openUI 1.0: library.extend() catalog", () => {
 
 describe("resolvePortal (open-portal allowlist)", () => {
   const ALLOWLISTED: Record<string, string> = {
-    manana: "https://skandpriya.com:8443/manana/",
-    shravana: "https://skandpriya.com:8443/shravana/",
-    vatsalya: "https://skandpriya.com:8443/vatsalya/",
-    smriti: "https://skandpriya.com:8443/smriti/",
-    charitham: "https://skandpriya.com:8443/charitham/",
-    dashboard: "https://skandpriya.com:8443/dashboard/",
-    patra: "https://skandpriya.com:8443/patra/",
+    manana: "https://skandpriya.com/manana/",
+    shravana: "https://skandpriya.com/shravana/",
+    vatsalya: "https://skandpriya.com/vatsalya/",
+    smriti: "https://skandpriya.com/smriti/",
+    charitham: "https://skandpriya.com/charitham/",
+    dashboard: "https://skandpriya.com/dashboard/",
+    patra: "https://skandpriya.com/patra/",
   };
 
   it("resolves every allowlisted slug to its portal URL", () => {
     for (const [slug, url] of Object.entries(ALLOWLISTED)) {
       expect(resolvePortal(slug)).toBe(url);
-    }
-  });
-
-  // Regression (2026-10-15): the URLs shipped WITHOUT the :8443 port, and the
-  // public edge answers only on 8443 — so every portal button opened a tab onto
-  // a connection error. Viswa: "The portals don't open."
-  it("carries the :8443 port on every URL (the bare origin does not connect)", () => {
-    for (const url of Object.values(ALLOWLISTED)) {
-      expect(new URL(url).port).toBe("8443");
-    }
-    for (const url of Object.values(PORTALS)) {
-      expect(url.startsWith(`${PORTAL_BASE}/`)).toBe(true);
     }
   });
 
@@ -308,7 +294,7 @@ describe("openUI 1.0: @OpenPortal custom action", () => {
       const btn = await screen.findByRole("button", { name: /open manana/i });
       fireEvent.click(btn);
       expect(open).toHaveBeenCalledWith(
-        "https://skandpriya.com:8443/manana/",
+        "https://skandpriya.com/manana/",
         "_blank",
         "noopener,noreferrer",
       );

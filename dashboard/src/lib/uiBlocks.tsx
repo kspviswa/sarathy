@@ -41,7 +41,7 @@ export const OPEN_URL = "open_url";
  * openUI import) so the renderer and the prompt generator share them. Re-exported
  * here because this is the light adapter the rest of the app imports from.
  */
-export { OPEN_PORTAL, resolvePortal } from "./openPortal.js";
+export { OPEN_PORTAL, PORTAL_BASE, PORTALS, resolvePortal } from "./openPortal.js";
 
 export interface UIBlockAction {
   type: string;

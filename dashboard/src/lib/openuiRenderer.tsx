@@ -9,7 +9,7 @@
  * The component catalog is the official `openuiLibrary` from
  * `@openuidev/react-ui` — every widget the library ships (tables, charts,
  * forms, buttons, tabs, …) — extended at module scope with `extend()` (two
- * zoomable image overrides + the custom `@OpenPortal` action). There is NO
+ * zoomable image overrides). There is NO
  * hand-maintained allowlist: the backend prompt is generated from this same
  * library (`dashboard/scripts/gen-openui-prompt.mjs` →
  * `sarathy/channels/dashboard/openui_prompt.txt`), so the model can never be
@@ -29,7 +29,6 @@
 import "@openuidev/react-ui/index.css";
 import {
   createParser,
-  defineAction,
   Renderer,
   type Library,
   type ParseResult,
@@ -42,10 +41,8 @@ import {
   type Theme,
 } from "@openuidev/react-ui";
 import { useMemo } from "react";
-import { z } from "zod";
 
 import { LightboxProvider, useZoomable } from "@/lib/lightbox";
-import { OPEN_PORTAL, OPEN_PORTAL_SPEC, resolvePortal } from "@/lib/openPortal.js";
 import { useTheme } from "@/lib/theme";
 import { extractUIBlocks, sanitizeUrl, OPEN_URL, type UIBlockProps } from "@/lib/uiBlocks";
 
@@ -87,25 +84,10 @@ const IMAGE_OVERRIDES = {
 export const UI_BLOCK_OVERRIDES: readonly string[] = Object.keys(IMAGE_OVERRIDES);
 
 /**
- * The custom `@OpenPortal(slug)` step.
- *
- * The name, description and slug semantics live ONCE in `lib/openPortal.js`
- * (shared with the prompt generator); here we only build the `DefinedAction`
- * the library needs. `slug` is a plain string — it is resolved against the
- * allowlist in `handleAction`, never opened as a URL itself.
- */
-const openPortalAction = defineAction({
-  name: OPEN_PORTAL_SPEC.name,
-  description: OPEN_PORTAL_SPEC.description,
-  params: z.object({ slug: z.string().describe(OPEN_PORTAL_SPEC.slugDescription) }),
-});
-
-/**
  * The library instance. Derived from the official `openuiLibrary` with
  * `extend()` at module scope (the base is left untouched and parsers memoize by
- * identity). Two image components are overridden with zoomable versions, and the
- * `@OpenPortal` custom action joins the library's action steps. Exposed for
- * tests; call sites use `<UIBlock>`.
+ * identity). Two image components are overridden with zoomable versions.
+ * Exposed for tests; call sites use `<UIBlock>`.
  */
 const lightboxLibrary: Library = openuiLibrary.extend({
   components: {
@@ -114,7 +96,6 @@ const lightboxLibrary: Library = openuiLibrary.extend({
       { ...openuiLibrary.components.Image, component: ZoomableImage },
     ],
   },
-  actions: { add: [openPortalAction] },
 });
 
 /** The library instance. Exposed for tests; call sites use `<UIBlock>`. */
@@ -130,8 +111,8 @@ let cachedParser: ReturnType<typeof createParser> | null = null;
 
 function uiParser() {
   if (!cachedParser) {
-    // Build from the EXTENDED library, not the base one — otherwise the parser
-    // rejects `@open_portal` as an unknown action (footgun 1).
+    // Build from the EXTENDED library, not the base one, so the parser knows
+    // the zoomable image overrides (footgun 1).
     cachedParser = createParser(lightboxLibrary.toJSONSchema(), lightboxLibrary.root);
   }
   return cachedParser;
@@ -227,13 +208,6 @@ export default function OpenUIBlock({
 
     if (event.type === OPEN_URL) {
       const url = sanitizeUrl(event.params?.url);
-      if (url) window.open(url, "_blank", "noopener,noreferrer");
-      return;
-    }
-    if (event.type === OPEN_PORTAL) {
-      // `slug` is NEVER a URL: resolve it against the allowlist in
-      // `lib/openPortal.js` and open nothing when it is unknown.
-      const url = resolvePortal(event.params?.slug);
       if (url) window.open(url, "_blank", "noopener,noreferrer");
       return;
     }

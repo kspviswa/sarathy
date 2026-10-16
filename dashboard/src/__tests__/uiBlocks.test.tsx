@@ -17,7 +17,6 @@ import {
   extractProse,
   extractUIBlocks,
   hasOpenUIBlock,
-  resolvePortal,
   UIBlock,
 } from "@/lib/uiBlocks";
 import {
@@ -215,106 +214,55 @@ describe("openUI 1.0: library.extend() catalog", () => {
     }
   });
 });
+describe("native @OpenUrl action (portal links are model-driven)", () => {
+  // Portal links are NOT a custom action any more: the model emits the
+  // canonical public URL itself and the library's own `@OpenUrl` opens it.
+  // There is no slug->URL table anywhere in code.
+  const PORTAL_URL = "https://skandpriya.com:8443/manana/";
+  const portalBlock = (urlLiteral: string) =>
+    FENCE(
+      ["root = Stack([btn])", `btn = Button("Open Manana", @OpenUrl(${urlLiteral}))`].join("\n"),
+    );
 
-describe("resolvePortal (open-portal allowlist)", () => {
-  const ALLOWLISTED: Record<string, string> = {
-    manana: "https://skandpriya.com/manana/",
-    shravana: "https://skandpriya.com/shravana/",
-    vatsalya: "https://skandpriya.com/vatsalya/",
-    smriti: "https://skandpriya.com/smriti/",
-    charitham: "https://skandpriya.com/charitham/",
-    dashboard: "https://skandpriya.com/dashboard/",
-    patra: "https://skandpriya.com/patra/",
-  };
-
-  it("resolves every allowlisted slug to its portal URL", () => {
-    for (const [slug, url] of Object.entries(ALLOWLISTED)) {
-      expect(resolvePortal(slug)).toBe(url);
-    }
-  });
-
-  it("trims surrounding whitespace", () => {
-    expect(resolvePortal("  manana  ")).toBe(ALLOWLISTED.manana);
-  });
-
-  it("returns null for unknown, malformed or non-string slugs", () => {
-    for (const bad of [
-      "evil",
-      "http://x",
-      "",
-      "   ",
-      "MANANA", // case-sensitive
-      "manana/",
-      "https://skandpriya.com/manana/",
-      undefined,
-      null,
-      42,
-      {},
-      ["manana"],
-    ]) {
-      expect(resolvePortal(bad)).toBeNull();
-    }
-  });
-});
-
-describe("openUI 1.0: @OpenPortal custom action", () => {
-  // The action is registered as `open_portal` (the step the parser and prompt
-  // use verbatim is `@open_portal(...)`); `@OpenPortal` is just the label.
-  const PORTAL_BLOCK = FENCE(
-    ["root = Stack([btn])", 'btn = Button("Open Manana", @open_portal("manana"))'].join("\n"),
-  );
-
-  const portalBlockFor = (slugLiteral: string) =>
-    FENCE(["root = Stack([btn])", `btn = Button("Go", @open_portal(${slugLiteral}))`].join("\n"));
-
-  it("parses a block carrying the custom action (parser built from the extended library)", () => {
-    const parsed = parseUI(PORTAL_BLOCK);
+  it("parses a block carrying the native open_url action", () => {
+    const parsed = parseUI(portalBlock(`"${PORTAL_URL}"`));
     expect(parsed.kind).toBe("ui");
     if (parsed.kind === "ui") {
-      // Footgun 1: a parser built from the BASE library would flag the unknown
-      // action. Built from the extended one, there are no errors at all.
       expect(parsed.result.meta.errors ?? []).toEqual([]);
     }
   });
 
-  it("dispatches {type:open_portal, params:{slug}} to onAction", async () => {
-    const onAction = vi.fn();
-    render(<UIBlock source={PORTAL_BLOCK} onAction={onAction} />);
-    const btn = await screen.findByRole("button", { name: /open manana/i });
-    fireEvent.click(btn);
-    expect(onAction).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "open_portal", params: { slug: "manana" } }),
-    );
-  });
-
-  it("opens the allowlisted portal URL when no onAction takes ownership", async () => {
+  it("opens the URL the model emitted when no onAction takes ownership", async () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
     try {
-      render(<UIBlock source={PORTAL_BLOCK} />);
+      render(<UIBlock source={portalBlock(`"${PORTAL_URL}"`)} />);
       const btn = await screen.findByRole("button", { name: /open manana/i });
       fireEvent.click(btn);
-      expect(open).toHaveBeenCalledWith(
-        "https://skandpriya.com/manana/",
-        "_blank",
-        "noopener,noreferrer",
-      );
+      expect(open).toHaveBeenCalledWith(PORTAL_URL, "_blank", "noopener,noreferrer");
     } finally {
       open.mockRestore();
     }
   });
 
-  it.each(['"evil"', '"http://x"', '""'])(
-    "does NOT open a window for a non-allowlisted slug (%s)",
-    async (slugLiteral) => {
-      const open = vi.spyOn(window, "open").mockImplementation(() => null);
-      try {
-        render(<UIBlock source={portalBlockFor(slugLiteral)} />);
-        const btn = await screen.findByRole("button", { name: /go/i });
-        fireEvent.click(btn);
-        expect(open).not.toHaveBeenCalled();
-      } finally {
-        open.mockRestore();
-      }
-    },
-  );
+  it("dispatches {type:open_url, params:{url}} to onAction", async () => {
+    const onAction = vi.fn();
+    render(<UIBlock source={portalBlock(`"${PORTAL_URL}"`)} onAction={onAction} />);
+    const btn = await screen.findByRole("button", { name: /open manana/i });
+    fireEvent.click(btn);
+    expect(onAction).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "open_url", params: { url: PORTAL_URL } }),
+    );
+  });
+
+  it("does NOT open a window for a non-http(s) URL", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    try {
+      render(<UIBlock source={portalBlock('"javascript:alert(1)"')} />);
+      const btn = await screen.findByRole("button", { name: /open manana/i });
+      fireEvent.click(btn);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
+  });
 });

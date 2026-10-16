@@ -23,7 +23,7 @@ block. Never invent component names.
 ## Component Signatures
 
 Arguments marked with ? are optional. Sub-components can be inline or referenced; prefer references for better streaming.
-Props typed `ActionExpression` accept one @step, or Action([@steps...]) for several. See the Action section for available steps (@ToAssistant, @OpenUrl, @open_portal).
+Props typed `ActionExpression` accept one @step, or Action([@steps...]) for several. See the Action section for available steps (@ToAssistant, @OpenUrl).
 Props marked `$binding<type>` accept a `$variable` reference for two-way binding.
 
 ### Layout
@@ -185,7 +185,6 @@ Buttons without an action automatically send their label to the assistant (equiv
 Available steps:
 - @ToAssistant(message: string, context?: any) — Send a message to the assistant (for conversational buttons like "Tell me more", "Explain this"). The optional context is any value (object, array, string, number) passed to the assistant as hidden data, e.g. @ToAssistant("Show details", {orderId: 42})
 - @OpenUrl(url: string) — Navigate to a URL
-- @open_portal(slug: string) — Open one of Sarathy's portals in a new browser tab. Use it for a portal shortcut button; it acts immediately with no model round-trip.
 
 Example — simple nav:
 ```

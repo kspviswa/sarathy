@@ -21,27 +21,16 @@ import { writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { defineAction, generateSystemPrompt } from "@openuidev/react-lang";
+import { generateSystemPrompt } from "@openuidev/react-lang";
 import { openuiLibrary, openuiPromptOptions } from "@openuidev/react-ui/genui-lib";
-import { z } from "zod";
-
-import { OPEN_PORTAL_SPEC } from "../src/lib/openPortal.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(here, "../../sarathy/channels/dashboard/openui_prompt.txt");
 
-// The custom action's spec lives ONCE in `src/lib/openPortal.js`, shared with
-// the browser renderer (`openuiRenderer.tsx`). We only rebuild the
-// `DefinedAction` here; the name/description/allowlist are never duplicated.
-const openPortalAction = defineAction({
-  name: OPEN_PORTAL_SPEC.name,
-  description: OPEN_PORTAL_SPEC.description,
-  params: z.object({ slug: z.string().describe(OPEN_PORTAL_SPEC.slugDescription) }),
-});
-
-// Prompt from the EXTENDED library (base components + the custom action), so
-// the model is taught exactly the catalog the renderer resolves against.
-const library = openuiLibrary.extend({ actions: { add: [openPortalAction] } });
+// Prompt from the library the renderer resolves against. Portal links are NOT
+// a custom action: the model drives them with the library's own `@OpenUrl`,
+// emitting the canonical public URL itself. No URL table lives in code.
+const library = openuiLibrary;
 
 // Hybrid preamble: the dashboard renders prose as markdown and a fenced
 // openui-lang block as a typed UI block. The library's default preamble

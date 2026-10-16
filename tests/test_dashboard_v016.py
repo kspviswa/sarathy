@@ -391,8 +391,8 @@ class TestChannelAwarePrompt:
 
         # (2) rendering goes through the library renderer, bound to that catalog.
         # Since openUI 1.0 the renderer derives an extended library (`lightboxLibrary`)
-        # from `openuiLibrary` with `extend()` (zoomable images + the custom
-        # `@OpenPortal` action) and hands THAT to `<Renderer>`. It must still be
+        # from `openuiLibrary` with `extend()` (zoomable image overrides) and
+        # hands THAT to `<Renderer>`. It must still be
         # the library's own Renderer, and the library must derive from the official
         # one, otherwise the catalog describes components that never render.
         assert "from \"@openuidev/react-lang\"" in source and "Renderer" in source
@@ -441,20 +441,23 @@ class TestChannelAwarePrompt:
         for forbidden in ("rawhtml", "dangerouslysetinnerhtml", "iframe", "<script"):
             assert forbidden not in prompt
 
-    def test_prompt_carries_a_nonempty_catalog_and_the_custom_action(self):
-        """The registered `@OpenPortal` action must reach the model.
+    def test_prompt_carries_a_nonempty_catalog_and_no_portal_table(self):
+        """Portal links are model-driven: no custom action, no URL table in code.
 
-        The action is defined ONCE in `dashboard/src/lib/openPortal.js` and added
-        to the library with `extend()` by the generator; the prompt is rendered
-        from that extended library, so `open_portal` must appear in the text the
-        dashboard channel is served. Also pin that the catalog did not collapse.
+        The model emits the canonical public URL itself and the library's own
+        `@OpenUrl` opens it. So the prompt must advertise `open_url` and must NOT
+        carry a bespoke `open_portal` action (which would reintroduce the
+        hardcoded slug->URL table). Also pin that the catalog did not collapse.
         """
         from sarathy.channels.dashboard.uiblocks import ui_block_components, ui_block_prompt
 
         assert ui_block_components(), "the generated prompt advertises no components"
 
         prompt = ui_block_prompt()
-        assert "open_portal" in prompt, "the custom @OpenPortal action is not in the prompt"
+        assert "@OpenUrl" in prompt, "the native @OpenUrl action is not in the prompt"
+        assert "open_portal" not in prompt, (
+            "a bespoke @OpenPortal action is back — portal links must stay model-driven"
+        )
         assert "## Component Signatures" in prompt
 
 

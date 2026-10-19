@@ -7,6 +7,31 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
     <meta name="theme-color" content="#09090b" />
+    <script>
+      // Pre-paint theme bootstrap: apply the saved palette BEFORE first paint so
+      // a reload never flashes the default violet. Mirrors THEMES in
+      // src/lib/theme.tsx — keep the two lists in step.
+      (function () {
+        try {
+          var MODES = { light: "light", dark: "dark", system: null, matcha: "light", ink: "dark", sand: "light" };
+          var SWATCH = { light: "#fafafa", dark: "#09090b", ink: "#1a2333", matcha: "#5f8f52", sand: "#b9744c" };
+          var t = localStorage.getItem("sarathy_theme") || "dark";
+          if (!(t in MODES)) t = "dark";
+          var mode = MODES[t];
+          if (mode === null) {
+            mode = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          var el = document.documentElement;
+          el.classList.toggle("dark", mode === "dark");
+          el.classList.remove("theme-matcha", "theme-ink", "theme-sand");
+          if (t !== "light" && t !== "dark" && t !== "system") el.classList.add("theme-" + t);
+          el.style.colorScheme = mode;
+          el.dataset.theme = t;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", SWATCH[t] || (mode === "dark" ? "#09090b" : "#fafafa"));
+        } catch (e) {}
+      })();
+    </script>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -35,10 +60,10 @@
         } catch (e) {}
       })();
     </script>
-    <script type="module" crossorigin src="./assets/main-6kVFdvzo.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/index-IQcSRgOq.js">
-    <link rel="modulepreload" crossorigin href="./assets/index-CstaXHE0.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-C7OB2TEa.css">
+    <script type="module" crossorigin src="./assets/main-DDRPDY3p.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/index-Bzl0OGOd.js">
+    <link rel="modulepreload" crossorigin href="./assets/index-CP-PoDnW.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-D4pDu0i-.css">
   <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
   <body>
     <div id="root"></div>

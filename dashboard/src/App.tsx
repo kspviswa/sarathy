@@ -526,7 +526,15 @@ function AppInner() {
       {/* ---------------------------------------------------------------- main */}
       <main className="order-1 flex min-h-0 flex-1 flex-col md:order-2">
         {/* top bar */}
-        <header className="safe-top flex items-center gap-2 border-b bg-background/80 px-3 py-2 backdrop-blur">
+        {/* One line at every width, same discipline as the mobile header: the
+            row never wraps and labels drop to icons as space runs out. At the
+            `md` breakpoint the rail claims ~180px, so a 768px viewport leaves
+            only ~590px for this bar — "Notifications" used to wrap one letter
+            per line and blow the header up to 181px. */}
+        <header
+          className="safe-top flex flex-nowrap items-center gap-2 border-b bg-background/80 px-3 py-2 backdrop-blur"
+          data-testid="desktop-header"
+        >
           <button
             onClick={() => setRailOpen((v) => !v)}
             className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
@@ -538,14 +546,16 @@ function AppInner() {
             variant="ghost"
             size="sm"
             onClick={() => setPaletteOpen(true)}
-            className="hidden text-muted-foreground sm:inline-flex"
+            className="hidden shrink-0 text-muted-foreground sm:inline-flex"
+            aria-label="Search commands"
+            title="Search commands (⌘K)"
           >
             <Search className="size-3.5" />
-            <span className="text-xs">Search commands…</span>
-            <kbd className="ml-2 rounded border border-border px-1 text-[10px]">⌘K</kbd>
+            <span className="hidden text-xs lg:inline">Search commands…</span>
+            <kbd className="ml-2 hidden rounded border border-border px-1 text-[10px] lg:inline">⌘K</kbd>
           </Button>
 
-          <div className="flex-1" />
+          <div className="min-w-0 flex-1" />
 
           <PresenceIndicator state={reaction} />
           <NotificationControls
@@ -566,7 +576,7 @@ function AppInner() {
           <div className="hidden items-center gap-2 md:flex">
             {/* Not a dead label: the session this surface is talking to. */}
             <span
-              className="max-w-[12rem] truncate font-mono text-[11px] text-muted-foreground"
+              className="hidden max-w-[12rem] truncate font-mono text-[11px] text-muted-foreground lg:inline"
               title={transcriptKey ?? DASHBOARD_SESSION_KEY}
               data-testid="session-badge"
             >

@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { Logo } from "@/components/logo";
 import { NotificationControls } from "@/components/NotificationControls";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import type { Quote } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
@@ -342,6 +343,7 @@ function MobileAppInner() {
               setUnread((prev) => ({ ...prev, [dest.id]: 0 }));
             }}
           />
+          <ThemeToggle compact />
           <span>Mobile</span>
         </div>
       </header>

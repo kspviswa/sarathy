@@ -47,6 +47,80 @@
   --ring: oklch(0.606 0.25 292.717);
 }
 
+/* ── Named palettes (spec: theme picker) ────────────────────────────────────
+ * `.theme-*` sits on <html> in addition to `.dark` when the palette is dark.
+ * Specificity is equal to `.dark` (0,1,0), so these MUST stay after it —
+ * source order is what wins the cascade here.
+ *
+ * Every palette defines the full variable set: a partial palette would leak
+ * the default violet into whatever it omitted.
+ */
+.theme-matcha {
+  --background: oklch(0.982 0.014 122);
+  --foreground: oklch(0.24 0.028 145);
+  --card: oklch(0.995 0.008 122);
+  --card-foreground: oklch(0.24 0.028 145);
+  --popover: oklch(0.995 0.008 122);
+  --popover-foreground: oklch(0.24 0.028 145);
+  --primary: oklch(0.505 0.098 148);
+  --primary-foreground: oklch(0.99 0.012 122);
+  --secondary: oklch(0.951 0.018 124);
+  --secondary-foreground: oklch(0.30 0.035 145);
+  --muted: oklch(0.951 0.015 124);
+  --muted-foreground: oklch(0.50 0.025 140);
+  --accent: oklch(0.928 0.038 133);
+  --accent-foreground: oklch(0.31 0.06 148);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.898 0.018 128);
+  --input: oklch(0.898 0.018 128);
+  --ring: oklch(0.505 0.098 148);
+}
+
+.theme-ink {
+  --background: oklch(0.178 0.021 258);
+  --foreground: oklch(0.955 0.01 250);
+  --card: oklch(0.222 0.024 258);
+  --card-foreground: oklch(0.955 0.01 250);
+  --popover: oklch(0.222 0.024 258);
+  --popover-foreground: oklch(0.955 0.01 250);
+  --primary: oklch(0.705 0.121 236);
+  --primary-foreground: oklch(0.17 0.03 258);
+  --secondary: oklch(0.283 0.026 256);
+  --secondary-foreground: oklch(0.955 0.01 250);
+  --muted: oklch(0.272 0.023 256);
+  --muted-foreground: oklch(0.725 0.022 250);
+  --accent: oklch(0.315 0.045 244);
+  --accent-foreground: oklch(0.905 0.045 236);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.705 0.121 236);
+}
+
+.theme-sand {
+  --background: oklch(0.974 0.014 82);
+  --foreground: oklch(0.265 0.022 62);
+  --card: oklch(0.993 0.009 85);
+  --card-foreground: oklch(0.265 0.022 62);
+  --popover: oklch(0.993 0.009 85);
+  --popover-foreground: oklch(0.265 0.022 62);
+  --primary: oklch(0.556 0.118 46);
+  --primary-foreground: oklch(0.99 0.01 82);
+  --secondary: oklch(0.948 0.02 82);
+  --secondary-foreground: oklch(0.315 0.03 62);
+  --muted: oklch(0.948 0.018 82);
+  --muted-foreground: oklch(0.505 0.024 68);
+  --accent: oklch(0.925 0.042 74);
+  --accent-foreground: oklch(0.35 0.07 48);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.895 0.022 82);
+  --input: oklch(0.895 0.022 82);
+  --ring: oklch(0.556 0.118 46);
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

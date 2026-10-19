@@ -309,21 +309,27 @@ function MobileAppInner() {
       className="standalone-fix safe-top flex min-h-dvh flex-col overflow-hidden"
       data-testid="mobile-app"
     >
-      <header className="flex items-center justify-between border-b bg-background/90 px-4 py-3 backdrop-blur">
-        <div className="flex items-center gap-2">
+      {/* Single line at every width: the brand shrinks (min-w-0 + truncate) and
+          the controls never wrap. The "Commands" label is icon-only here — on a
+          390px screen the word plus the old "Mobile" tag pushed the row onto a
+          second line. */}
+      <header
+        className="flex flex-nowrap items-center justify-between gap-2 border-b bg-background/90 px-3 py-2 backdrop-blur"
+        data-testid="mobile-header"
+      >
+        <div className="flex min-w-0 items-center gap-2">
           <Logo size={22} />
-          <span className="font-bold tracking-tight">Sarathy</span>
+          <span className="truncate font-bold tracking-tight">Sarathy</span>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
           <button
             onClick={() => setPaletteOpen(true)}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex size-9 items-center justify-center rounded-lg transition-colors hover:bg-accent hover:text-foreground"
             aria-label="Commands"
             title="Commands"
             data-testid="mobile-commands-trigger"
           >
             <CommandIcon className="size-4" />
-            <span>Commands</span>
           </button>
           <NotificationControls
             enabled={notificationsEnabled}
@@ -344,7 +350,6 @@ function MobileAppInner() {
             }}
           />
           <ThemeToggle compact />
-          <span>Mobile</span>
         </div>
       </header>
 

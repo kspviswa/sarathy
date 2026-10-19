@@ -33,7 +33,7 @@ export function NotificationToggle({
         className="size-3.5 shrink-0 text-muted-foreground"
         aria-hidden="true"
       />
-      <span className="hidden select-none text-xs text-muted-foreground sm:inline">
+      <span className="hidden select-none whitespace-nowrap text-xs text-muted-foreground lg:inline">
         Notifications
       </span>
       <Switch

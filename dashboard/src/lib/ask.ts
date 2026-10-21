@@ -785,29 +785,60 @@ export async function deleteAskThread(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
+ * What one legacy key held.
+ *
+ * `present` says the key exists at all; `unreadable` says it exists but its
+ * payload is not a shape this build understands. Keeping the two apart is
+ * what stops the migration from deleting a history it could not read.
+ */
+interface LegacyRead {
+  present: boolean;
+  unreadable: boolean;
+  threads: AskThread[];
+  raw: string | null;
+}
+
+const EMPTY_READ: LegacyRead = { present: false, unreadable: false, threads: [], raw: null };
+
+/** Where an unreadable legacy payload is parked instead of being deleted. */
+export const ASK_ORPHANED_KEY = "sarathy.ask.orphaned";
+
+/**
  * The threads the browser kept, read from the old key.
  *
- * `null` means the key is ABSENT (there is nothing to migrate); an empty
- * list means the key is there but holds nothing we can read.
+ * A payload that parses to an array but yields no thread this build can read
+ * is reported as `unreadable` rather than as an empty history: the two look
+ * alike from here, and only one of them is safe to delete.
  */
-function readLocalThreads(): AskThread[] | null {
+function readLocalThreads(): LegacyRead {
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(ASK_THREADS_KEY);
   } catch {
-    return null;
+    return EMPTY_READ;
   }
-  if (raw === null) return null;
+  if (raw === null) return EMPTY_READ;
+
   let parsed: unknown = null;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    parsed = null;
+    return { present: true, unreadable: true, threads: [], raw };
   }
-  if (!Array.isArray(parsed)) return [];
-  return parsed
+  if (!Array.isArray(parsed)) {
+    return { present: true, unreadable: true, threads: [], raw };
+  }
+  const threads = parsed
     .map(toThread)
     .filter((thread): thread is AskThread => thread !== null);
+  // An empty array is an empty history; a full one that yields nothing is a
+  // shape this build does not know.
+  return {
+    present: true,
+    unreadable: parsed.length > 0 && threads.length === 0,
+    threads,
+    raw,
+  };
 }
 
 /**
@@ -816,37 +847,45 @@ function readLocalThreads(): AskThread[] | null {
  * Each entry becomes a single-turn thread. The v1 key is only read here —
  * the one place the browser's Ask history is still touched.
  */
-function readLocalHistory(): AskThread[] | null {
+function readLocalHistory(): LegacyRead {
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(ASK_HISTORY_KEY);
   } catch {
-    return null;
+    return EMPTY_READ;
   }
-  if (raw === null) return null;
+  if (raw === null) return EMPTY_READ;
+
   let parsed: unknown = null;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    parsed = null;
+    return { present: true, unreadable: true, threads: [], raw };
   }
-  if (!Array.isArray(parsed)) return [];
+  if (!Array.isArray(parsed)) {
+    return { present: true, unreadable: true, threads: [], raw };
+  }
 
-  return parsed
-    .filter((entry) => entry && typeof entry.query === "string")
-    .map((entry) => {
-      const turn: AskTurn = {
-        id: entry.id || askId("turn"),
-        query: entry.query,
-        mode: (entry.mode || "speed") as AskMode,
-        sources: Array.isArray(entry.sources) ? entry.sources : ["web"],
-        answer: typeof entry.answer === "string" ? entry.answer : "",
-        sourcesList: [],
-        steps: [],
-        createdAt: Number(entry.createdAt) || Date.now(),
-      };
-      return createAskThread(turn, entry.id || turn.id);
-    });
+  const entries = parsed.filter((entry) => entry && typeof entry.query === "string");
+  const threads = entries.map((entry) => {
+    const turn: AskTurn = {
+      id: entry.id || askId("turn"),
+      query: entry.query,
+      mode: (entry.mode || "speed") as AskMode,
+      sources: Array.isArray(entry.sources) ? entry.sources : ["web"],
+      answer: typeof entry.answer === "string" ? entry.answer : "",
+      sourcesList: [],
+      steps: [],
+      createdAt: Number(entry.createdAt) || Date.now(),
+    };
+    return createAskThread(turn, entry.id || turn.id);
+  });
+  return {
+    present: true,
+    unreadable: parsed.length > 0 && entries.length === 0,
+    threads,
+    raw,
+  };
 }
 
 let migration: Promise<void> | null = null;
@@ -867,23 +906,32 @@ let migration: Promise<void> | null = null;
 export function migrateAskThreads(): Promise<void> {
   const legacy = readLocalThreads();
   const history = readLocalHistory();
-  const pending = [...(legacy ?? []), ...(history ?? [])];
+  const pending = [...legacy.threads, ...history.threads];
 
   if (pending.length === 0) {
-    // Nothing to carry over. A payload we could not read holds nothing, so
-    // it goes away rather than retrying forever.
-    if (legacy !== null || history !== null) clearLocalAskKeys();
+    // Nothing readable to carry over. A key that is ABSENT, or that holds an
+    // empty array, is safe to remove. A key we could not read is NOT: it may
+    // hold a history whose shape this build does not know, and deleting it
+    // would destroy the only copy. Park it instead and leave it alone.
+    quarantineUnreadable(legacy);
+    quarantineUnreadable(history);
+    if (legacy.present && !legacy.unreadable) removeKey(ASK_THREADS_KEY);
+    if (history.present && !history.unreadable) removeKey(ASK_HISTORY_KEY);
     return Promise.resolve();
   }
 
   if (migration) return migration;
-  migration = runAskMigration(pending).finally(() => {
+  migration = runAskMigration(pending, legacy, history).finally(() => {
     migration = null;
   });
   return migration;
 }
 
-async function runAskMigration(pending: AskThread[]): Promise<void> {
+async function runAskMigration(
+  pending: AskThread[],
+  legacy: LegacyRead,
+  history: LegacyRead,
+): Promise<void> {
   let failed = false;
   for (const thread of pending) {
     try {
@@ -899,13 +947,27 @@ async function runAskMigration(pending: AskThread[]): Promise<void> {
     return;
   }
 
-  clearLocalAskKeys();
+  // The threads we understood are on the server now. Anything we could not
+  // read is parked under its own key first, so clearing never loses it.
+  quarantineUnreadable(legacy);
+  quarantineUnreadable(history);
+  removeKey(ASK_THREADS_KEY);
+  removeKey(ASK_HISTORY_KEY);
 }
 
-function clearLocalAskKeys(): void {
+/** Move an unreadable payload aside, under `ASK_ORPHANED_KEY`. */
+function quarantineUnreadable(read: LegacyRead): void {
+  if (!read.unreadable || read.raw === null) return;
   try {
-    localStorage.removeItem(ASK_THREADS_KEY);
-    localStorage.removeItem(ASK_HISTORY_KEY);
+    localStorage.setItem(ASK_ORPHANED_KEY, read.raw);
+  } catch {
+    /* storage blocked — the payload stays under its original key */
+  }
+}
+
+function removeKey(key: string): void {
+  try {
+    localStorage.removeItem(key);
   } catch {
     /* storage blocked — the threads are on the server anyway */
   }

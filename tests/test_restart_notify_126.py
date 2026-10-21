@@ -32,6 +32,22 @@ def _channel() -> DashboardChannel:
     return DashboardChannel(MagicMock(), MessageBus())
 
 
+@pytest.fixture(autouse=True)
+def _isolate_notification_outbox(tmp_path, monkeypatch):
+    """Keep the tests away from the production notification outbox.
+
+    ``_channel()`` builds a channel without a devices path, so the channel
+    falls back to the module-level ``OUTBOX_FILE`` — the REAL
+    ``~/.sarathy/dashboard_outbox.json``. These tests queue and prune
+    notifications, so without this redirect the suite would wipe the pending
+    notifications of the live gateway every time it runs.
+    """
+    monkeypatch.setattr(
+        "sarathy.channels.dashboard.server.OUTBOX_FILE",
+        tmp_path / "dashboard_outbox.json",
+    )
+
+
 def _fake_ws() -> MagicMock:
     """A stand-in WebSocketResponse that records what was written to it."""
     ws = MagicMock()

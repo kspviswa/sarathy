@@ -308,6 +308,21 @@ class _FakeWS:
         return json.loads(self.sent[index])
 
 
+@pytest.fixture(autouse=True)
+def _isolate_notification_outbox(tmp_path, monkeypatch):
+    """Keep the tests away from the production notification outbox.
+
+    A channel built with ``__new__`` falls back to the module-level
+    ``OUTBOX_FILE`` — the REAL ``~/.sarathy/dashboard_outbox.json``. These
+    tests queue notifications, so without this redirect the suite would wipe
+    the pending notifications of the live gateway every time it runs.
+    """
+    monkeypatch.setattr(
+        "sarathy.channels.dashboard.server.OUTBOX_FILE",
+        tmp_path / "dashboard_outbox.json",
+    )
+
+
 @pytest.fixture
 def dash_channel():
     from sarathy.channels.dashboard.server import DashboardChannel

@@ -110,15 +110,17 @@ describe("Mobile app — bottom tab bar", () => {
     vi.clearAllMocks();
   });
 
-  it("renders with a bottom tab bar containing the 6 tabs", async () => {
+  it("renders with a bottom tab bar containing the 7 tabs", async () => {
     render(<MobileApp />);
     const tabbar = await screen.findByTestId("mobile-tabbar");
     expect(tabbar).toBeInTheDocument();
 
     const buttons = within(tabbar).getAllByRole("button");
-    expect(buttons).toHaveLength(6);
+    expect(buttons).toHaveLength(7);
 
     expect(screen.getByLabelText("Chat")).toBeInTheDocument();
+    // Ask sits right after Chat (spec 145 §D).
+    expect(screen.getByLabelText("Ask")).toBeInTheDocument();
     expect(screen.getByLabelText("Files")).toBeInTheDocument();
     expect(screen.getByLabelText("Sessions")).toBeInTheDocument();
     expect(screen.getByLabelText("Jobs")).toBeInTheDocument();

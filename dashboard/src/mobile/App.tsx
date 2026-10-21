@@ -7,6 +7,7 @@ import {
   Gauge,
   MessageSquareText,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -34,6 +35,7 @@ import { DashboardSocket } from "@/lib/ws";
 import type { ChatMessage as ChatMessageT } from "@/views/ChatView";
 import { PairView } from "@/views/PairView";
 import { cn } from "@/lib/utils";
+import { AskView } from "./AskView";
 import { ChatView } from "./ChatView";
 import { FilesView } from "./FilesView";
 import { JobsView } from "./JobsView";
@@ -41,10 +43,11 @@ import { SessionsView } from "./SessionsView";
 import { ConfigView } from "./ConfigView";
 import { StatusView } from "./StatusView";
 
-type Tab = "chat" | "files" | "sessions" | "jobs" | "config" | "status";
+type Tab = "chat" | "ask" | "files" | "sessions" | "jobs" | "config" | "status";
 
 const TABS: { id: Tab; label: string; icon: typeof MessageSquareText }[] = [
   { id: "chat", label: "Chat", icon: MessageSquareText },
+  { id: "ask", label: "Ask", icon: Sparkles },
   { id: "files", label: "Files", icon: FileCode2 },
   { id: "sessions", label: "Sessions", icon: Gauge },
   { id: "jobs", label: "Jobs", icon: Briefcase },
@@ -383,6 +386,7 @@ function MobileAppInner() {
             />
           </>
         )}
+        {tab === "ask" && <AskView />}
         {tab === "files" && <FilesView initialFile={openFile} />}
         {tab === "sessions" && <SessionsView onOpenThread={handleOpenThread} />}
         {tab === "jobs" && <JobsView />}

@@ -66,6 +66,18 @@ _MEDIA_COOKIE = "sarathy_media"
 # so the Jobs view never claims work is live when it is not.
 JOB_STALE_MINUTES = 15
 
+# Ask mode (spec 145 §E).
+#
+# The research engine lives in the separate `uttaram-backend` service; the
+# gateway only proxies to it so the SPA never talks cross-origin. The upstream
+# speaks NDJSON, and the frames are relayed VERBATIM — the browser parses them.
+ASK_MODES = ("speed", "balanced", "quality")
+ASK_SOURCES = ("web", "discussions", "academic")
+# How long the gateway waits for the upstream connection before giving up.
+ASK_CONNECT_TIMEOUT_S = 5
+# Chunk size for the relay. Small enough to feel live, large enough to be cheap.
+ASK_CHUNK_SIZE = 4096
+
 # Content-Security-Policy for the dashboard shell.
 #
 # Deliberately strict: the app is a same-origin SPA that talks only to its own
@@ -369,6 +381,9 @@ class DashboardChannel(BaseChannel):
         self._notify_cursor: dict[str, int] = {}
         self._notify_seq: int = 0
         self._ws_devices: dict[web.WebSocketResponse, str | None] = {}
+        # In-flight Ask streams, keyed by the session that asked. `/api/ask/stop`
+        # aborts the upstream request through this handle (spec 145 §E).
+        self._ask_streams: dict[str, aiohttp.ClientResponse] = {}
         self._load_outbox()
 
     # ------------------------------------------------------------------ outbox
@@ -948,6 +963,8 @@ class DashboardChannel(BaseChannel):
         app.router.add_post("/api/auth/logout", self._api_logout)
         app.router.add_post("/api/chat", self._api_chat)
         app.router.add_post("/api/chat/stop", self._api_chat_stop)
+        app.router.add_post("/api/ask", self._api_ask)
+        app.router.add_post("/api/ask/stop", self._api_ask_stop)
         app.router.add_post("/api/media", self._api_media_upload)
         app.router.add_get("/api/media", self._api_media_serve)
         app.router.add_get("/api/config", self._api_get_config)
@@ -1277,6 +1294,146 @@ class DashboardChannel(BaseChannel):
             data = {}
         session_key = (data or {}).get("session_key") or None
         await self.bus.publish_inbound(self._inbound("/stop", request.get("device_id", ""), session_key=session_key))
+        return web.json_response({"ok": True})
+
+    # ------------------------------------------------------------------ ask api
+
+    def _ask_backend_url(self) -> str:
+        """The Ask backend's base URL — configuration, never a literal here."""
+        url = ""
+        try:
+            url = self._load_full_config().ask.backend_url or ""
+        except Exception as err:  # a broken config must not break Ask
+            logger.warning("Could not read the ask backend URL: {}", err)
+        return (url or "http://127.0.0.1:7777").rstrip("/")
+
+    async def _api_ask(self, request: web.Request) -> web.StreamResponse:
+        """Proxy one Ask turn to the backend, relaying its NDJSON frames.
+
+        The upstream body is written to the browser chunk by chunk and byte for
+        byte — the SPA parses the frames itself, so nothing may be buffered,
+        re-encoded or rewritten here.
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response(
+                {"error": {"message": "invalid body"}}, status=400
+            )
+        if not isinstance(data, dict):
+            return web.json_response(
+                {"error": {"message": "invalid body"}}, status=400
+            )
+
+        query = str(data.get("query") or "").strip()
+        if not query:
+            return web.json_response(
+                {"error": {"message": "query is required"}}, status=400
+            )
+
+        mode = str(data.get("mode") or "speed")
+        if mode not in ASK_MODES:
+            return web.json_response(
+                {"error": {"message": f"unknown mode: {mode}"}}, status=400
+            )
+
+        raw_sources = data.get("sources") or ["web"]
+        if not isinstance(raw_sources, list):
+            raw_sources = ["web"]
+        sources = [s for s in raw_sources if s in ASK_SOURCES] or ["web"]
+
+        session_key = str(data.get("session_key") or DASHBOARD_SESSION_KEY)
+
+        payload = json.dumps(
+            {
+                "query": query,
+                "optimizationMode": mode,
+                "sources": sources,
+                "history": [],
+                "stream": True,
+            }
+        ).encode("utf-8")
+
+        backend_url = self._ask_backend_url()
+        timeout = aiohttp.ClientTimeout(
+            total=None, sock_connect=ASK_CONNECT_TIMEOUT_S
+        )
+
+        client = aiohttp.ClientSession(timeout=timeout)
+        try:
+            upstream = await client.post(
+                f"{backend_url}/api/search",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+        except Exception as err:
+            await client.close()
+            logger.warning("Ask backend unreachable at {}: {}", backend_url, err)
+            return web.json_response(
+                {"error": {"message": "ask backend unavailable"}}, status=503
+            )
+
+        if upstream.status != 200:
+            try:
+                await upstream.release()
+            except Exception:
+                pass
+            await client.close()
+            logger.warning(
+                "Ask backend answered {} for {}", upstream.status, session_key
+            )
+            return web.json_response(
+                {"error": {"message": "ask backend unavailable"}}, status=503
+            )
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "application/x-ndjson; charset=utf-8",
+                "Cache-Control": "no-cache, no-transform",
+                # nginx must not buffer the relay.
+                "X-Accel-Buffering": "no",
+            },
+        )
+        await response.prepare(request)
+
+        self._ask_streams[session_key] = upstream
+        try:
+            async for chunk in upstream.content.iter_chunked(ASK_CHUNK_SIZE):
+                await response.write(chunk)
+        except (ConnectionResetError, asyncio.CancelledError):
+            # The browser went away — stop the upstream work with it.
+            pass
+        except Exception as err:
+            logger.warning("Ask relay failed: {}", err)
+        finally:
+            self._ask_streams.pop(session_key, None)
+            try:
+                upstream.close()
+            except Exception:
+                pass
+            await client.close()
+
+        try:
+            await response.write_eof()
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        return response
+
+    async def _api_ask_stop(self, request: web.Request) -> web.Response:
+        """Abort the in-flight Ask stream of this session."""
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        session_key = str((data or {}).get("session_key") or DASHBOARD_SESSION_KEY)
+
+        upstream = self._ask_streams.pop(session_key, None)
+        if upstream is not None:
+            try:
+                upstream.close()
+            except Exception:
+                pass
         return web.json_response({"ok": True})
 
     # ------------------------------------------------------------------ media api

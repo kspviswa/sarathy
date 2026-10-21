@@ -35,7 +35,7 @@ import { useChatScroll } from "@/lib/useChatScroll";
  * this file is presentation plus the composer interactions.
  */
 export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mobile" }) {
-  const { state, turns, run, stop } = useAskStream();
+  const { state, turns, run, stop, threadId, updateMedia } = useAskStream() as any;
 
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<AskMode>("speed");
@@ -186,12 +186,26 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
                     onQuote={quoteTurn}
                     onRewrite={rewriteTurn}
                     onSummarize={summarizeTurn}
+                    turns={turns}
+                    threadId={threadId}
+                    onMediaUpdate={(turnId: string, media: any[]) => {
+                      if (updateMedia) updateMedia(turnId, media);
+                    }}
                     alwaysShowActions={isMobile}
                   />
                 ))
               )}
 
-              {isMobile && <AskMediaView media={state.media} variant="strip" />}
+              {isMobile && (
+                <AskMediaView
+                  media={(() => {
+                    const last = turns[turns.length - 1];
+                    if (last && last.media && last.media.length > 0) return last.media as any;
+                    return state.media;
+                  })()}
+                  variant="strip"
+                />
+              )}
             </div>
           </div>
 
@@ -220,7 +234,14 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
         />
       </div>
 
-      <AskMediaView media={state.media} variant="rail" />
+      <AskMediaView
+        media={(() => {
+          const last = turns[turns.length - 1];
+          if (last && last.media && last.media.length > 0) return last.media as any;
+          return state.media;
+        })()}
+        variant="rail"
+      />
 
       <QuoteActionBar
         visible={selection.visible && selectionInAnswer}

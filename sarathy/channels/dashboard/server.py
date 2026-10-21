@@ -1013,6 +1013,8 @@ class DashboardChannel(BaseChannel):
         app.router.add_post("/api/chat/stop", self._api_chat_stop)
         app.router.add_post("/api/ask", self._api_ask)
         app.router.add_post("/api/ask/stop", self._api_ask_stop)
+        app.router.add_post("/api/ask/images", self._api_ask_images)
+        app.router.add_post("/api/ask/videos", self._api_ask_videos)
         app.router.add_post("/api/media", self._api_media_upload)
         app.router.add_get("/api/media", self._api_media_serve)
         app.router.add_get("/api/config", self._api_get_config)
@@ -1496,6 +1498,83 @@ class DashboardChannel(BaseChannel):
             except Exception:
                 pass
         return web.json_response({"ok": True})
+
+    async def _api_ask_images(self, request: web.Request) -> web.Response:
+        return await self._api_ask_media(request, "images")
+
+    async def _api_ask_videos(self, request: web.Request) -> web.Response:
+        return await self._api_ask_media(request, "videos")
+
+    async def _api_ask_media(self, request: web.Request, kind: str) -> web.Response:
+        try:
+            cfg = self._load_full_config()
+            if not getattr(cfg.ask, "enabled", True):
+                return web.json_response({"error": "not found"}, status=404)
+        except Exception:
+            pass
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body", "code": "invalid_body"}, status=400)
+        if not isinstance(data, dict):
+            return web.json_response({"error": "invalid body", "code": "invalid_body"}, status=400)
+
+        payload = json.dumps(data).encode("utf-8")
+        backend_url = self._ask_backend_url()
+
+        timeout_s = 60
+        try:
+            cfg = self._load_full_config()
+            timeout_s = getattr(cfg.ask, "timeout_s", timeout_s) or timeout_s
+        except Exception:
+            timeout_s = 60
+        timeout = aiohttp.ClientTimeout(total=timeout_s)
+
+        client = aiohttp.ClientSession(timeout=timeout)
+        try:
+            upstream = await client.post(
+                f"{backend_url}/api/{kind}",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+        except Exception as err:
+            await client.close()
+            logger.warning("Ask media backend unreachable at {}: {}", backend_url, err)
+            return web.json_response({"error": "ask backend unavailable", "code": "backend_unavailable"}, status=502)
+
+        try:
+            body = await upstream.read()
+            status = upstream.status
+        except Exception as err:
+            await client.close()
+            logger.warning("Ask media relay failed: {}", err)
+            return web.json_response({"error": "ask backend unavailable", "code": "backend_unavailable"}, status=502)
+        finally:
+            try:
+                upstream.release()
+            except Exception:
+                pass
+            await client.close()
+
+        content_type = upstream.headers.get("Content-Type", "application/json")
+        if status >= 400:
+            # Try to pass through JSON errors if possible
+            try:
+                if "application/json" in content_type:
+                    return web.json_response(json.loads(body), status=502)
+                return web.json_response({"error": "ask backend unavailable", "code": "backend_unavailable"}, status=502)
+            except Exception:
+                return web.json_response({"error": "ask backend unavailable", "code": "backend_unavailable"}, status=502)
+
+        try:
+            if "application/json" in content_type:
+                data_out = json.loads(body)
+                return web.json_response(data_out, status=200)
+            return web.Response(body=body, status=200, content_type=content_type)
+        except Exception as err:
+            logger.warning("Ask media relay failed: {}", err)
+            return web.json_response({"error": "ask backend unavailable", "code": "backend_unavailable"}, status=502)
 
     # ------------------------------------------------------------------ media api
 

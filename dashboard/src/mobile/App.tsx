@@ -20,7 +20,7 @@ import { NotificationControls } from "@/components/NotificationControls";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
-import { setActiveAskThreadId } from "@/lib/ask";
+import { setActiveAskThreadId, subscribeAskHistoryRequest } from "@/lib/ask";
 import { toSection } from "@/lib/navigation";
 import type { Quote } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
@@ -164,6 +164,17 @@ function MobileAppInner() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // The Ask canvas's history button asks for the Sessions surface (job 150
+  // §C): the Ask history lives there, behind its `Chats / Asks` switch.
+  useEffect(
+    () =>
+      subscribeAskHistoryRequest(() => {
+        setTab("sessions");
+        setSessionsOpen(false);
+      }),
+    [],
+  );
 
   // Commands for the palette + `/` autocomplete, sourced from the backend
   // (parity with the desktop App: the registry is the single source of truth).

@@ -456,12 +456,23 @@ export interface AskThread {
   turns: AskTurn[];
   createdAt: number;
   updatedAt: number;
+  /**
+   * How many turns the thread holds.
+   *
+   * The list endpoint ships NO turn bodies — only this count — so the
+   * history rail stays cheap however long the history gets.
+   */
+  turnCount: number;
 }
 
-/** The v2 storage key — the threads. */
+/**
+ * The OLD storage key — the threads the browser used to keep.
+ *
+ * It is READ once, on the first load, and then removed: the threads live on
+ * the server now (job 150 §B). This is the only place the browser's Ask
+ * history is read.
+ */
 export const ASK_THREADS_KEY = "sarathy.ask.threads";
-/** How many threads are kept. */
-export const ASK_THREAD_LIMIT = 50;
 /** The title of a thread is the first query, clipped. */
 export const ASK_TITLE_MAX = 80;
 
@@ -472,18 +483,6 @@ export const ASK_TITLE_MAX = 80;
  * history rail any more (spec §C). It is migrated away on the first load.
  */
 export const ASK_HISTORY_KEY = "sarathy.ask.history";
-/** @deprecated use `ASK_THREAD_LIMIT`. */
-export const ASK_HISTORY_LIMIT = 50;
-
-/** @deprecated the flat history entry of the v1 model. */
-export interface AskHistoryEntry {
-  id: string;
-  query: string;
-  mode: AskMode;
-  sources: AskSourceKind[];
-  answer: string;
-  createdAt: number;
-}
 
 let idCounter = 0;
 
@@ -510,6 +509,7 @@ export function createAskThread(turn: AskTurn, id?: string): AskThread {
     turns: [turn],
     createdAt: now,
     updatedAt: now,
+    turnCount: 1,
   };
 }
 
@@ -526,51 +526,134 @@ export function appendAskTurn(
 ): AskThread[] {
   const existing = threads.find((thread) => thread.id === threadId);
   if (!existing) {
-    return [createAskThread(turn, threadId), ...threads].slice(0, ASK_THREAD_LIMIT);
+    return [createAskThread(turn, threadId), ...threads];
   }
   return threads.map((thread) =>
     thread.id === threadId
       ? {
           ...thread,
           turns: [...thread.turns, turn],
+          turnCount: thread.turns.length + 1,
           updatedAt: turn.createdAt || Date.now(),
         }
       : thread,
   );
 }
 
-/** Drop one thread. */
-export function deleteAskThread(threads: AskThread[], id: string): AskThread[] {
-  return threads.filter((thread) => thread.id !== id);
+// ---------------------------------------------------------------------------
+// The thread store — the SERVER is the source of truth
+//
+// Ask history used to live in the browser's `localStorage`: browser-local,
+// capped at fifty, lost with the data, invisible from any other device. The
+// gateway owns the threads now, the way it owns the chat sessions (job 150
+// §B).
+//
+// The store below is the ONE copy of the thread data in the browser: the Ask
+// canvas and the history list both read it, so no component can keep a
+// private copy the others do not see.
+// ---------------------------------------------------------------------------
+
+/** The Ask thread endpoints. */
+export const ASK_THREADS_ENDPOINT = "/api/ask/threads";
+
+const threadStore = new Map<string, AskThread>();
+const threadListListeners = new Set<() => void>();
+
+function notifyThreadList(): void {
+  threadListListeners.forEach((listener) => listener());
 }
 
-/** Update media for a specific turn in a thread. */
-export function updateAskTurnMedia(
-  threads: AskThread[],
+/** Every thread the browser knows about, newest first. */
+export function getAskThreads(): AskThread[] {
+  return Array.from(threadStore.values()).sort(
+    (a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt,
+  );
+}
+
+/** Subscribe to the thread list. */
+export function subscribeAskThreadList(listener: () => void): () => void {
+  threadListListeners.add(listener);
+  return () => {
+    threadListListeners.delete(listener);
+  };
+}
+
+/** Put a thread into the store, replacing whatever was there. */
+export function putAskThread(thread: AskThread): void {
+  threadStore.set(thread.id, thread);
+  notifyThreadList();
+}
+
+/** Attach media to one turn of a thread, in the store. */
+export function setAskTurnMedia(
   threadId: string,
   turnId: string,
   media: AskMedia[],
-): AskThread[] {
-  const next = threads.map((thread) => {
-    if (thread.id !== threadId) return thread;
-    return {
-      ...thread,
-      updatedAt: Date.now(),
-      turns: thread.turns.map((turn) =>
-        turn.id === turnId ? { ...turn, media: media.length ? [...media] : undefined } : turn,
-      ),
-    };
+): void {
+  const thread = threadStore.get(threadId);
+  if (!thread) return;
+  threadStore.set(threadId, {
+    ...thread,
+    updatedAt: Date.now(),
+    turns: thread.turns.map((turn) =>
+      turn.id === turnId ? { ...turn, media: media.length ? [...media] : undefined } : turn,
+    ),
   });
-  return saveAskThreads(next);
+  notifyThreadList();
 }
 
-const isAskTurn = (value: any): value is AskTurn =>
-  Boolean(value) && typeof value.query === "string" && typeof value.answer === "string";
+function askHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = askAuthToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+/** One turn as the server stores it. */
+function turnPayload(turn: AskTurn): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    id: turn.id,
+    query: turn.query,
+    answer: turn.answer,
+    mode: turn.mode,
+    sources: turn.sources,
+    sourcesList: turn.sourcesList,
+    steps: turn.steps,
+    createdAt: turn.createdAt,
+  };
+  if (turn.media?.length) payload.media = turn.media;
+  if (turn.usage) payload.usage = turn.usage;
+  if (turn.error) payload.error = turn.error;
+  return payload;
+}
+
+/** One stored turn as the UI's turn. */
+function toTurn(value: any): AskTurn | null {
+  if (!value || typeof value !== "object") return null;
+  if (typeof value.query !== "string") return null;
+  const turn: AskTurn = {
+    id: typeof value.id === "string" && value.id ? value.id : askId("turn"),
+    query: value.query,
+    mode: (value.mode || "speed") as AskMode,
+    sources: Array.isArray(value.sources) ? value.sources : ["web"],
+    answer: typeof value.answer === "string" ? value.answer : "",
+    sourcesList: Array.isArray(value.sourcesList) ? value.sourcesList : [],
+    steps: Array.isArray(value.steps) ? value.steps : [],
+    createdAt: Number(value.createdAt) || Date.now(),
+  };
+  if (Array.isArray(value.media) && value.media.length) turn.media = value.media;
+  if (value.usage) turn.usage = value.usage;
+  if (value.error) turn.error = value.error;
+  return turn;
+}
 
 /** Coerce a stored payload into a thread, dropping anything malformed. */
 function toThread(value: any): AskThread | null {
   if (!value || typeof value !== "object") return null;
-  const turns = Array.isArray(value.turns) ? value.turns.filter(isAskTurn) : [];
+  const raw: unknown[] = Array.isArray(value.turns) ? value.turns : [];
+  const turns = raw
+    .map(toTurn)
+    .filter((turn): turn is AskTurn => turn !== null);
   if (turns.length === 0) return null;
   const createdAt = Number(value.createdAt) || turns[0].createdAt || Date.now();
   return {
@@ -582,136 +665,264 @@ function toThread(value: any): AskThread | null {
     turns,
     createdAt,
     updatedAt: Number(value.updatedAt) || createdAt,
+    turnCount: turns.length,
   };
 }
 
 /**
- * Migrate the v1 flat history into v2 threads.
+ * Read the thread list from the server.
  *
- * Each v1 entry becomes a single-turn thread, newest first, and the v1 key is
- * removed — this is an UPGRADE, not a wipe: the entries are still there, they
- * just live in the new shape now.
- *
- * A corrupt payload yields an empty list; it never throws.
+ * The list carries NO turn bodies — the title, the turn count and the
+ * timestamps only — so the history rail stays cheap however long the
+ * history gets. The bodies the browser already holds are kept: the list
+ * does not carry them, and dropping them would empty the open thread.
  */
-export function migrateAskHistory(): AskThread[] {
+export async function loadAskThreads(): Promise<AskThread[]> {
+  const res = await fetch(ASK_THREADS_ENDPOINT, { headers: askHeaders() });
+  if (!res.ok) throw new Error(`Could not load the Ask threads (${res.status})`);
+  const data = await res.json();
+  const rows = Array.isArray(data?.threads) ? data.threads : [];
+
+  const known = new Set<string>();
+  for (const row of rows) {
+    if (!row || typeof row.id !== "string") continue;
+    known.add(row.id);
+    const existing = threadStore.get(row.id);
+    const count = Number(row.turnCount);
+    threadStore.set(row.id, {
+      id: row.id,
+      title: typeof row.title === "string" ? row.title : "",
+      turns: existing?.turns ?? [],
+      createdAt: Number(row.createdAt) || existing?.createdAt || Date.now(),
+      updatedAt: Number(row.updatedAt) || existing?.updatedAt || Date.now(),
+      turnCount: Number.isFinite(count) ? count : existing?.turnCount ?? 0,
+    });
+  }
+  // A thread the server no longer knows about is gone — it was deleted.
+  for (const id of Array.from(threadStore.keys())) {
+    if (!known.has(id)) threadStore.delete(id);
+  }
+  notifyThreadList();
+  return getAskThreads();
+}
+
+/**
+ * Read one thread with its turns.
+ *
+ * This is what restores a thread in the canvas: the sources, the research
+ * steps and the media all come back with it, so it renders exactly as it
+ * did live.
+ */
+export async function loadAskThread(id: string): Promise<AskThread | null> {
+  if (!id) return null;
+  const res = await fetch(`${ASK_THREADS_ENDPOINT}/${encodeURIComponent(id)}`, {
+    headers: askHeaders(),
+  });
+  // An unknown thread is not an error here: the canvas simply has nothing
+  // to show, and the store is left alone (a thread that is being streamed
+  // into does not exist on the server yet).
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Could not load the Ask thread (${res.status})`);
+
+  const data = await res.json();
+  const raw: unknown[] = Array.isArray(data?.turns) ? data.turns : [];
+  const turns = raw
+    .map(toTurn)
+    .filter((turn): turn is AskTurn => turn !== null);
+  const meta = data?.thread ?? {};
+  const thread: AskThread = {
+    id: typeof meta.id === "string" ? meta.id : id,
+    title: typeof meta.title === "string" ? meta.title : "",
+    turns,
+    createdAt: Number(meta.createdAt) || Date.now(),
+    updatedAt: Number(meta.updatedAt) || Date.now(),
+    turnCount: Number(meta.turnCount) || turns.length,
+  };
+  putAskThread(thread);
+  return thread;
+}
+
+/** Create (or replace) one thread on the server. */
+export async function postAskThread(thread: AskThread): Promise<AskThread | null> {
+  const res = await fetch(ASK_THREADS_ENDPOINT, {
+    method: "POST",
+    headers: askHeaders(),
+    body: JSON.stringify({
+      id: thread.id,
+      title: thread.title,
+      turns: thread.turns.map(turnPayload),
+    }),
+  });
+  if (!res.ok) throw new Error(`Could not save the Ask thread (${res.status})`);
+  const data = await res.json();
+  const meta = data?.thread ?? {};
+  return {
+    id: typeof meta.id === "string" ? meta.id : thread.id,
+    title: typeof meta.title === "string" ? meta.title : thread.title,
+    turns: thread.turns,
+    createdAt: Number(meta.createdAt) || thread.createdAt,
+    updatedAt: Number(meta.updatedAt) || thread.updatedAt,
+    turnCount: Number(meta.turnCount) || thread.turns.length,
+  };
+}
+
+/** Forget a thread — on the server, and in the browser's store. */
+export async function deleteAskThread(id: string): Promise<void> {
+  if (!id) return;
+  const res = await fetch(`${ASK_THREADS_ENDPOINT}/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: askHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Could not delete the Ask thread (${res.status})`);
+  }
+  threadStore.delete(id);
+  notifyThreadList();
+}
+
+// ---------------------------------------------------------------------------
+// The one-time migration of the browser's Ask history
+// ---------------------------------------------------------------------------
+
+/**
+ * The threads the browser kept, read from the old key.
+ *
+ * `null` means the key is ABSENT (there is nothing to migrate); an empty
+ * list means the key is there but holds nothing we can read.
+ */
+function readLocalThreads(): AskThread[] | null {
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(ASK_HISTORY_KEY);
+    raw = localStorage.getItem(ASK_THREADS_KEY);
   } catch {
-    return [];
+    return null;
   }
-  if (!raw) return [];
-
-  let parsed: unknown;
+  if (raw === null) return null;
+  let parsed: unknown = null;
   try {
     parsed = JSON.parse(raw);
   } catch {
     parsed = null;
   }
-
-  const entries = Array.isArray(parsed)
-    ? (parsed as AskHistoryEntry[]).filter(
-        (entry) => entry && typeof entry.query === "string",
-      )
-    : [];
-
-  const threads: AskThread[] = entries.map((entry) => {
-    const turn: AskTurn = {
-      id: entry.id || askId("turn"),
-      query: entry.query,
-      mode: (entry.mode || "speed") as AskMode,
-      sources: Array.isArray(entry.sources) ? entry.sources : ["web"],
-      answer: typeof entry.answer === "string" ? entry.answer : "",
-      sourcesList: [],
-      steps: [],
-      createdAt: Number(entry.createdAt) || Date.now(),
-    };
-    return createAskThread(turn, entry.id || turn.id);
-  });
-
-  // The v1 key goes away either way: a payload we could not read holds
-  // nothing, and leaving it behind would retry the migration forever.
-  try {
-    localStorage.removeItem(ASK_HISTORY_KEY);
-  } catch {
-    /* storage blocked — the migration still produced the threads */
-  }
-
-  return threads.slice(0, ASK_THREAD_LIMIT);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map(toThread)
+    .filter((thread): thread is AskThread => thread !== null);
 }
 
-/** Read the thread list, migrating the v1 history on the first load. */
-export function loadAskThreads(): AskThread[] {
+/**
+ * The v1 flat history, read from the old key.
+ *
+ * Each entry becomes a single-turn thread. The v1 key is only read here —
+ * the one place the browser's Ask history is still touched.
+ */
+function readLocalHistory(): AskThread[] | null {
   let raw: string | null = null;
   try {
-    raw = localStorage.getItem(ASK_THREADS_KEY);
+    raw = localStorage.getItem(ASK_HISTORY_KEY);
   } catch {
-    return [];
+    return null;
   }
-
-  if (raw === null) {
-    // First run of v2: upgrade whatever v1 left behind.
-    const migrated = migrateAskHistory();
-    if (migrated.length) saveAskThreads(migrated);
-    return migrated;
-  }
-
+  if (raw === null) return null;
+  let parsed: unknown = null;
   try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(toThread)
-      .filter((thread): thread is AskThread => thread !== null)
-      .slice(0, ASK_THREAD_LIMIT);
+    parsed = JSON.parse(raw);
   } catch {
-    return [];
+    parsed = null;
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed
+    .filter((entry) => entry && typeof entry.query === "string")
+    .map((entry) => {
+      const turn: AskTurn = {
+        id: entry.id || askId("turn"),
+        query: entry.query,
+        mode: (entry.mode || "speed") as AskMode,
+        sources: Array.isArray(entry.sources) ? entry.sources : ["web"],
+        answer: typeof entry.answer === "string" ? entry.answer : "",
+        sourcesList: [],
+        steps: [],
+        createdAt: Number(entry.createdAt) || Date.now(),
+      };
+      return createAskThread(turn, entry.id || turn.id);
+    });
+}
+
+let migration: Promise<void> | null = null;
+
+/**
+ * The one-time migration of the browser's Ask history onto the server.
+ *
+ * The threads the browser kept are POSTed to the server and the key is
+ * removed — a user's existing history must not vanish.
+ *
+ * It runs ONCE: the REMOVED KEY is the guard (there is nothing left to
+ * carry over the second time), and the in-flight promise keeps two surfaces
+ * from starting it at the same time.
+ *
+ * A POST that fails leaves the key alone, so the next load retries instead
+ * of losing the history.
+ */
+export function migrateAskThreads(): Promise<void> {
+  const legacy = readLocalThreads();
+  const history = readLocalHistory();
+  const pending = [...(legacy ?? []), ...(history ?? [])];
+
+  if (pending.length === 0) {
+    // Nothing to carry over. A payload we could not read holds nothing, so
+    // it goes away rather than retrying forever.
+    if (legacy !== null || history !== null) clearLocalAskKeys();
+    return Promise.resolve();
+  }
+
+  if (migration) return migration;
+  migration = runAskMigration(pending).finally(() => {
+    migration = null;
+  });
+  return migration;
+}
+
+async function runAskMigration(pending: AskThread[]): Promise<void> {
+  let failed = false;
+  for (const thread of pending) {
+    try {
+      await postAskThread(thread);
+    } catch {
+      failed = true;
+    }
+  }
+
+  if (failed) {
+    // The history stays where it is: a half-migrated history is better than
+    // a lost one. The next load retries.
+    return;
+  }
+
+  clearLocalAskKeys();
+}
+
+function clearLocalAskKeys(): void {
+  try {
+    localStorage.removeItem(ASK_THREADS_KEY);
+    localStorage.removeItem(ASK_HISTORY_KEY);
+  } catch {
+    /* storage blocked — the threads are on the server anyway */
   }
 }
 
-/** Persist the thread list, capped at `ASK_THREAD_LIMIT`. Never throws. */
-export function saveAskThreads(threads: AskThread[]): AskThread[] {
-  const capped = threads.slice(0, ASK_THREAD_LIMIT);
-  try {
-    localStorage.setItem(ASK_THREADS_KEY, JSON.stringify(capped));
-  } catch {
-    /* storage full or blocked — the threads are a convenience, not a requirement */
-  }
-  return capped;
-}
-
-/** @deprecated the v1 history rail — read through `loadAskHistory`. */
-export function loadAskHistory(): AskHistoryEntry[] {
-  try {
-    const raw = localStorage.getItem(ASK_HISTORY_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((entry) => entry && typeof entry.query === "string")
-      .slice(0, ASK_HISTORY_LIMIT);
-  } catch {
-    return [];
-  }
-}
-
-/** @deprecated the v1 history rail — write through `saveAskHistory`. */
-export function saveAskHistory(entries: AskHistoryEntry[]): AskHistoryEntry[] {
-  const capped = entries.slice(0, ASK_HISTORY_LIMIT);
-  try {
-    localStorage.setItem(ASK_HISTORY_KEY, JSON.stringify(capped));
-  } catch {
-    /* storage full or blocked */
-  }
-  return capped;
-}
-
-/** @deprecated the v1 history rail — push through `pushAskHistory`. */
-export function pushAskHistory(
-  entries: AskHistoryEntry[],
-  entry: AskHistoryEntry,
-): AskHistoryEntry[] {
-  return saveAskHistory([entry, ...entries.filter((e) => e.id !== entry.id)]);
+/**
+ * The first load: carry the browser's history over, then read the list.
+ *
+ * Both surfaces that show threads call this. The MIGRATION runs once (it is
+ * guarded by the key it removes); the list is read every time, because the
+ * Ask canvas may have added a thread since the list was last rendered.
+ */
+export function ensureAskThreadsLoaded(): Promise<AskThread[]> {
+  return migrateAskThreads()
+    .catch(() => undefined)
+    .then(() => loadAskThreads())
+    .catch(() => getAskThreads());
 }
 
 // ---------------------------------------------------------------------------
@@ -742,6 +953,65 @@ export function subscribeAskThread(listener: () => void): () => void {
   threadListeners.add(listener);
   return () => {
     threadListeners.delete(listener);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The Ask history shortcut
+//
+// The Ask canvas cannot navigate by itself — the shells own the section
+// state — so the request is raised here and picked up by the shell, exactly
+// like the active-thread pointer above.
+//
+// The Sessions panel's `Chats / Asks` switch lives here too: the request
+// selects the Asks list, and the panel follows whichever instance is on
+// screen.
+// ---------------------------------------------------------------------------
+
+/** Which list the Sessions surface shows. */
+export type AskListMode = "chats" | "asks";
+
+let askListMode: AskListMode = "chats";
+const listModeListeners = new Set<() => void>();
+const historyListeners = new Set<() => void>();
+
+/** The list the Sessions surface is showing. */
+export function getAskListMode(): AskListMode {
+  return askListMode;
+}
+
+/** Show one of the two lists. */
+export function setAskListMode(mode: AskListMode): void {
+  if (askListMode === mode) return;
+  askListMode = mode;
+  listModeListeners.forEach((listener) => listener());
+}
+
+/** Subscribe to the Sessions list mode. */
+export function subscribeAskListMode(listener: () => void): () => void {
+  listModeListeners.add(listener);
+  return () => {
+    listModeListeners.delete(listener);
+  };
+}
+
+/**
+ * Open the Ask history.
+ *
+ * The Ask history lives in the Sessions surface, behind its `Chats / Asks`
+ * switch — this request selects that list AND asks the shell to navigate
+ * there, so the history is one icon away from a cold Ask tab.
+ */
+export function requestAskHistory(): void {
+  setAskListMode("asks");
+  historyListeners.forEach((listener) => listener());
+}
+
+/** Subscribe to the request to open the Ask history. */
+export function subscribeAskHistoryRequest(listener: () => void): () => void {
+  historyListeners.add(listener);
+  return () => {
+    historyListeners.delete(listener);
   };
 }
 
@@ -866,22 +1136,55 @@ interface PendingTurn {
  */
 export function useAskStream() {
   const [state, setState] = useState<AskState>(initialAskState);
-  const [threads, setThreads] = useState<AskThread[]>(() => loadAskThreads());
+  const [threads, setThreads] = useState<AskThread[]>(() => getAskThreads());
   const [threadId, setThreadId] = useState<string | null>(() => getActiveAskThreadId());
   const [pending, setPending] = useState<PendingTurn | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** The thread being streamed into — it does not exist on the server yet. */
+  const liveThreadRef = useRef<string | null>(null);
+
+  // The store is the ONE copy of the thread data: the canvas and the
+  // history list both read it, so they cannot drift apart.
+  useEffect(() => subscribeAskThreadList(() => setThreads(getAskThreads())), []);
 
   // The Sessions list can point the canvas at a thread while it is mounted.
-  useEffect(() => subscribeAskThread(() => setThreadId(getActiveAskThreadId())), []);
+  useEffect(() => {
+    const apply = () => {
+      const next = getActiveAskThreadId();
+      setThreadId(next);
+      if (!next) {
+        setPending(null);
+        setState(initialAskState);
+        return;
+      }
+      // A thread that is being streamed into is not on the server yet —
+      // reading it back would only race with the turn that is landing.
+      if (next === liveThreadRef.current) return;
+      void loadAskThread(next).catch(() => undefined);
+    };
+    apply();
+    return subscribeAskThread(apply);
+  }, []);
+
+  // The first load: carry the browser's history over, then read the list.
+  useEffect(() => {
+    void ensureAskThreadsLoaded();
+  }, []);
 
   /**
    * Store a finished turn in its thread.
    *
    * The thread is the canvas's unit of continuity: a follow-up query lands in
-   * the same thread, so the Ask tab reads as one conversation.
+   * the same thread, so the Ask tab reads as one conversation. The gateway
+   * recorded the same turn when the stream completed — this is the
+   * browser's copy of it, so the canvas can draw it and the list can count
+   * it.
    */
   const commit = useCallback((turn: AskTurn, targetThreadId: string) => {
-    setThreads((prev) => saveAskThreads(appendAskTurn(prev, targetThreadId, turn)));
+    const next = appendAskTurn(getAskThreads(), targetThreadId, turn);
+    threadStore.clear();
+    next.forEach((thread) => threadStore.set(thread.id, thread));
+    notifyThreadList();
   }, []);
 
   const run = useCallback(
@@ -904,6 +1207,7 @@ export function useAskStream() {
         createdAt: Date.now(),
       };
 
+      liveThreadRef.current = targetThreadId;
       setThreadId(targetThreadId);
       setActiveAskThreadId(targetThreadId);
       setPending(live);
@@ -948,6 +1252,11 @@ export function useAskStream() {
           mode: request.mode,
           sources: request.sources,
           session_key: request.sessionKey,
+          // The thread and the turn this turn belongs to (job 150 §A): the
+          // gateway records the finished turn under these ids, so the
+          // thread that is opened later is the thread that was written.
+          thread_id: targetThreadId,
+          turn_id: live.id,
         };
         // Only sent when there is something to send — an empty array would
         // be noise the engine has to look at.
@@ -1022,6 +1331,7 @@ export function useAskStream() {
         finish();
       } finally {
         abortRef.current = null;
+        liveThreadRef.current = null;
       }
     },
     [commit, threadId],
@@ -1045,29 +1355,43 @@ export function useAskStream() {
     }));
   }, []);
 
+  /**
+   * Start a NEW ask.
+   *
+   * The canvas is emptied AND the active thread is dropped, so the next
+   * query opens a fresh thread. The old thread stays in the history — that
+   * is the whole point of the button: without it, every query landed in the
+   * open thread forever and there was no way out.
+   */
   const reset = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
     setState(initialAskState);
     setPending(null);
+    setThreadId(null);
+    setActiveAskThreadId(null);
   }, []);
 
   /**
    * Show a thread in the canvas.
    *
-   * The thread's turns are already stored, so opening it restores the
-   * sources and the research timeline too.
+   * The turns are read back from the server — the sources, the research
+   * steps and the media included — so the thread renders exactly as it did
+   * live.
    */
   const openThread = useCallback((id: string | null) => {
     setThreadId(id);
     setActiveAskThreadId(id);
     setPending(null);
     setState(initialAskState);
+    if (id) void loadAskThread(id).catch(() => undefined);
   }, []);
 
-  /** Forget one thread. */
-  const forgetThread = useCallback((id: string) => {
-    setThreads((prev) => saveAskThreads(deleteAskThread(prev, id)));
+  /** Forget one thread — on the server, and in the browser's store. */
+  const forgetThread = useCallback(async (id: string) => {
+    await deleteAskThread(id);
+    // The thread that was open in the canvas is gone: the canvas empties.
+    if (getActiveAskThreadId() === id) setActiveAskThreadId(null);
   }, []);
 
   /**
@@ -1093,49 +1417,6 @@ export function useAskStream() {
     return [...base, live];
   }, [threads, threadId, pending, state]);
 
-  /**
-   * @deprecated the v1 history rail — use `threads` / `openThread`.
-   *
-   * Kept so the old imports still work: an entry is opened as the thread
-   * that carries it (creating it when the v1 entry never became one).
-   */
-  const reopen = useCallback(
-    (entry: AskHistoryEntry) => {
-      setThreads((prev) => {
-        const known = prev.some((thread) => thread.id === entry.id);
-        if (known) return prev;
-        const turn: AskTurn = {
-          id: entry.id,
-          query: entry.query,
-          mode: entry.mode,
-          sources: entry.sources,
-          answer: entry.answer || "",
-          sourcesList: [],
-          steps: [],
-          createdAt: entry.createdAt || Date.now(),
-        };
-        return saveAskThreads([createAskThread(turn, entry.id), ...prev]);
-      });
-      setThreadId(entry.id);
-      setActiveAskThreadId(entry.id);
-      setPending(null);
-      setState({
-        ...initialAskState,
-        answer: entry.answer || "",
-        phase: "done",
-      });
-    },
-    [],
-  );
-
-  /** @deprecated the v1 history rail — use `forgetThread`. */
-  const forget = useCallback(
-    (id: string) => {
-      forgetThread(id);
-    },
-    [forgetThread],
-  );
-
   return {
     state,
     /** The threads, newest first. */
@@ -1148,16 +1429,13 @@ export function useAskStream() {
     threadId,
     run,
     stop,
+    /** Start a new ask: the canvas empties and the next query is a new thread. */
     reset,
     openThread,
     forgetThread,
-    /** @deprecated use `openThread`. */
-    reopen,
-    /** @deprecated use `forgetThread`. */
-    forget,
     updateMedia: (turnId: string, media: AskMedia[]) => {
       if (!threadId) return;
-      setThreads((prev) => updateAskTurnMedia(prev, threadId, turnId, media));
+      setAskTurnMedia(threadId, turnId, media);
     },
   };
 }

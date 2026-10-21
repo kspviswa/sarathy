@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
@@ -27,6 +28,11 @@ from loguru import logger
 from sarathy.bus.events import InboundMessage, OutboundMessage
 from sarathy.bus.queue import MessageBus
 from sarathy.channels.base import BaseChannel
+from sarathy.channels.dashboard.ask_store import (
+    AskStore,
+    AskTurnAccumulator,
+    default_ask_store_path,
+)
 from sarathy.channels.dashboard.auth import (
     DeviceRegistry,
     is_valid_pairing_key,
@@ -173,6 +179,68 @@ def _ask_quotes(raw: object) -> list[dict]:
             continue
         out.append(item)
     return out
+
+
+def _ask_frame(line: bytes) -> dict | None:
+    """One NDJSON frame of the Ask stream, or ``None`` when the line is not one.
+
+    The relay writes the raw bytes to the browser either way — this parse
+    exists only so the gateway can keep its own record of the turn.
+    """
+    text = line.strip()
+    if not text:
+        return None
+    try:
+        frame = json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return frame if isinstance(frame, dict) else None
+
+
+def _ask_media_items(raw: list, kind: str) -> list[dict]:
+    """The media of one turn, in the shape the browser draws.
+
+    This mirrors the browser's own mapping of the media response
+    (``mapImages`` / ``mapVideos`` in
+    ``dashboard/src/components/ask/AskMediaButtons.tsx``): the stored turn
+    must render exactly like the live one did.
+    """
+    items: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        url = entry.get("url")
+        img_src = entry.get("img_src")
+        thumb = entry.get("thumb")
+        title = entry.get("title") or ""
+        iframe_src = entry.get("iframe_src")
+        if kind == "videos":
+            if not (url or iframe_src):
+                continue
+            items.append(
+                {
+                    "kind": "video",
+                    "url": url,
+                    "img_src": img_src or thumb,
+                    "thumb": img_src or thumb,
+                    "title": title,
+                    "iframe_src": iframe_src,
+                    "iframeUrl": iframe_src or entry.get("iframeUrl"),
+                }
+            )
+            continue
+        if not (url or img_src):
+            continue
+        items.append(
+            {
+                "kind": "image",
+                "url": url or img_src,
+                "img_src": img_src or url,
+                "thumb": img_src or thumb or url,
+                "title": title,
+            }
+        )
+    return items
 
 
 def _slugify(text: str) -> str:
@@ -432,6 +500,9 @@ class DashboardChannel(BaseChannel):
         # In-flight Ask streams, keyed by the session that asked. `/api/ask/stop`
         # aborts the upstream request through this handle (spec 145 §E).
         self._ask_streams: dict[str, aiohttp.ClientResponse] = {}
+        # The Ask thread store (job 150 §A). Created on first use: a gateway
+        # that never gets an Ask must not litter the state directory.
+        self._ask_store: AskStore | None = None
         self._load_outbox()
 
     # ------------------------------------------------------------------ outbox
@@ -1015,6 +1086,12 @@ class DashboardChannel(BaseChannel):
         app.router.add_post("/api/ask/stop", self._api_ask_stop)
         app.router.add_post("/api/ask/images", self._api_ask_images)
         app.router.add_post("/api/ask/videos", self._api_ask_videos)
+        # The Ask thread store (job 150 §A). Its own endpoints, its own
+        # database: the research threads are not chat sessions.
+        app.router.add_get("/api/ask/threads", self._api_ask_threads)
+        app.router.add_post("/api/ask/threads", self._api_ask_thread_create)
+        app.router.add_get("/api/ask/threads/{thread_id}", self._api_ask_thread_detail)
+        app.router.add_delete("/api/ask/threads/{thread_id}", self._api_ask_thread_delete)
         app.router.add_post("/api/media", self._api_media_upload)
         app.router.add_get("/api/media", self._api_media_serve)
         app.router.add_get("/api/config", self._api_get_config)
@@ -1405,6 +1482,18 @@ class DashboardChannel(BaseChannel):
         # with the query as genuine prior context.
         quotes = _ask_quotes(data.get("quotes"))
 
+        # The thread and the turn this turn belongs to (job 150 §A).
+        #
+        # The browser owns both ids: it names the thread before the stream
+        # starts (so the "New ask" button can point at a fresh one) and it
+        # names the turn (so the media it fetches afterwards can be attached
+        # to the right row). They are GATEWAY routing hints — the research
+        # engine never sees them, and the payload below is built field by
+        # field, so they cannot leak upstream.
+        thread_id = str(data.get("thread_id") or "").strip() or f"thread-{uuid.uuid4().hex}"
+        turn_id = str(data.get("turn_id") or "").strip() or f"turn-{uuid.uuid4().hex}"
+        turn_created_at = int(time.time() * 1000)
+
         payload_body: dict[str, object] = {
             "query": query,
             "optimizationMode": mode,
@@ -1461,8 +1550,53 @@ class DashboardChannel(BaseChannel):
         await response.prepare(request)
 
         self._ask_streams[session_key] = upstream
+
+        # The record of the turn (job 150 §A).
+        #
+        # The frames are relayed VERBATIM — the browser parses them — so the
+        # record is folded from the SAME bytes that go to the browser: the
+        # chunk is split into lines, each line is parsed, and the raw chunk
+        # is still written out untouched.
+        accumulator = AskTurnAccumulator()
+        pending = b""
+        recorded = False
+
+        def _record_turn() -> None:
+            """Write the finished turn to the store. Never raises."""
+            nonlocal recorded
+            if recorded:
+                return
+            recorded = True
+            try:
+                self._ask_store_instance().add_turn(
+                    thread_id,
+                    accumulator.turn(
+                        query=query,
+                        turn_id=turn_id,
+                        mode=mode,
+                        sources=list(sources),
+                        created_at=turn_created_at,
+                    ),
+                )
+            except Exception as err:
+                logger.warning("Could not record the Ask turn: {}", err)
+
         try:
             async for chunk in upstream.content.iter_chunked(ASK_CHUNK_SIZE):
+                pending += chunk
+                *lines, pending = pending.split(b"\n")
+                for line in lines:
+                    frame = _ask_frame(line)
+                    if frame is None:
+                        continue
+                    accumulator.feed(frame)
+                    # The turn is recorded WHEN THE STREAM COMPLETES, and only
+                    # then: a stream that failed (an `error` frame) or was
+                    # aborted (the browser went away, or Stop was pressed)
+                    # never reaches the `done` frame, so it leaves NOTHING
+                    # behind — a half-written turn would be worse than none.
+                    if accumulator.done and not accumulator.failed:
+                        _record_turn()
                 await response.write(chunk)
         except (ConnectionResetError, asyncio.CancelledError):
             # The browser went away — stop the upstream work with it.
@@ -1519,6 +1653,15 @@ class DashboardChannel(BaseChannel):
             return web.json_response({"error": "invalid body", "code": "invalid_body"}, status=400)
         if not isinstance(data, dict):
             return web.json_response({"error": "invalid body", "code": "invalid_body"}, status=400)
+
+        # The turn this media belongs to (job 150 §A).
+        #
+        # The media is fetched AFTER the stream completed, so it is attached
+        # to a turn the store already holds. The ids are gateway routing
+        # hints: they are stripped from the body, so the research engine
+        # never sees them.
+        thread_id = str(data.pop("thread_id", "") or "").strip()
+        turn_id = str(data.pop("turn_id", "") or "").strip()
 
         # The upstream media endpoints REQUIRE a `chatModel`, because they spend
         # an LLM call rewriting the query. Uttaram's browser supplies its own;
@@ -1586,11 +1729,145 @@ class DashboardChannel(BaseChannel):
         try:
             if "application/json" in content_type:
                 data_out = json.loads(body)
+                self._record_ask_media(thread_id, turn_id, kind, data_out)
                 return web.json_response(data_out, status=200)
             return web.Response(body=body, status=200, content_type=content_type)
         except Exception as err:
             logger.warning("Ask media relay failed: {}", err)
             return web.json_response({"error": "ask backend unavailable", "code": "backend_unavailable"}, status=502)
+
+    def _record_ask_media(
+        self, thread_id: str, turn_id: str, kind: str, data_out: object
+    ) -> None:
+        """Attach the media of one turn to the stored turn. Never raises.
+
+        The items are mapped into the shape the browser draws — the SAME
+        mapping the browser applies to the live response
+        (`mapImages`/`mapVideos` in `components/ask/AskMediaButtons.tsx`), so a
+        thread reopened from the server shows the same media as it did live.
+        """
+        if not thread_id or not turn_id or not isinstance(data_out, dict):
+            return
+        raw = data_out.get(kind)
+        if not isinstance(raw, list):
+            return
+        items = _ask_media_items(raw, kind)
+        if not items:
+            return
+        try:
+            self._ask_store_instance().merge_turn_media(
+                thread_id, turn_id, "image" if kind == "images" else "video", items
+            )
+        except Exception as err:
+            logger.warning("Could not record the Ask media: {}", err)
+
+    # ------------------------------------------------------------- ask threads api
+
+    def _ask_store_instance(self) -> AskStore:
+        """The Ask thread store — created on first use.
+
+        The path follows the gateway's own state directory: the config's
+        directory when there is one (that is ``~/.sarathy`` in production),
+        the default state directory otherwise. Never a literal.
+        """
+        if self._ask_store is None:
+            if self.config_path:
+                path = Path(self.config_path).parent / "ask" / "threads.db"
+            else:
+                path = default_ask_store_path()
+            self._ask_store = AskStore(path)
+        return self._ask_store
+
+    def _ask_disabled(self) -> bool:
+        """True when Ask mode is switched off — the routes then 404."""
+        try:
+            return not getattr(self._load_full_config().ask, "enabled", True)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _ask_error(message: str, code: str, status: int) -> web.Response:
+        """A JSON error — never an HTML 500."""
+        return web.json_response({"error": message, "code": code}, status=status)
+
+    async def _api_ask_threads(self, request: web.Request) -> web.Response:
+        """GET /api/ask/threads — the thread list, newest first.
+
+        The list carries NO turn bodies: a title, a turn count and a
+        timestamp per thread. The bodies come from the detail call, so the
+        list stays small no matter how long the history gets.
+        """
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+        try:
+            threads = self._ask_store_instance().list_threads()
+        except Exception as err:
+            logger.warning("Could not list the Ask threads: {}", err)
+            return self._ask_error("ask threads unavailable", "store_unavailable", 503)
+        return web.json_response({"threads": threads})
+
+    async def _api_ask_thread_create(self, request: web.Request) -> web.Response:
+        """POST /api/ask/threads — create (or replace) one thread.
+
+        The body is ``{id?, title?, turns?}``. The id is optional: the
+        browser owns the thread ids it already has, and the one-time
+        migration of the old local history must keep them. The title defaults
+        to the first query of the first turn.
+
+        The write is an UPSERT, so retrying a failed migration never
+        duplicates a thread.
+        """
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+
+        thread_id = str(data.get("id") or "").strip()
+        title = str(data.get("title") or "").strip()
+        raw_turns = data.get("turns")
+        turns = [t for t in raw_turns if isinstance(t, dict)] if isinstance(raw_turns, list) else []
+
+        try:
+            thread = self._ask_store_instance().create_thread(
+                title=title, thread_id=thread_id or None, turns=turns
+            )
+        except Exception as err:
+            logger.warning("Could not create the Ask thread: {}", err)
+            return self._ask_error("ask threads unavailable", "store_unavailable", 503)
+        return web.json_response({"thread": thread}, status=201)
+
+    async def _api_ask_thread_detail(self, request: web.Request) -> web.Response:
+        """GET /api/ask/threads/{id} — one thread with all its turns."""
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+        thread_id = request.match_info.get("thread_id", "")
+        try:
+            stored = self._ask_store_instance().get_thread(thread_id)
+        except Exception as err:
+            logger.warning("Could not read the Ask thread {}: {}", thread_id, err)
+            return self._ask_error("ask threads unavailable", "store_unavailable", 503)
+        if stored is None:
+            return self._ask_error("not found", "not_found", 404)
+        return web.json_response(stored)
+
+    async def _api_ask_thread_delete(self, request: web.Request) -> web.Response:
+        """DELETE /api/ask/threads/{id} — forget a thread and its turns."""
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+        thread_id = request.match_info.get("thread_id", "")
+        try:
+            deleted = self._ask_store_instance().delete_thread(thread_id)
+        except Exception as err:
+            logger.warning("Could not delete the Ask thread {}: {}", thread_id, err)
+            return self._ask_error("ask threads unavailable", "store_unavailable", 503)
+        if not deleted:
+            return self._ask_error("not found", "not_found", 404)
+        return web.json_response({"ok": True})
 
     # ------------------------------------------------------------------ media api
 

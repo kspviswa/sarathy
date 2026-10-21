@@ -84,6 +84,12 @@ export function AskMediaButtons({ turn, turns, threadId, onMediaLoaded }: AskMed
         const body: Record<string, unknown> = {
           query: turn.query,
           chatHistory: history && history.length ? history : [],
+          // The turn the media belongs to (job 150 §A): the gateway attaches
+          // the media to the stored turn, so a thread reopened from the
+          // server shows it too. The ids are gateway routing hints — they
+          // are stripped before the request reaches the research engine.
+          thread_id: threadId,
+          turn_id: turn.id,
         };
 
         const res = await fetch(`/api/ask/${kind}`, {

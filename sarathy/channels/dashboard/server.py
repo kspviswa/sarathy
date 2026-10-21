@@ -1520,6 +1520,22 @@ class DashboardChannel(BaseChannel):
         if not isinstance(data, dict):
             return web.json_response({"error": "invalid body", "code": "invalid_body"}, status=400)
 
+        # The upstream media endpoints REQUIRE a `chatModel`, because they spend
+        # an LLM call rewriting the query. Uttaram's browser supplies its own;
+        # ours must not — which model a request bills is the gateway's call.
+        # Overwrite unconditionally so a compromised page cannot pick the model.
+        try:
+            ask_cfg = self._load_full_config().ask
+            provider = getattr(ask_cfg, "media_model_provider", "") or ""
+            key = getattr(ask_cfg, "media_model_key", "") or ""
+            if provider and key:
+                data["chatModel"] = {"providerId": provider, "key": key}
+            else:
+                data.pop("chatModel", None)
+        except Exception as err:
+            logger.warning("Could not read the media chat model from config: {}", err)
+            data.pop("chatModel", None)
+
         payload = json.dumps(data).encode("utf-8")
         backend_url = self._ask_backend_url()
 

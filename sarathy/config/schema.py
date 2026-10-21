@@ -113,6 +113,15 @@ class AskConfig(Base):
     backend_url: str = "http://127.0.0.1:7777"  # The uttaram-backend service
     timeout_s: int = 300  # Upstream request timeout for one Ask turn
 
+    # The chat model the media endpoints rewrite queries with. They REQUIRE a
+    # `chatModel` in the body (uttaram-backend/api/{images,videos}); Uttaram's
+    # browser reads it from localStorage, but the dashboard must not — the model
+    # a request spends money on is the gateway's decision, not the page's. The
+    # proxy injects this pair, and a browser-supplied `chatModel` is ignored.
+    # MUST name a chat model configured in uttaram-backend/data/config.json.
+    media_model_provider: str = "openrouter"
+    media_model_key: str = "deepseek/deepseek-v4.1-flash-1017"
+
 
 class ChannelsConfig(Base):
     """Configuration for chat channels."""

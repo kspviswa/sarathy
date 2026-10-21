@@ -1,4 +1,4 @@
-import { Briefcase, Clock, FileText, Loader2, ChevronLeft } from "lucide-react";
+import { Briefcase, FileText, Loader2, ChevronLeft } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -58,7 +58,6 @@ export function JobsView() {
   const [selectedJob, setSelectedJob] = useState<JobDetailResponse | null>(
     null,
   );
-  const [loadingDetail, setLoadingDetail] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingJobIdRef = useRef<number | null>(null);
 
@@ -83,15 +82,13 @@ export function JobsView() {
   };
 
   const openJob = async (id: number) => {
-    setLoadingDetail(true);
     try {
       const detail = await api.job(id);
       setSelectedJob(detail);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load job");
     } finally {
-      setLoadingDetail(false);
-    }
+      }
   };
 
   const closeDetail = () => {

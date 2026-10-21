@@ -1,6 +1,8 @@
 import {
   Check,
   Copy,
+  FolderTree,
+  History,
   Loader2,
   Mic,
   Paperclip,
@@ -148,6 +150,8 @@ export function ChatView({
   sessionKey = DASHBOARD_SESSION_KEY,
   followUpSeed = null,
   onFollowUpSeedConsumed,
+  onOpenSessions,
+  onBrowseFiles,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
@@ -170,6 +174,10 @@ export function ChatView({
   followUpSeed?: { text: string; nonce: number } | null;
   /** Called once a `followUpSeed` has been applied, so the owner can clear it. */
   onFollowUpSeedConsumed?: () => void;
+  /** Switch to the Sessions tab (spec §A). */
+  onOpenSessions?: () => void;
+  /** Switch to the Files tab (spec §A). */
+  onBrowseFiles?: () => void;
 }) {
   const [input, setInput] = useState("");
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
@@ -180,6 +188,8 @@ export function ChatView({
   const [replyToMsg, setReplyToMsg] = useState<ChatMessage | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
+  /** The attachment source sheet — the workspace branch opens the Files tab. */
+  const [attachSheetOpen, setAttachSheetOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -191,6 +201,29 @@ export function ChatView({
   // "Add to follow-up" bar. Shared hook — the desktop ChatView uses the same
   // one, so behavior stays in lockstep across both SPAs.
   const selection = useTextSelection(messageListRef, !streaming);
+
+  /**
+   * The attach button opens the attachment SOURCE sheet (spec §A).
+   *
+   * It used to open the device picker straight away. Now it asks where the
+   * file comes from: the device, or the workspace — the workspace branch
+   * switches to the Files tab, so nothing became unreachable.
+   *
+   * The native picker is one more tap away: the sheet's own row is a
+   * `<label>` for the very same input, so the browser still opens its own
+   * dialog (the reason this input is rendered and not display:none).
+   */
+  const handleAttachClick = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    setAttachSheetOpen(true);
+  }, []);
+
+  const closeAttachSheet = useCallback(() => setAttachSheetOpen(false), []);
+
+  const browseWorkspaceFiles = useCallback(() => {
+    setAttachSheetOpen(false);
+    onBrowseFiles?.();
+  }, [onBrowseFiles]);
 
   const addSelectionAsQuote = useCallback(() => {
     // Prefer the text captured when the selection was made: on touch the live
@@ -396,7 +429,21 @@ export function ChatView({
   return (
     <div className="flex h-full flex-col" data-testid="mobile-chat">
       <div className="flex items-center justify-between px-4 py-3">
-        <h1 className="text-base font-semibold">Chat</h1>
+        <div className="flex min-w-0 items-center gap-1">
+          {onOpenSessions && (
+            <button
+              type="button"
+              onClick={onOpenSessions}
+              aria-label="Sessions"
+              title="Sessions"
+              data-testid="mobile-sessions-drawer-toggle"
+              className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <History className="size-5" />
+            </button>
+          )}
+          <h1 className="truncate text-base font-semibold">Chat</h1>
+        </div>
         <div className="flex items-center gap-1">
           {streaming && (
             <Button
@@ -626,6 +673,7 @@ export function ChatView({
               <div className="flex items-center gap-0.5">
                 <label
                   htmlFor="attach-file-input"
+                  onClick={handleAttachClick}
                   className="inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   aria-label="Attach file"
                   role="button"
@@ -676,6 +724,43 @@ export function ChatView({
         rect={selection.rect}
         onAdd={addSelectionAsQuote}
       />
+
+      {/* --------------------------------------------- attachment source sheet */}
+      {attachSheetOpen && (
+        <div className="fixed inset-0 z-50" data-testid="mobile-attach-sheet">
+          <button
+            type="button"
+            aria-label="Close attachment menu"
+            data-testid="mobile-attach-sheet-scrim"
+            onClick={closeAttachSheet}
+            className="absolute inset-0 h-full w-full bg-black/60"
+          />
+          <div
+            className="absolute inset-x-0 bottom-0 flex flex-col gap-1 rounded-t-2xl border-t bg-background p-3 pb-6"
+            data-testid="mobile-attach-sheet-panel"
+          >
+            <label
+              htmlFor="attach-file-input"
+              role="button"
+              data-testid="mobile-attach-upload"
+              onClick={closeAttachSheet}
+              className="flex min-h-12 cursor-pointer items-center gap-3 rounded-lg px-3 text-base hover:bg-accent"
+            >
+              <Paperclip className="size-5 shrink-0" />
+              Upload from device
+            </label>
+            <button
+              type="button"
+              onClick={browseWorkspaceFiles}
+              data-testid="mobile-attach-files"
+              className="flex min-h-12 items-center gap-3 rounded-lg px-3 text-left text-base hover:bg-accent"
+            >
+              <FolderTree className="size-5 shrink-0" />
+              Browse workspace files
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

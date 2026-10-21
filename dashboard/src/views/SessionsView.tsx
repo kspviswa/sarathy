@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { MarkdownBubble } from "@/components/MarkdownBubble";
 import { SessionCalendar } from "@/components/SessionCalendar";
+import { SessionsPanel } from "@/components/SessionsPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -59,10 +60,14 @@ function transcriptText(detail: SessionArchiveDetail): string {
  *
  * The drill-down is unchanged: month → day → channel → session, with the
  * transcript in the right-hand column once one is open.
+ *
+ * The Asks (research threads) live next to it, behind the `Chats / Asks`
+ * switch (spec §C) — the Ask canvas has no history rail of its own.
  */
 export function SessionsView({
   initialKey = null,
   onOpenThread,
+  onOpenAskThread,
 }: {
   /** Transcript to open as soon as the view mounts (archive id, else a key). */
   initialKey?: string | null;
@@ -72,7 +77,25 @@ export function SessionsView({
    * clipboard half of the affordance works without it.
    */
   onOpenThread?: (text: string) => void;
+  /** Open an Ask thread in the Ask canvas. */
+  onOpenAskThread?: (threadId: string) => void;
 } = {}) {
+  return (
+    <SessionsPanel
+      testId="sessions-view"
+      chats={<ChatsBrowser initialKey={initialKey} onOpenThread={onOpenThread} />}
+      onOpenAsk={(threadId) => onOpenAskThread?.(threadId)}
+    />
+  );
+}
+
+function ChatsBrowser({
+  initialKey = null,
+  onOpenThread,
+}: {
+  initialKey?: string | null;
+  onOpenThread?: (text: string) => void;
+}) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionArchiveDetail | null>(null);
@@ -160,10 +183,7 @@ export function SessionsView({
   }
 
   return (
-    <div
-      className="grid h-full gap-3 p-4 lg:grid-cols-[minmax(0,340px)_1fr]"
-      data-testid="sessions-view"
-    >
+    <div className="grid h-full gap-3 lg:grid-cols-[minmax(0,340px)_1fr]">
       <Card className="min-h-0 overflow-hidden">
         <ScrollArea className="h-full">
           <div className="p-3">

@@ -74,14 +74,14 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { api, getToken } from "@/lib/api";
-import { resetLastSession, DASHBOARD_SESSION_KEY, clearResetFlag, WS_OPEN_EVENT } from "@/lib/useLastSession";
+import { clearResetFlag, WS_OPEN_EVENT } from "@/lib/useLastSession";
 import { DashboardSocket } from "@/lib/ws";
 import DesktopApp from "@/App";
 import MobileApp from "@/mobile/App";
 
 function setupWithMessages() {
-  api.sessions.mockReset();
-  api.sessions.mockResolvedValue({
+  vi.mocked(api.sessions).mockReset();
+  vi.mocked(api.sessions).mockResolvedValue({
     sessions: [
       {
         key: "dashboard:console",
@@ -91,8 +91,8 @@ function setupWithMessages() {
       },
     ],
   });
-  api.session.mockReset();
-  api.session.mockResolvedValue({
+  vi.mocked(api.session).mockReset();
+  vi.mocked(api.session).mockResolvedValue({
     key: "dashboard:console",
     createdAt: "2026-01-01T00:00:00",
     messages: [
@@ -103,8 +103,8 @@ function setupWithMessages() {
 }
 
 function setupEmptySession() {
-  api.sessions.mockReset();
-  api.sessions.mockResolvedValue({
+  vi.mocked(api.sessions).mockReset();
+  vi.mocked(api.sessions).mockResolvedValue({
     sessions: [
       {
         key: "dashboard:console",
@@ -114,8 +114,8 @@ function setupEmptySession() {
       },
     ],
   });
-  api.session.mockReset();
-  api.session.mockResolvedValue({
+  vi.mocked(api.session).mockReset();
+  vi.mocked(api.session).mockResolvedValue({
     key: "dashboard:console",
     createdAt: "2026-01-01T00:00:00",
     messages: [],
@@ -123,19 +123,19 @@ function setupEmptySession() {
 }
 
 function setupNoSessions() {
-  api.sessions.mockReset();
-  api.sessions.mockResolvedValue({ sessions: [] });
-  api.session.mockReset();
-  api.session.mockResolvedValue({ key: "", createdAt: "", messages: [] });
+  vi.mocked(api.sessions).mockReset();
+  vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
+  vi.mocked(api.session).mockReset();
+  vi.mocked(api.session).mockResolvedValue({ key: "", createdAt: "", messages: [] });
 }
 
 function setupNullContentToolRows() {
-  api.sessions.mockReset();
-  api.sessions.mockResolvedValue({
+  vi.mocked(api.sessions).mockReset();
+  vi.mocked(api.sessions).mockResolvedValue({
     sessions: [{ key: "dashboard:console", created_at: "t", updated_at: "t" }],
   });
-  api.session.mockReset();
-  api.session.mockResolvedValue({
+  vi.mocked(api.session).mockReset();
+  vi.mocked(api.session).mockResolvedValue({
     key: "dashboard:console",
     createdAt: "t",
     messages: [
@@ -149,15 +149,15 @@ function setupNullContentToolRows() {
 
 describe("Last session load — desktop App", () => {
   beforeEach(() => {
-    api.me.mockReset();
-    api.me.mockResolvedValue({ ok: true });
-    api.sessions.mockReset();
-    api.sessions.mockResolvedValue({ sessions: [] });
-    api.session.mockReset();
-    api.session.mockResolvedValue({ key: "", createdAt: "", messages: [] });
+    vi.mocked(api.me).mockReset();
+    vi.mocked(api.me).mockResolvedValue({ deviceId: "d1", deviceName: "test", version: "0.19.0" });
+    vi.mocked(api.sessions).mockReset();
+    vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
+    vi.mocked(api.session).mockReset();
+    vi.mocked(api.session).mockResolvedValue({ key: "", createdAt: "", messages: [] });
     clearResetFlag();
-    DashboardSocket.mockReset();
-    DashboardSocket.mockImplementation(function () {
+    vi.mocked(DashboardSocket).mockReset();
+    vi.mocked(DashboardSocket).mockImplementation(function () {
       return {
         connect: vi.fn(),
         disconnect: vi.fn(),
@@ -165,7 +165,7 @@ describe("Last session load — desktop App", () => {
         onNotification: vi.fn(() => vi.fn()),
       };
     });
-    getToken.mockReturnValue("test-token");
+    vi.mocked(getToken).mockReturnValue("test-token");
   });
 
   it("loads dashboard:console history into the chat on mount", async () => {
@@ -245,15 +245,15 @@ describe("Last session load — desktop App", () => {
 
 describe("Last session load — mobile App", () => {
   beforeEach(() => {
-    api.me.mockReset();
-    api.me.mockResolvedValue({ ok: true });
-    api.sessions.mockReset();
-    api.sessions.mockResolvedValue({ sessions: [] });
-    api.session.mockReset();
-    api.session.mockResolvedValue({ key: "", createdAt: "", messages: [] });
+    vi.mocked(api.me).mockReset();
+    vi.mocked(api.me).mockResolvedValue({ deviceId: "d1", deviceName: "test", version: "0.19.0" });
+    vi.mocked(api.sessions).mockReset();
+    vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
+    vi.mocked(api.session).mockReset();
+    vi.mocked(api.session).mockResolvedValue({ key: "", createdAt: "", messages: [] });
     clearResetFlag();
-    DashboardSocket.mockReset();
-    DashboardSocket.mockImplementation(function () {
+    vi.mocked(DashboardSocket).mockReset();
+    vi.mocked(DashboardSocket).mockImplementation(function () {
       return {
         connect: vi.fn(),
         disconnect: vi.fn(),
@@ -261,7 +261,7 @@ describe("Last session load — mobile App", () => {
         onNotification: vi.fn(() => vi.fn()),
       };
     });
-    getToken.mockReturnValue("test-token");
+    vi.mocked(getToken).mockReturnValue("test-token");
   });
 
   afterEach(() => {
@@ -279,17 +279,12 @@ describe("Last session load — mobile App", () => {
 
 describe("Last session load — mobile App (empty session)", () => {
   beforeEach(() => {
-    api.me.mockReset();
-    api.me.mockResolvedValue({ ok: true });
-    api.sessions.mockReset();
-    api.sessions.mockResolvedValue({
-      sessions: [{ key: "dashboard:console", created_at: "t", updated_at: "t", path: "/ws/sess.json" }],
-    });
-    api.session.mockReset();
-    api.session.mockResolvedValue({ key: "dashboard:console", createdAt: "t", messages: [] });
+    vi.mocked(api.me).mockReset();
+    vi.mocked(api.me).mockResolvedValue({ deviceId: "d1", deviceName: "test", version: "0.19.0" });
+    setupEmptySession();
     clearResetFlag();
-    DashboardSocket.mockReset();
-    DashboardSocket.mockImplementation(function () {
+    vi.mocked(DashboardSocket).mockReset();
+    vi.mocked(DashboardSocket).mockImplementation(function () {
       return {
         connect: vi.fn(),
         disconnect: vi.fn(),
@@ -297,7 +292,7 @@ describe("Last session load — mobile App (empty session)", () => {
         onNotification: vi.fn(() => vi.fn()),
       };
     });
-    getToken.mockReturnValue("test-token");
+    vi.mocked(getToken).mockReturnValue("test-token");
   });
 
   afterEach(() => {

@@ -110,22 +110,31 @@ describe("Mobile app — bottom tab bar", () => {
     vi.clearAllMocks();
   });
 
-  it("renders with a bottom tab bar containing the 7 tabs", async () => {
+  it("renders with a bottom tab bar carrying all 6 tabs", async () => {
     render(<MobileApp />);
     const tabbar = await screen.findByTestId("mobile-tabbar");
     expect(tabbar).toBeInTheDocument();
 
-    const buttons = within(tabbar).getAllByRole("button");
-    expect(buttons).toHaveLength(7);
+    // The strip is the scroll container; the overflow affordance lives
+    // outside it, so the tabs are counted inside the strip.
+    const strip = await screen.findByTestId("mobile-tabbar-scroll");
+    const buttons = within(strip).getAllByRole("button");
+    expect(buttons).toHaveLength(6);
 
     expect(screen.getByLabelText("Chat")).toBeInTheDocument();
     // Ask sits right after Chat (spec 145 §D).
     expect(screen.getByLabelText("Ask")).toBeInTheDocument();
-    expect(screen.getByLabelText("Files")).toBeInTheDocument();
-    expect(screen.getByLabelText("Sessions")).toBeInTheDocument();
     expect(screen.getByLabelText("Jobs")).toBeInTheDocument();
-    expect(screen.getByLabelText("Config")).toBeInTheDocument();
-    expect(screen.getByLabelText("Status")).toBeInTheDocument();
+    // Config and Status merged into Settings (spec 146 §A/§B).
+    expect(screen.getByLabelText("Settings")).toBeInTheDocument();
+
+    // Sessions and Files are TABS again (spec 146 §A, Run 2): the bar
+    // scrolls instead of dropping them.
+    expect(within(strip).getByLabelText("Sessions")).toBeInTheDocument();
+    expect(within(strip).getByLabelText("Files")).toBeInTheDocument();
+    // Status is a Settings SEGMENT, never a tab.
+    expect(within(strip).queryByLabelText("Config")).not.toBeInTheDocument();
+    expect(within(strip).queryByLabelText("Status")).not.toBeInTheDocument();
   });
 
   it("shows the mobile app shell (header + tab bar)", async () => {
@@ -176,10 +185,14 @@ describe("Mobile app — bottom tab bar", () => {
 
     render(<MobileApp />);
     const tabbar = await screen.findByTestId("mobile-tabbar");
+    // Sessions is a tab again (spec 146 §A, Run 2) AND the drawer behind the
+    // Chat header's history button still works as a shortcut.
     await act(async () => {
-      fireEvent.click(within(tabbar).getByLabelText("Sessions"));
+      fireEvent.click(await screen.findByTestId("mobile-sessions-drawer-toggle"));
       await Promise.resolve();
     });
+    expect(screen.getByTestId("mobile-sessions-drawer")).toBeInTheDocument();
+    expect(within(tabbar).getByLabelText("Sessions")).toBeInTheDocument();
 
     // Level 1: calendar + marker.
     expect(screen.getByTestId("session-calendar")).toBeInTheDocument();

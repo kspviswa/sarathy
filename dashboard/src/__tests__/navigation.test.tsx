@@ -157,13 +157,18 @@ afterEach(() => {
 /* ------------------------------------------------------------------ §A tabs */
 
 describe("Section navigation — tabs, not drawers", () => {
-  it("renders a nav item for every section including the restored Sessions tab", async () => {
+  it("renders a nav item for every section, with Config and Status merged into Settings", async () => {
     await renderApp();
     const nav = screen.getByTestId("section-nav");
-    for (const label of ["Chat", "Sessions", "Files", "Jobs", "Config", "Status"]) {
+    for (const label of ["Chat", "Sessions", "Files", "Jobs", "Settings"]) {
       expect(within(nav).getByText(label)).toBeInTheDocument();
     }
     expect(screen.getByTestId("nav-sessions")).toBeInTheDocument();
+    // Config and Status are no longer separate destinations (spec 146 §B).
+    expect(within(nav).queryByText("Config")).not.toBeInTheDocument();
+    expect(within(nav).queryByText("Status")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("nav-config")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("nav-status")).not.toBeInTheDocument();
   });
 
   it("swaps the main content area to the Sessions view with no drawer overlay", async () => {
@@ -182,7 +187,7 @@ describe("Section navigation — tabs, not drawers", () => {
 
   it("swaps to each secondary section and back to chat", async () => {
     await renderApp();
-    for (const id of ["jobs", "files", "config", "status", "chat"]) {
+    for (const id of ["jobs", "files", "settings", "chat"]) {
       await act(async () => {
         fireEvent.click(screen.getByTestId(`nav-${id}`));
       });
@@ -193,6 +198,13 @@ describe("Section navigation — tabs, not drawers", () => {
         expect(screen.getByTestId("nav-" + id)).toHaveAttribute("aria-current", "page");
       }
     }
+    // The Settings section is the merged Config + Status surface (spec 146 §B).
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("nav-settings"));
+    });
+    expect(screen.getByTestId("settings-view")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-segment-form")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-segment-status")).toBeInTheDocument();
   });
 
   it("no longer renders the dead Profile label; the session badge is real", async () => {
@@ -413,9 +425,9 @@ describe("Left rail branding", () => {
     expect(branding.className).toContain("md:flex");
 
     const nav = screen.getByTestId("section-nav");
-    const status = screen.getByTestId("nav-status");
+    const settings = screen.getByTestId("nav-settings");
     expect(
-      status.compareDocumentPosition(branding) & Node.DOCUMENT_POSITION_FOLLOWING,
+      settings.compareDocumentPosition(branding) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(nav.compareDocumentPosition(branding) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 

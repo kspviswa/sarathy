@@ -77,6 +77,11 @@ ASK_SOURCES = ("web", "discussions", "academic")
 ASK_CONNECT_TIMEOUT_S = 5
 # Chunk size for the relay. Small enough to feel live, large enough to be cheap.
 ASK_CHUNK_SIZE = 4096
+# The roles the research engine's `history` accepts.
+ASK_HISTORY_ROLES = ("human", "assistant")
+# How many history turns / quoted passages one Ask request may carry.
+ASK_MAX_HISTORY = 20
+ASK_MAX_QUOTES = 12
 
 # Content-Security-Policy for the dashboard shell.
 #
@@ -125,6 +130,49 @@ def _is_openai_v1_base(base: str | None) -> bool:
     if not base:
         return False
     return base.rstrip("/").endswith("/v1")
+
+
+def _ask_history(raw: object) -> list[list[str]]:
+    """The conversation one Ask turn is grounded in.
+
+    The engine takes ``[[role, text], …]`` with the roles ``human`` and
+    ``assistant``. Anything else is dropped: the gateway forwards the
+    client's history to the engine, and the engine puts it in front of a
+    model — so the shape is checked here rather than trusted.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[list[str]] = []
+    for item in raw[:ASK_MAX_HISTORY]:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        role, text = item[0], item[1]
+        if role not in ASK_HISTORY_ROLES:
+            continue
+        if not isinstance(text, str) or not text.strip():
+            continue
+        out.append([role, text])
+    return out
+
+
+def _ask_quotes(raw: object) -> list[dict]:
+    """The passages quoted out of an earlier answer.
+
+    Each quote is ``{"text": "…", "source_message_id": "…", "source_role": "…"}``.
+    The whole object is forwarded untouched — the extra fields are the
+    engine's own metadata.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw[:ASK_MAX_QUOTES]:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        out.append(item)
+    return out
 
 
 def _slugify(text: str) -> str:
@@ -1344,15 +1392,28 @@ class DashboardChannel(BaseChannel):
 
         session_key = str(data.get("session_key") or DASHBOARD_SESSION_KEY)
 
-        payload = json.dumps(
-            {
-                "query": query,
-                "optimizationMode": mode,
-                "sources": sources,
-                "history": [],
-                "stream": True,
-            }
-        ).encode("utf-8")
+        # The conversation the answer is grounded in (spec 146 §E).
+        #
+        # A "Reply" on an Ask turn sends that turn's question and answer here,
+        # so the follow-up re-researches in the SAME thread instead of starting
+        # from nothing. The engine's shape is `[[role, text], …]`.
+        history = _ask_history(data.get("history"))
+
+        # The passages the user quoted out of an earlier answer. They travel
+        # with the query as genuine prior context.
+        quotes = _ask_quotes(data.get("quotes"))
+
+        payload_body: dict[str, object] = {
+            "query": query,
+            "optimizationMode": mode,
+            "sources": sources,
+            "history": history,
+            "stream": True,
+        }
+        if quotes:
+            payload_body["quotes"] = quotes
+
+        payload = json.dumps(payload_body).encode("utf-8")
 
         backend_url = self._ask_backend_url()
         timeout = aiohttp.ClientTimeout(

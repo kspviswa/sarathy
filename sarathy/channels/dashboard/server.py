@@ -88,6 +88,9 @@ ASK_HISTORY_ROLES = ("human", "assistant")
 # How many history turns / quoted passages one Ask request may carry.
 ASK_MAX_HISTORY = 20
 ASK_MAX_QUOTES = 12
+# The sentinel a request carries when its group id is neither a string nor
+# absent — a group id that is nonsense gets a 400, not a silent move.
+_ASK_BAD_GROUP = "\x00bad-group"
 
 # Content-Security-Policy for the dashboard shell.
 #
@@ -1091,7 +1094,16 @@ class DashboardChannel(BaseChannel):
         app.router.add_get("/api/ask/threads", self._api_ask_threads)
         app.router.add_post("/api/ask/threads", self._api_ask_thread_create)
         app.router.add_get("/api/ask/threads/{thread_id}", self._api_ask_thread_detail)
+        app.router.add_patch("/api/ask/threads/{thread_id}", self._api_ask_thread_move)
         app.router.add_delete("/api/ask/threads/{thread_id}", self._api_ask_thread_delete)
+        # The thread GROUPS (job 151 §A) — the named buckets the Ask history
+        # is sorted into. A group never owns its threads: deleting one clears
+        # the threads' group and leaves them alone.
+        app.router.add_get("/api/ask/groups", self._api_ask_groups)
+        app.router.add_post("/api/ask/groups", self._api_ask_group_create)
+        app.router.add_get("/api/ask/groups/{group_id}", self._api_ask_group_detail)
+        app.router.add_patch("/api/ask/groups/{group_id}", self._api_ask_group_update)
+        app.router.add_delete("/api/ask/groups/{group_id}", self._api_ask_group_delete)
         app.router.add_post("/api/media", self._api_media_upload)
         app.router.add_get("/api/media", self._api_media_serve)
         app.router.add_get("/api/config", self._api_get_config)
@@ -1796,11 +1808,21 @@ class DashboardChannel(BaseChannel):
         The list carries NO turn bodies: a title, a turn count and a
         timestamp per thread. The bodies come from the detail call, so the
         list stays small no matter how long the history gets.
+
+        `?groupId=` narrows the list to one group; an EMPTY value narrows it
+        to the threads that belong to none (the uncategorized ones).
         """
         if self._ask_disabled():
             return self._ask_error("not found", "not_found", 404)
+        group_filter = request.query.get("groupId")
         try:
-            threads = self._ask_store_instance().list_threads()
+            store = self._ask_store_instance()
+            if group_filter is None:
+                threads = store.list_threads()
+            elif not group_filter.strip():
+                threads = store.list_threads(uncategorized=True)
+            else:
+                threads = store.list_threads(group_id=group_filter.strip())
         except Exception as err:
             logger.warning("Could not list the Ask threads: {}", err)
             return self._ask_error("ask threads unavailable", "store_unavailable", 503)
@@ -1809,10 +1831,11 @@ class DashboardChannel(BaseChannel):
     async def _api_ask_thread_create(self, request: web.Request) -> web.Response:
         """POST /api/ask/threads — create (or replace) one thread.
 
-        The body is ``{id?, title?, turns?}``. The id is optional: the
+        The body is ``{id?, title?, turns?, groupId?}``. The id is optional: the
         browser owns the thread ids it already has, and the one-time
         migration of the old local history must keep them. The title defaults
-        to the first query of the first turn.
+        to the first query of the first turn. The group is optional too: a
+        thread can be born inside a group.
 
         The write is an UPSERT, so retrying a failed migration never
         duplicates a thread.
@@ -1831,10 +1854,17 @@ class DashboardChannel(BaseChannel):
         title = str(data.get("title") or "").strip()
         raw_turns = data.get("turns")
         turns = [t for t in raw_turns if isinstance(t, dict)] if isinstance(raw_turns, list) else []
+        group_id = self._ask_group_id(data.get("groupId"))
+        if group_id == _ASK_BAD_GROUP:
+            return self._ask_error("invalid group", "invalid_group", 400)
+
+        store = self._ask_store_instance()
+        if group_id and store.get_group(group_id) is None:
+            return self._ask_error("unknown group", "unknown_group", 400)
 
         try:
-            thread = self._ask_store_instance().create_thread(
-                title=title, thread_id=thread_id or None, turns=turns
+            thread = store.create_thread(
+                title=title, thread_id=thread_id or None, turns=turns, group_id=group_id
             )
         except Exception as err:
             logger.warning("Could not create the Ask thread: {}", err)
@@ -1855,6 +1885,40 @@ class DashboardChannel(BaseChannel):
             return self._ask_error("not found", "not_found", 404)
         return web.json_response(stored)
 
+    async def _api_ask_thread_move(self, request: web.Request) -> web.Response:
+        """PATCH /api/ask/threads/{id} — move a thread into a group.
+
+        The body is ``{groupId}``. A group id files the thread under that
+        group; ``null`` takes it out of every group (uncategorized). A group
+        that does not exist is a 400, an unknown thread a 404.
+        """
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+        thread_id = request.match_info.get("thread_id", "")
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+
+        group_id = self._ask_group_id(data.get("groupId"))
+        if group_id == _ASK_BAD_GROUP:
+            return self._ask_error("invalid group", "invalid_group", 400)
+
+        store = self._ask_store_instance()
+        if group_id and store.get_group(group_id) is None:
+            return self._ask_error("unknown group", "unknown_group", 400)
+
+        try:
+            thread = store.move_thread(thread_id, group_id)
+        except Exception as err:
+            logger.warning("Could not move the Ask thread {}: {}", thread_id, err)
+            return self._ask_error("ask threads unavailable", "store_unavailable", 503)
+        if thread is None:
+            return self._ask_error("not found", "not_found", 404)
+        return web.json_response({"thread": thread})
+
     async def _api_ask_thread_delete(self, request: web.Request) -> web.Response:
         """DELETE /api/ask/threads/{id} — forget a thread and its turns."""
         if self._ask_disabled():
@@ -1868,6 +1932,122 @@ class DashboardChannel(BaseChannel):
         if not deleted:
             return self._ask_error("not found", "not_found", 404)
         return web.json_response({"ok": True})
+
+    # ------------------------------------------------------------------ ask groups api
+
+    async def _api_ask_groups(self, request: web.Request) -> web.Response:
+        """GET /api/ask/groups — the groups, newest first, with thread counts."""
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+        try:
+            groups = self._ask_store_instance().list_groups()
+        except Exception as err:
+            logger.warning("Could not list the Ask groups: {}", err)
+            return self._ask_error("ask groups unavailable", "store_unavailable", 503)
+        return web.json_response({"groups": groups})
+
+    async def _api_ask_group_create(self, request: web.Request) -> web.Response:
+        """POST /api/ask/groups — create one group.
+
+        The body is ``{name, description?}``. A group with no name is a 400:
+        a nameless bucket is not a bucket.
+        """
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return self._ask_error("a group needs a name", "invalid_name", 400)
+        description = str(data.get("description") or "").strip()
+
+        try:
+            group = self._ask_store_instance().create_group(name, description)
+        except Exception as err:
+            logger.warning("Could not create the Ask group: {}", err)
+            return self._ask_error("ask groups unavailable", "store_unavailable", 503)
+        return web.json_response({"group": group}, status=201)
+
+    async def _api_ask_group_detail(self, request: web.Request) -> web.Response:
+        """GET /api/ask/groups/{id} — one group and its thread count."""
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+        group_id = request.match_info.get("group_id", "")
+        try:
+            group = self._ask_store_instance().get_group(group_id)
+        except Exception as err:
+            logger.warning("Could not read the Ask group {}: {}", group_id, err)
+            return self._ask_error("ask groups unavailable", "store_unavailable", 503)
+        if group is None:
+            return self._ask_error("not found", "not_found", 404)
+        return web.json_response({"group": group})
+
+    async def _api_ask_group_update(self, request: web.Request) -> web.Response:
+        """PATCH /api/ask/groups/{id} — rename a group, or describe it.
+
+        The body is ``{name?, description?}``. A blank name keeps the name the
+        group has — renaming a group to nothing is not a rename.
+        """
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+        group_id = request.match_info.get("group_id", "")
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+
+        name = data.get("name")
+        description = data.get("description")
+        try:
+            group = self._ask_store_instance().update_group(
+                group_id,
+                name=str(name).strip() if isinstance(name, str) else None,
+                description=str(description).strip() if isinstance(description, str) else None,
+            )
+        except Exception as err:
+            logger.warning("Could not rename the Ask group {}: {}", group_id, err)
+            return self._ask_error("ask groups unavailable", "store_unavailable", 503)
+        if group is None:
+            return self._ask_error("not found", "not_found", 404)
+        return web.json_response({"group": group})
+
+    async def _api_ask_group_delete(self, request: web.Request) -> web.Response:
+        """DELETE /api/ask/groups/{id} — delete a group; its threads survive.
+
+        The threads lose their group FIRST and land in uncategorized — a
+        group is a filing, not an owner.
+        """
+        if self._ask_disabled():
+            return self._ask_error("not found", "not_found", 404)
+        group_id = request.match_info.get("group_id", "")
+        try:
+            deleted = self._ask_store_instance().delete_group(group_id)
+        except Exception as err:
+            logger.warning("Could not delete the Ask group {}: {}", group_id, err)
+            return self._ask_error("ask groups unavailable", "store_unavailable", 503)
+        if not deleted:
+            return self._ask_error("not found", "not_found", 404)
+        return web.json_response({"ok": True})
+
+    @staticmethod
+    def _ask_group_id(value: object) -> str | None:
+        """The group id a request carries — None for "no group".
+
+        A group id that is neither a string nor absent is nonsense, and the
+        caller answers 400 for it (the sentinel below).
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return _ASK_BAD_GROUP
+        return value.strip() or None
 
     # ------------------------------------------------------------------ media api
 

@@ -104,8 +104,14 @@ _CSP = "; ".join(
         "default-src 'self'",
         "script-src 'self' 'unsafe-inline'",
         "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data: blob:",
-        "media-src 'self' blob:",
+        # Ask's media rail draws images and video thumbnails that live on the
+        # open web (SearXNG image results, YouTube thumbnails). Same-origin
+        # only meant every one of them rendered as an empty box.
+        "img-src 'self' data: blob: https:",
+        "media-src 'self' blob: https:",
+        # The video lightbox embeds the provider's player.
+        "frame-src https://www.youtube.com https://www.youtube-nocookie.com"
+        " https://player.vimeo.com",
         "font-src 'self' data:",
         "connect-src 'self' ws: wss:",
         "object-src 'none'",
@@ -1446,6 +1452,32 @@ class DashboardChannel(BaseChannel):
             logger.warning("Could not read the ask backend URL: {}", err)
         return (url or "http://127.0.0.1:7777").rstrip("/")
 
+    def _ask_profile(self) -> tuple[dict[str, str], str]:
+        """The asker's profile and timezone, from configuration.
+
+        Returns ``({}, timezone)`` when nothing is configured — an empty
+        profile is not sent, so the engine never grows an empty section.
+        Never raises: a broken config must not break Ask.
+        """
+        timezone_name = "America/Toronto"
+        try:
+            ask_cfg = self._load_full_config().ask
+        except Exception as err:
+            logger.warning("Could not read the Ask profile: {}", err)
+            return {}, timezone_name
+        name = str(getattr(ask_cfg, "profile_name", "") or "").strip()
+        location = str(getattr(ask_cfg, "profile_location", "") or "").strip()
+        about = str(getattr(ask_cfg, "profile_about", "") or "").strip()
+        timezone_name = str(getattr(ask_cfg, "timezone", "") or timezone_name)
+        profile: dict[str, str] = {}
+        if name:
+            profile["name"] = name
+        if location:
+            profile["location"] = location
+        if about:
+            profile["aboutMe"] = about
+        return profile, timezone_name
+
     async def _api_ask(self, request: web.Request) -> web.StreamResponse:
         """Proxy one Ask turn to the backend, relaying its NDJSON frames.
 
@@ -1515,6 +1547,23 @@ class DashboardChannel(BaseChannel):
         }
         if quotes:
             payload_body["quotes"] = quotes
+
+        # Who is asking, and what time it is for them.
+        #
+        # The research engine personalizes the answer with this: the writer
+        # prompt says "the user lives in X" so a question with no place in it
+        # resolves to the asker's place, and a follow-up can lean on what the
+        # asker already told us. Uttaram's browser supplies its own profile
+        # from localStorage; ours comes from CONFIGURATION, so a compromised
+        # page cannot impersonate the user to the research engine.
+        profile, ask_timezone = self._ask_profile()
+        if profile:
+            payload_body["userProfile"] = profile
+        payload_body["enableMemories"] = True
+        payload_body["metadata"] = {
+            "currentDate": datetime.now(timezone.utc).isoformat(),
+            "timezone": ask_timezone,
+        }
 
         payload = json.dumps(payload_body).encode("utf-8")
 

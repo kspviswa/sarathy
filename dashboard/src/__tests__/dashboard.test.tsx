@@ -533,7 +533,7 @@ it("Cmd+Enter sends the message", () => {
 describe("Composer — always-show Send while streaming", () => {
    it("desktop: Send button is present and enabled while streaming is true", () => {
      const onSend = vi.fn();
-     const utils = render(<ChatView {...defaultProps} streaming={true} onSend={onSend} />);
+     render(<ChatView {...defaultProps} streaming={true} onSend={onSend} />);
      const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
      fireEvent.change(textarea, { target: { value: "hello" } });
      const sendBtn = document.querySelector('[aria-label="Send"]') as HTMLElement;
@@ -550,7 +550,7 @@ describe("Composer — always-show Send while streaming", () => {
 
    it("mobile: Send button is present and enabled while streaming is true", () => {
      const onSend = vi.fn();
-     const utils = render(<MobileChatView {...defaultProps} streaming={true} onSend={onSend} />);
+     render(<MobileChatView {...defaultProps} streaming={true} onSend={onSend} />);
      const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
      fireEvent.change(textarea, { target: { value: "hello" } });
      const sendBtn = document.querySelector('[aria-label="Send"]') as HTMLElement;

@@ -22,6 +22,8 @@ import { PresenceIndicator } from "@/components/Presence";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
+import { setActiveAskThreadId } from "@/lib/ask";
+import { toSection, type NavSection } from "@/lib/navigation";
 import type { SlashCommand } from "@/lib/palette";
 import type { Quote } from "@/lib/quotes";
 import {
@@ -48,25 +50,19 @@ import { cn } from "@/lib/utils";
 import { DashboardSocket } from "@/lib/ws";
 import { AskView } from "@/views/AskView";
 import { ChatView, type ChatMessage } from "@/views/ChatView";
-import { ConfigView } from "@/views/ConfigView";
 import { FilesView } from "@/views/FilesView";
 import { JobsView } from "@/views/JobsView";
 import { PairView } from "@/views/PairView";
 import { SessionsView } from "@/views/SessionsView";
-import { StatusView } from "@/views/StatusView";
+import { SettingsView, type SettingsSegment } from "@/views/SettingsView";
 
 export type { ChatMessage } from "@/views/ChatView";
 
 /** Navigation is tab-style: picking a section swaps the main content area
- *  (spec §A). Chat is the default; the rest are peer sections, not drawers. */
-export type Section =
-  | "chat"
-  | "ask"
-  | "sessions"
-  | "files"
-  | "jobs"
-  | "config"
-  | "status";
+ *  (spec §A). Chat is the default; the rest are peer sections, not drawers.
+ *
+ *  Config and Status merged into ONE `settings` section (spec §B). */
+export type Section = NavSection;
 
 const SECTIONS: { id: Section; label: string; icon: typeof Gauge; mobile?: boolean }[] = [
   { id: "chat", label: "Chat", icon: MessageSquareText, mobile: true },
@@ -74,22 +70,13 @@ const SECTIONS: { id: Section; label: string; icon: typeof Gauge; mobile?: boole
   { id: "sessions", label: "Sessions", icon: History, mobile: true },
   { id: "files", label: "Files", icon: FileCode2, mobile: true },
   { id: "jobs", label: "Jobs", icon: Briefcase, mobile: true },
-  { id: "config", label: "Config", icon: Settings, mobile: true },
-  { id: "status", label: "Status", icon: Gauge },
+  { id: "settings", label: "Settings", icon: Settings, mobile: true },
 ];
-
-const SECTION_IDS = new Set<string>(SECTIONS.map((s) => s.id));
-
-/** Map a notification frame's `tab` onto a real section; unknown tabs are
- *  ignored rather than blanking the main area. */
-function toSection(tab: string | undefined | null): Section | null {
-  if (!tab) return null;
-  return SECTION_IDS.has(tab) ? (tab as Section) : null;
-}
 
 function AppInner() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [section, setSection] = useState<Section>("chat");
+  const [settingsSegment, setSettingsSegment] = useState<SettingsSegment>("form");
   const [transcriptKey, setTranscriptKey] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   /**
@@ -170,11 +157,27 @@ function AppInner() {
     setRailOpen(false);
   }, []);
 
-  const { notifications, unreadIds, markAllRead, markRead } = useNotifications(socket, {
-    navigateTo: (tab) => {
+  /**
+   * Where a notification frame (or an old link) wants to go.
+   *
+   * `config` and `status` are the OLD ids of the two surfaces that merged
+   * into Settings: they land on the segment they used to be. An unknown id
+   * is ignored — it must never blank the main area.
+   */
+  const navigate = useCallback(
+    (tab: string | undefined | null) => {
       const target = toSection(tab);
-      if (target) selectSection(target);
+      if (!target) return;
+      if (target.section === "settings") {
+        setSettingsSegment(target.settingsSegment ?? "form");
+      }
+      selectSection(target.section);
     },
+    [selectSection],
+  );
+
+  const { notifications, unreadIds, markAllRead, markRead } = useNotifications(socket, {
+    navigateTo: (tab) => navigate(tab),
     onMarkAllRead: () => setUnread({}),
   });
 
@@ -229,8 +232,8 @@ function AppInner() {
 
     const unsubNotif = socket.onNotification((n) => {
       const t = toSection(n.payload.tab);
-      if (t && t !== sectionRef.current) {
-        setUnread((prev) => ({ ...prev, [t]: (prev[t] ?? 0) + 1 }));
+      if (t && t.section !== sectionRef.current) {
+        setUnread((prev) => ({ ...prev, [t.section]: (prev[t.section] ?? 0) + 1 }));
       }
     });
 
@@ -378,6 +381,21 @@ function AppInner() {
       if (!text.trim()) return;
       setFollowUpSeed({ text, nonce: Date.now() });
       selectSection("chat");
+    },
+    [selectSection],
+  );
+
+  /**
+   * Open an Ask research thread in the Ask canvas (spec §C).
+   *
+   * The Asks list lives in Sessions, the thread lives in the Ask canvas — the
+   * pointer between them is the shared module, so the canvas restores the
+   * thread (its turns, its sources and its research timeline) when it mounts.
+   */
+  const handleOpenAskThread = useCallback(
+    (threadId: string) => {
+      setActiveAskThreadId(threadId);
+      selectSection("ask");
     },
     [selectSection],
   );
@@ -575,10 +593,7 @@ function AppInner() {
             unreadIds={unreadIds}
             onMarkAllRead={markAllRead}
             onMarkRead={markRead}
-            onNavigate={(tab) => {
-              const target = toSection(tab);
-              if (target) selectSection(target);
-            }}
+            onNavigate={(tab) => navigate(tab)}
             onReply={(n) => void handleNotificationReply(n)}
           />
           <ThemeToggle />
@@ -656,7 +671,11 @@ function AppInner() {
           )}
 
           {section === "sessions" && (
-            <SessionsView initialKey={transcriptKey} onOpenThread={handleOpenThread} />
+            <SessionsView
+              initialKey={transcriptKey}
+              onOpenThread={handleOpenThread}
+              onOpenAskThread={handleOpenAskThread}
+            />
           )}
 
           {section === "files" && (
@@ -671,16 +690,13 @@ function AppInner() {
             </div>
           )}
 
-          {section === "config" && (
-            <div className="h-full overflow-y-auto">
-              <ConfigView />
-            </div>
-          )}
-
-          {section === "status" && (
-            <div className="h-full overflow-y-auto">
-              <StatusView onLoggedOut={logout} />
-            </div>
+          {section === "settings" && (
+            <SettingsView
+              segment={settingsSegment}
+              onSegmentChange={setSettingsSegment}
+              onLoggedOut={logout}
+              variant="desktop"
+            />
           )}
         </div>
       </main>

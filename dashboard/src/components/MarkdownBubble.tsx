@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
@@ -19,25 +20,33 @@ import { cn } from "@/lib/utils";
  * chunk — mounting it per user bubble would download it for every conversation.
  *
  * `onPrimary` re-points the `.md` code/link colours at the bubble's own colour:
- * those rules assume a card background, and on the primary fill an
+ * those rules assume a card background, and on the primary fill a
  * `text-foreground` code span would be near-invisible dark-on-primary.
+ *
+ * `components` lets a caller extend the shared map WITHOUT forking the
+ * renderer: the Ask answer (spec §D.5) needs its own link renderer so the
+ * engine's `[n]` citation markers keep working inside markdown, and it must
+ * not become a second renderer.
  */
 export function MarkdownBubble({
   content,
   onPrimary = false,
   className,
+  components,
 }: {
   content: string;
   /** Render inside a primary-filled (user) bubble. */
   onPrimary?: boolean;
   className?: string;
+  /** Extra renderers, merged over the shared `MD_COMPONENTS`. */
+  components?: Components;
 }) {
   return (
     <div className={cn("md", onPrimary && "md-on-primary", className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={SAFE_REHYPE_PLUGINS}
-        components={MD_COMPONENTS}
+        components={components ? { ...MD_COMPONENTS, ...components } : MD_COMPONENTS}
       >
         {content}
       </ReactMarkdown>

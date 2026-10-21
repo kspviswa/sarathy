@@ -310,6 +310,6 @@ describe("motion is present but reduced-motion aware (job 132 §E)", () => {
     // ...and it is the last row, so existing history does not re-animate.
     const all = document.querySelectorAll("[data-testid^='message-row-']");
     expect(all).toHaveLength(2);
-    expect(rows[0]).toContainElement(all[1]);
+    expect(rows[0] as HTMLElement).toContainElement(all[1] as HTMLElement);
   });
 });

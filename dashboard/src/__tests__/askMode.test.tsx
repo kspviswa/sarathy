@@ -1,21 +1,32 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import React from "react";
 
 import {
   ASK_MODES,
   ASK_SOURCE_KINDS,
+  appendAskTurn,
+  createAskThread,
+  deleteAskThread,
   describeAskStep,
   formatAskUsage,
   initialAskState,
   loadAskHistory,
+  loadAskThreads,
+  normaliseCitationMarkers,
   parseAskFrames,
+  phaseLabel,
+  preprocessAskCitations,
   pushAskHistory,
   reduceAskFrame,
+  saveAskThreads,
   splitAnswerCitations,
   useAskStream,
+  ASK_HISTORY_KEY,
+  ASK_THREADS_KEY,
   type AskFrame,
   type AskState,
+  type AskThread,
+  type AskTurn,
 } from "@/lib/ask";
 import { AskView } from "@/views/AskView";
 import { AskView as MobileAskView } from "@/mobile/AskView";
@@ -217,10 +228,41 @@ describe("Ask reducer — every frame type", () => {
 
     expect(state.answer).toBe("Paris is the capital of France[1].");
     expect(state.sources).toHaveLength(1);
-    expect(state.steps).toHaveLength(2);
+    // Two research steps from the wire, plus the DERIVED `found` step the
+    // reducer adds when the `sources` frame lands (spec §D.3).
+    expect(state.steps).toHaveLength(3);
     expect(state.usage?.iterations).toBe(2);
     expect(state.streaming).toBe(false);
     expect(state.phase).toBe("done");
+  });
+
+  it("the reasoning step is kept, and a grown plan updates it in place", () => {
+    const state = fold([
+      { type: "step", data: { kind: "reasoning", reasoning: "Looking for" } },
+      { type: "step", data: { kind: "reasoning", reasoning: "Looking for Paris" } },
+    ]);
+
+    expect(state.steps).toHaveLength(1);
+    expect(state.steps[0]).toEqual({
+      kind: "reasoning",
+      reasoning: "Looking for Paris",
+    });
+  });
+
+  it("the `found` step is derived from the sources frame", () => {
+    const state = fold([
+      { type: "step", data: { kind: "searching", queries: ["a"] } },
+      {
+        type: "sources",
+        data: [
+          { idx: 1, title: "One", url: "https://x.test/1", domain: "x.test" },
+          { idx: 2, title: "Two", url: "https://y.test/2", domain: "y.test" },
+        ],
+      },
+    ]);
+
+    expect(state.steps).toHaveLength(2);
+    expect(state.steps[1]).toEqual({ kind: "found", count: 2 });
   });
 });
 
@@ -285,6 +327,132 @@ describe("Ask helpers", () => {
       "discussions",
       "academic",
     ]);
+  });
+
+  it("the phase line speaks Uttaram's three words (spec §D.2)", () => {
+    expect(phaseLabel("classifying")).toBe("Classifying query…");
+    expect(phaseLabel("researching")).toBe("Brainstorming…");
+    expect(phaseLabel("writing")).toBe("Generating answer…");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The citation markers (complaint #4 / #7)
+// ---------------------------------------------------------------------------
+
+describe("Ask citations", () => {
+  it("a [n] marker becomes a link to the sentinel the renderer intercepts", () => {
+    expect(preprocessAskCitations("Paris[1] is nice[2].")).toBe(
+      "Paris[1](#cite-1) is nice[2](#cite-2).",
+    );
+  });
+
+  it("a [n,m] marker becomes one link per number", () => {
+    expect(preprocessAskCitations("Both[1,2] agree.")).toBe(
+      "Both[1](#cite-1)[2](#cite-2) agree.",
+    );
+  });
+
+  it("a real markdown link is left alone", () => {
+    const text = "See [1](https://example.com/a) for details.";
+    expect(preprocessAskCitations(text)).toBe(text);
+  });
+
+  it("the copy action puts the plain [n] markers back", () => {
+    expect(normaliseCitationMarkers("Paris[1](#cite-1) and [2](#cite-2)")).toBe(
+      "Paris[1] and [2]",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The thread model (spec §D.1)
+// ---------------------------------------------------------------------------
+
+describe("Ask threads", () => {
+  const turn = (id: string, query = `q-${id}`): AskTurn => ({
+    id,
+    query,
+    mode: "speed",
+    sources: ["web"],
+    answer: `a-${id}`,
+    sourcesList: [],
+    steps: [],
+    createdAt: 1_700_000_000_000,
+  });
+
+  it("a turn opens a thread whose title is the first query", () => {
+    const thread = createAskThread(turn("t1", "What is the capital of France?"));
+    expect(thread.turns).toHaveLength(1);
+    expect(thread.title).toBe("What is the capital of France?");
+  });
+
+  it("a long title is clipped", () => {
+    const thread = createAskThread(turn("t1", "x".repeat(200)));
+    expect(thread.title.length).toBeLessThanOrEqual(81);
+  });
+
+  it("appending a turn keeps it in the same thread", () => {
+    const first = createAskThread(turn("t1"));
+    const threads = appendAskTurn([first], first.id, turn("t2"));
+
+    expect(threads).toHaveLength(1);
+    expect(threads[0].turns.map((t) => t.id)).toEqual(["t1", "t2"]);
+    // The title stays the FIRST question.
+    expect(threads[0].title).toBe("q-t1");
+  });
+
+  it("a turn for an unknown thread opens a new one", () => {
+    const threads = appendAskTurn([], "thread-x", turn("t1"));
+    expect(threads).toHaveLength(1);
+    expect(threads[0].id).toBe("thread-x");
+  });
+
+  it("the thread list is capped at 50", () => {
+    let threads: AskThread[] = [];
+    for (let i = 0; i < 60; i += 1) {
+      threads = saveAskThreads(appendAskTurn(threads, `thread-${i}`, turn(`t${i}`)));
+    }
+    expect(threads).toHaveLength(50);
+    expect(JSON.parse(localStorage.getItem(ASK_THREADS_KEY) ?? "[]")).toHaveLength(50);
+  });
+
+  it("a thread can be deleted", () => {
+    const thread = createAskThread(turn("t1"));
+    expect(deleteAskThread([thread], thread.id)).toHaveLength(0);
+  });
+
+  it("a v1 history payload migrates into v2 threads, newest first", () => {
+    localStorage.setItem(
+      ASK_HISTORY_KEY,
+      JSON.stringify([
+        { id: "old-1", query: "first", mode: "speed", sources: ["web"], answer: "a1", createdAt: 2 },
+        { id: "old-2", query: "second", mode: "speed", sources: ["web"], answer: "a2", createdAt: 1 },
+      ]),
+    );
+
+    const threads = loadAskThreads();
+
+    expect(threads).toHaveLength(2);
+    expect(threads[0].id).toBe("old-1");
+    expect(threads[0].title).toBe("first");
+    expect(threads[0].turns).toHaveLength(1);
+    expect(threads[0].turns[0].answer).toBe("a1");
+    // The v1 key is gone — the migration happened, not a wipe.
+    expect(localStorage.getItem(ASK_HISTORY_KEY)).toBeNull();
+    expect(localStorage.getItem(ASK_THREADS_KEY)).toContain("first");
+  });
+
+  it("a corrupt v1 payload yields an empty list and never throws", () => {
+    localStorage.setItem(ASK_HISTORY_KEY, "{not json at all");
+
+    expect(() => loadAskThreads()).not.toThrow();
+    expect(loadAskThreads()).toEqual([]);
+  });
+
+  it("a v1 payload that is not an array yields an empty list", () => {
+    localStorage.setItem(ASK_HISTORY_KEY, JSON.stringify({ nope: true }));
+    expect(loadAskThreads()).toEqual([]);
   });
 });
 
@@ -441,6 +609,192 @@ describe("Ask view — desktop and mobile render the same state", () => {
     expect(academic).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(academic);
     expect(academic).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The answer is REAL markdown (complaint #4) and the citations are live
+// ---------------------------------------------------------------------------
+
+const MARKDOWN_ANSWER = [
+  "# Paris",
+  "",
+  "It is the **capital** of France[1], and [9] is not a source.",
+  "",
+  "- one",
+  "- two",
+  "",
+  "```py",
+  "print('hi')",
+  "```",
+  "",
+  "| a | b |",
+  "| --- | --- |",
+  "| 1 | 2 |",
+  "",
+].join("\n");
+
+const MARKDOWN_FRAMES: AskFrame[] = [
+  { type: "init" },
+  { type: "phase", data: { phase: "writing" } },
+  {
+    type: "sources",
+    data: [
+      {
+        idx: 1,
+        title: "Paris - Wikipedia",
+        url: "https://en.wikipedia.org/wiki/Paris",
+        domain: "en.wikipedia.org",
+      },
+    ],
+  },
+  { type: "response", data: MARKDOWN_ANSWER },
+  { type: "done" },
+];
+
+async function askARound(view: React.ReactElement, query = "What is the capital of France?") {
+  render(view);
+  await act(async () => {
+    fireEvent.change(screen.getByTestId("ask-query"), { target: { value: query } });
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("ask-submit"));
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(screen.getByTestId("ask-answer")).toBeInTheDocument());
+}
+
+describe("Ask view — the answer is real markdown, not raw text", () => {
+  it("renders headings, bold, lists, code fences and GFM tables as real DOM", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(MARKDOWN_FRAMES)));
+
+    await askARound(<AskView />);
+
+    const answer = screen.getByTestId("ask-answer-markdown");
+    expect(answer.querySelector("h1")).toHaveTextContent("Paris");
+    expect(answer.querySelector("strong")).toHaveTextContent("capital");
+    expect(answer.querySelector("ul > li")).toBeInTheDocument();
+    expect(answer.querySelector("pre > code")).toHaveTextContent("print('hi')");
+    expect(answer.querySelector("table > tbody > tr")).toBeInTheDocument();
+  });
+
+  it("a [n] marker is a pill that links to the source; an unknown one stays text", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(MARKDOWN_FRAMES)));
+
+    await askARound(<AskView />);
+
+    const pill = screen.getByTestId("ask-citation-1");
+    expect(pill).toHaveAttribute("href", "https://en.wikipedia.org/wiki/Paris");
+    expect(pill).toHaveAttribute("target", "_blank");
+    expect(pill).toHaveTextContent("[1]");
+
+    // Out of range: no pill, just the marker.
+    expect(screen.queryByTestId("ask-citation-9")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ask-answer-markdown")).toHaveTextContent("[9]");
+  });
+
+  it("the mobile view renders the same markdown", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(MARKDOWN_FRAMES)));
+
+    await askARound(<MobileAskView />);
+
+    const answer = screen.getByTestId("ask-answer-markdown");
+    expect(answer.querySelector("h1")).toHaveTextContent("Paris");
+    expect(answer.querySelector("table > tbody > tr")).toBeInTheDocument();
+    expect(screen.getByTestId("ask-citation-1")).toHaveAttribute(
+      "href",
+      "https://en.wikipedia.org/wiki/Paris",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Quote and reply on Ask (spec §E)
+// ---------------------------------------------------------------------------
+
+describe("Ask view — quote and reply", () => {
+  it("Reply seeds the composer with the replied-to turn", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(FRAMES)));
+
+    await askARound(<AskView />);
+
+    fireEvent.click(screen.getByTestId("ask-action-reply"));
+
+    expect(screen.getByTestId("ask-reply-context")).toHaveTextContent(
+      "What is the capital of France?",
+    );
+  });
+
+  it("the reply banner can be dismissed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(FRAMES)));
+
+    await askARound(<AskView />);
+    fireEvent.click(screen.getByTestId("ask-action-reply"));
+    expect(screen.getByTestId("ask-reply-context")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("ask-reply-dismiss"));
+    expect(screen.queryByTestId("ask-reply-context")).not.toBeInTheDocument();
+  });
+
+  it("Quote drops the answer on the composer as a chip", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(FRAMES)));
+
+    await askARound(<AskView />);
+    fireEvent.click(screen.getByTestId("ask-action-quote"));
+
+    expect(screen.getByTestId("quote-chip")).toHaveTextContent(
+      "Paris is the capital of France[1].",
+    );
+  });
+
+  it("the next request carries the reply's history and the quotes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(oneShotStream(FRAMES));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await askARound(<AskView />);
+
+    // Reply to the finished turn, then ask a follow-up.
+    fireEvent.click(screen.getByTestId("ask-action-reply"));
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("ask-query"), {
+        target: { value: "And its population?" },
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("ask-submit"));
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    expect(body.query).toBe("And its population?");
+    // The replied-to turn's question and answer ground the follow-up.
+    expect(body.history).toEqual([
+      ["human", "What is the capital of France?"],
+      ["assistant", "Paris is the capital of France[1]."],
+    ]);
+  });
+
+  it("a quoted passage travels with the request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(oneShotStream(FRAMES));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await askARound(<AskView />);
+    fireEvent.click(screen.getByTestId("ask-action-quote"));
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("ask-query"), {
+        target: { value: "More?" },
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("ask-submit"));
+      await Promise.resolve();
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    expect(body.quotes).toHaveLength(1);
+    expect(body.quotes[0].text).toBe("Paris is the capital of France[1].");
   });
 });
 

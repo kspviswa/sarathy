@@ -3,7 +3,6 @@ import { useCallback, useMemo, useRef, useState } from "react";
 
 import { AskComposer } from "@/components/ask/AskComposer";
 import { AskHeader } from "@/components/ask/AskHeader";
-import { AskMediaView } from "@/components/ask/AskMediaView";
 import { AskTurnCard } from "@/components/ask/AskTurnCard";
 import { JumpToLatest } from "@/components/JumpToLatest";
 import { QuoteActionBar, useTextSelection } from "@/components/QuoteAsk";
@@ -221,16 +220,6 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
                 ))
               )}
 
-              {isMobile && (
-                <AskMediaView
-                  media={(() => {
-                    const last = turns[turns.length - 1];
-                    if (last && last.media && last.media.length > 0) return last.media as any;
-                    return state.media;
-                  })()}
-                  variant="strip"
-                />
-              )}
             </div>
           </div>
 
@@ -259,14 +248,6 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
         />
       </div>
 
-      <AskMediaView
-        media={(() => {
-          const last = turns[turns.length - 1];
-          if (last && last.media && last.media.length > 0) return last.media as any;
-          return state.media;
-        })()}
-        variant="rail"
-      />
 
       <QuoteActionBar
         visible={selection.visible && selectionInAnswer}

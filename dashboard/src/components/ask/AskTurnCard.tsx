@@ -11,6 +11,7 @@ import { AskAnswer } from "@/components/ask/AskAnswer";
 import { AskResearchProgress } from "@/components/ask/AskResearchProgress";
 import { AskSources } from "@/components/ask/AskSources";
 import { AskMediaButtons } from "@/components/ask/AskMediaButtons";
+import { AskMediaView } from "@/components/ask/AskMediaView";
 import { copyText } from "@/components/ask/copy";
 import {
   formatAskUsage,
@@ -162,7 +163,12 @@ export function AskTurnCard({
         </div>
       )}
 
-      {/* ------------------------------------------------------- action row */}
+      {/* ------------------------------------------------------------- media */}
+      {/*
+        The media belongs to THIS turn, so it is drawn HERE. It used to be a
+        single rail fed by the LAST turn only: clicking "Search images" on any
+        earlier answer filled the store and drew nothing.
+      */}
       {hasAnswer && (
         <AskMediaButtons
           turn={turn}
@@ -172,6 +178,10 @@ export function AskTurnCard({
             if (onMediaUpdate) onMediaUpdate(turnId, media);
           }}
         />
+      )}
+
+      {hasAnswer && turn.media && turn.media.length > 0 && (
+        <AskMediaView media={turn.media} variant="strip" />
       )}
 
       {hasAnswer && (

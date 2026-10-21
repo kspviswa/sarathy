@@ -122,6 +122,18 @@ class AskConfig(Base):
     media_model_provider: str = "openrouter"
     media_model_key: str = "deepseek/deepseek-v4.1-flash-1017"
 
+    # Who is asking. Ask answers are PERSONALIZED with this: the research
+    # engine puts it in the writer prompt, so "what's the weather like?" means
+    # the asker's city and "my commute" means the asker's commute. Uttaram's
+    # browser reads these from localStorage; the gateway owns them here, the
+    # same way it owns the model choice — a page must not be able to claim to
+    # be someone else.
+    profile_name: str = ""
+    profile_location: str = ""
+    profile_about: str = ""
+    # The asker's clock. "Today" in an answer must be the asker's today.
+    timezone: str = "America/Toronto"
+
 
 class ChannelsConfig(Base):
     """Configuration for chat channels."""

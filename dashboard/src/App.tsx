@@ -22,7 +22,7 @@ import { PresenceIndicator } from "@/components/Presence";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
-import { setActiveAskThreadId } from "@/lib/ask";
+import { setActiveAskThreadId, subscribeAskHistoryRequest } from "@/lib/ask";
 import { toSection, type NavSection } from "@/lib/navigation";
 import type { SlashCommand } from "@/lib/palette";
 import type { Quote } from "@/lib/quotes";
@@ -156,6 +156,13 @@ function AppInner() {
     setUnread((prev) => ({ ...prev, [next]: 0 }));
     setRailOpen(false);
   }, []);
+
+  // The Ask canvas's history button asks for the Sessions surface (job 150
+  // §C): the Ask history lives there, behind its `Chats / Asks` switch.
+  useEffect(
+    () => subscribeAskHistoryRequest(() => selectSection("sessions")),
+    [selectSection],
+  );
 
   /**
    * Where a notification frame (or an old link) wants to go.

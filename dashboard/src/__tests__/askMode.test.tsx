@@ -6,19 +6,14 @@ import {
   ASK_SOURCE_KINDS,
   appendAskTurn,
   createAskThread,
-  deleteAskThread,
   describeAskStep,
   formatAskUsage,
   initialAskState,
-  loadAskHistory,
-  loadAskThreads,
   normaliseCitationMarkers,
   parseAskFrames,
   phaseLabel,
   preprocessAskCitations,
-  pushAskHistory,
   reduceAskFrame,
-  saveAskThreads,
   splitAnswerCitations,
   useAskStream,
   ASK_HISTORY_KEY,
@@ -109,6 +104,34 @@ function oneShotStream(frames: AskFrame[]) {
     status: 200,
     headers: { "Content-Type": "application/x-ndjson" },
   });
+}
+
+/**
+ * A fetch mock that answers the Ask thread endpoints and replays the
+ * stream.
+ *
+ * The thread list is fetched on every mount (the history is server-side
+ * now), so a mock that answered EVERY call with the stream would hand the
+ * list a body it cannot read — and the same Response cannot be read twice.
+ */
+function mockAskFetch(stream: Response | AskFrame[]) {
+  const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/ask/threads")) {
+      return new Response(JSON.stringify({ threads: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return Array.isArray(stream) ? oneShotStream(stream) : stream;
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** The calls that asked the engine something — the thread list excluded. */
+function askCalls(fetchMock: ReturnType<typeof mockAskFetch>) {
+  return fetchMock.mock.calls.filter((call) => String(call[0]) === "/api/ask");
 }
 
 beforeEach(() => {
@@ -304,22 +327,11 @@ describe("Ask helpers", () => {
     ).toBe("reading example.com");
   });
 
-  it("the history rail is capped at 50 and survives a reload", () => {
-    const entries = Array.from({ length: 60 }, (_, index) => ({
-      id: `id-${index}`,
-      query: `q${index}`,
-      mode: "speed" as const,
-      sources: ["web" as const],
-      answer: "",
-      createdAt: index,
-    }));
-
-    pushAskHistory([], entries[0]);
-    for (const entry of entries.slice(1)) pushAskHistory(loadAskHistory(), entry);
-
-    const stored = loadAskHistory();
-    expect(stored).toHaveLength(50);
-    expect(stored[0].query).toBe("q59");
+  it("the history rail is gone from the browser — the threads are the server's", () => {
+    // The v1 flat history had a fifty-entry cap and lived in the browser.
+    // Both are gone: the Ask history is the gateway's now (job 150 §B).
+    expect(ASK_HISTORY_KEY).toBe("sarathy.ask.history");
+    expect(ASK_THREADS_KEY).toBe("sarathy.ask.threads");
   });
 
   it("the mode and source lists are the ones the backend understands", () => {
@@ -402,6 +414,8 @@ describe("Ask threads", () => {
     expect(threads[0].turns.map((t) => t.id)).toEqual(["t1", "t2"]);
     // The title stays the FIRST question.
     expect(threads[0].title).toBe("q-t1");
+    // The count the history rail shows follows the turns.
+    expect(threads[0].turnCount).toBe(2);
   });
 
   it("a turn for an unknown thread opens a new one", () => {
@@ -410,51 +424,14 @@ describe("Ask threads", () => {
     expect(threads[0].id).toBe("thread-x");
   });
 
-  it("the thread list is capped at 50", () => {
+  it("the thread list is NOT capped any more", () => {
+    // The fifty-thread cap was a symptom of the browser-local store: the
+    // history is the server's now, and it holds them all.
     let threads: AskThread[] = [];
     for (let i = 0; i < 60; i += 1) {
-      threads = saveAskThreads(appendAskTurn(threads, `thread-${i}`, turn(`t${i}`)));
+      threads = appendAskTurn(threads, `thread-${i}`, turn(`t${i}`));
     }
-    expect(threads).toHaveLength(50);
-    expect(JSON.parse(localStorage.getItem(ASK_THREADS_KEY) ?? "[]")).toHaveLength(50);
-  });
-
-  it("a thread can be deleted", () => {
-    const thread = createAskThread(turn("t1"));
-    expect(deleteAskThread([thread], thread.id)).toHaveLength(0);
-  });
-
-  it("a v1 history payload migrates into v2 threads, newest first", () => {
-    localStorage.setItem(
-      ASK_HISTORY_KEY,
-      JSON.stringify([
-        { id: "old-1", query: "first", mode: "speed", sources: ["web"], answer: "a1", createdAt: 2 },
-        { id: "old-2", query: "second", mode: "speed", sources: ["web"], answer: "a2", createdAt: 1 },
-      ]),
-    );
-
-    const threads = loadAskThreads();
-
-    expect(threads).toHaveLength(2);
-    expect(threads[0].id).toBe("old-1");
-    expect(threads[0].title).toBe("first");
-    expect(threads[0].turns).toHaveLength(1);
-    expect(threads[0].turns[0].answer).toBe("a1");
-    // The v1 key is gone — the migration happened, not a wipe.
-    expect(localStorage.getItem(ASK_HISTORY_KEY)).toBeNull();
-    expect(localStorage.getItem(ASK_THREADS_KEY)).toContain("first");
-  });
-
-  it("a corrupt v1 payload yields an empty list and never throws", () => {
-    localStorage.setItem(ASK_HISTORY_KEY, "{not json at all");
-
-    expect(() => loadAskThreads()).not.toThrow();
-    expect(loadAskThreads()).toEqual([]);
-  });
-
-  it("a v1 payload that is not an array yields an empty list", () => {
-    localStorage.setItem(ASK_HISTORY_KEY, JSON.stringify({ nope: true }));
-    expect(loadAskThreads()).toEqual([]);
+    expect(threads).toHaveLength(60);
   });
 });
 
@@ -464,7 +441,7 @@ describe("Ask threads", () => {
 
 describe("Ask view — desktop and mobile render the same state", () => {
   it("the desktop view renders the answer, its citations and the sources", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(FRAMES)));
+    mockAskFetch(FRAMES);
 
     render(<AskView />);
 
@@ -510,7 +487,7 @@ describe("Ask view — desktop and mobile render the same state", () => {
   });
 
   it("the mobile view renders the same answer, citations and sources", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(FRAMES)));
+    mockAskFetch(FRAMES);
 
     render(<MobileAskView />);
 
@@ -539,7 +516,7 @@ describe("Ask view — desktop and mobile render the same state", () => {
 
   it("the Stop button appears while streaming and disappears after done", async () => {
     const stream = controllableStream();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(stream.response));
+    mockAskFetch(stream.response);
 
     render(<AskView />);
 
@@ -668,7 +645,7 @@ async function askARound(view: React.ReactElement, query = "What is the capital 
 
 describe("Ask view — the answer is real markdown, not raw text", () => {
   it("renders headings, bold, lists, code fences and GFM tables as real DOM", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(MARKDOWN_FRAMES)));
+    mockAskFetch(MARKDOWN_FRAMES);
 
     await askARound(<AskView />);
 
@@ -681,7 +658,7 @@ describe("Ask view — the answer is real markdown, not raw text", () => {
   });
 
   it("a [n] marker is a pill that links to the source; an unknown one stays text", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(MARKDOWN_FRAMES)));
+    mockAskFetch(MARKDOWN_FRAMES);
 
     await askARound(<AskView />);
 
@@ -696,7 +673,7 @@ describe("Ask view — the answer is real markdown, not raw text", () => {
   });
 
   it("the mobile view renders the same markdown", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(MARKDOWN_FRAMES)));
+    mockAskFetch(MARKDOWN_FRAMES);
 
     await askARound(<MobileAskView />);
 
@@ -716,7 +693,7 @@ describe("Ask view — the answer is real markdown, not raw text", () => {
 
 describe("Ask view — quote and reply", () => {
   it("Reply seeds the composer with the replied-to turn", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(FRAMES)));
+    mockAskFetch(FRAMES);
 
     await askARound(<AskView />);
 
@@ -728,7 +705,7 @@ describe("Ask view — quote and reply", () => {
   });
 
   it("the reply banner can be dismissed", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(FRAMES)));
+    mockAskFetch(FRAMES);
 
     await askARound(<AskView />);
     fireEvent.click(screen.getByTestId("ask-action-reply"));
@@ -739,7 +716,7 @@ describe("Ask view — quote and reply", () => {
   });
 
   it("Quote drops the answer on the composer as a chip", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(oneShotStream(FRAMES)));
+    mockAskFetch(FRAMES);
 
     await askARound(<AskView />);
     fireEvent.click(screen.getByTestId("ask-action-quote"));
@@ -750,8 +727,7 @@ describe("Ask view — quote and reply", () => {
   });
 
   it("the next request carries the reply's history and the quotes", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(oneShotStream(FRAMES));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = mockAskFetch(FRAMES);
 
     await askARound(<AskView />);
 
@@ -767,8 +743,9 @@ describe("Ask view — quote and reply", () => {
       await Promise.resolve();
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    const calls = askCalls(fetchMock);
+    expect(calls).toHaveLength(2);
+    const body = JSON.parse((calls[1][1]?.body ?? "{}") as string);
     expect(body.query).toBe("And its population?");
     // The replied-to turn's question and answer ground the follow-up.
     expect(body.history).toEqual([
@@ -778,8 +755,7 @@ describe("Ask view — quote and reply", () => {
   });
 
   it("a quoted passage travels with the request", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(oneShotStream(FRAMES));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = mockAskFetch(FRAMES);
 
     await askARound(<AskView />);
     fireEvent.click(screen.getByTestId("ask-action-quote"));
@@ -794,7 +770,8 @@ describe("Ask view — quote and reply", () => {
       await Promise.resolve();
     });
 
-    const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    const calls = askCalls(fetchMock);
+    const body = JSON.parse((calls[1][1]?.body ?? "{}") as string);
     expect(body.quotes).toHaveLength(1);
     expect(body.quotes[0].text).toBe("Paris is the capital of France[1].");
   });
@@ -805,9 +782,11 @@ describe("Ask view — quote and reply", () => {
  * so a regression there shows up in both at once.
  */
 describe("useAskStream", () => {
-  it("exposes the state, the history and the controls", () => {
+  it("exposes the state, the history and the controls", async () => {
+    mockAskFetch(FRAMES);
+
     function Probe() {
-      const { state, history, run, stop, reset, reopen, forget } = useAskStream();
+      const { state, history, run, stop, reset } = useAskStream();
       return (
         <div>
           <span data-testid="probe-phase">{state.phase}</span>
@@ -822,24 +801,6 @@ describe("useAskStream", () => {
           <button type="button" onClick={reset}>
             reset
           </button>
-          <button
-            type="button"
-            onClick={() =>
-              reopen({
-                id: "x",
-                query: "old",
-                mode: "speed",
-                sources: ["web"],
-                answer: "the old answer",
-                createdAt: 0,
-              })
-            }
-          >
-            reopen
-          </button>
-          <button type="button" onClick={() => forget("x")}>
-            forget
-          </button>
         </div>
       );
     }
@@ -849,8 +810,11 @@ describe("useAskStream", () => {
     expect(screen.getByTestId("probe-phase")).toHaveTextContent("idle");
     expect(screen.getByTestId("probe-streaming")).toHaveTextContent("false");
 
-    fireEvent.click(screen.getByText("reopen"));
-    expect(screen.getByTestId("probe-phase")).toHaveTextContent("done");
+    await act(async () => {
+      fireEvent.click(screen.getByText("run"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByTestId("probe-phase")).toHaveTextContent("done"));
 
     fireEvent.click(screen.getByText("reset"));
     expect(screen.getByTestId("probe-phase")).toHaveTextContent("idle");

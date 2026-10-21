@@ -1,6 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { AskThreadList } from "@/components/ask/AskThreadList";
+import {
+  getAskListMode,
+  setAskListMode,
+  subscribeAskListMode,
+  type AskListMode,
+} from "@/lib/ask";
 import { cn } from "@/lib/utils";
 
 /**
@@ -12,6 +18,10 @@ import { cn } from "@/lib/utils";
  *
  * ONE component, so the desktop Sessions tab and the mobile Sessions drawer
  * offer exactly the same two lists.
+ *
+ * Which list is showing lives in the shared Ask module: the Ask canvas's
+ * history button selects the Asks list from there, so the history is one
+ * icon away from a cold Ask tab (job 150 §C).
  */
 export function SessionsPanel({
   chats,
@@ -26,7 +36,9 @@ export function SessionsPanel({
   className?: string;
   testId?: string;
 }) {
-  const [mode, setMode] = useState<"chats" | "asks">("chats");
+  const [mode, setMode] = useState<AskListMode>(() => getAskListMode());
+
+  useEffect(() => subscribeAskListMode(() => setMode(getAskListMode())), []);
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)} data-testid={testId}>
@@ -49,7 +61,10 @@ export function SessionsPanel({
               type="button"
               role="tab"
               aria-selected={active}
-              onClick={() => setMode(option.id)}
+              onClick={() => {
+                setAskListMode(option.id);
+                setMode(option.id);
+              }}
               data-testid={`sessions-mode-${option.id}`}
               className={cn(
                 "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",

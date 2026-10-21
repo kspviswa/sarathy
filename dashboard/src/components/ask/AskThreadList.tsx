@@ -1,10 +1,14 @@
 import { MessageSquareText, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import {
   deleteAskThread,
-  loadAskThreads,
-  saveAskThreads,
+  ensureAskThreadsLoaded,
+  getActiveAskThreadId,
+  getAskThreads,
+  setActiveAskThreadId,
+  subscribeAskThreadList,
   type AskThread,
 } from "@/lib/ask";
 import { relativeTime } from "@/lib/relativeTime";
@@ -12,10 +16,14 @@ import { relativeTime } from "@/lib/relativeTime";
 /**
  * The Ask threads — the "Asks" list of the Sessions surface (spec §C).
  *
- * The Ask canvas has no history rail any more: a research thread is a
+ * The Ask canvas has no history rail of its own: a research thread is a
  * conversation, and conversations live with the other conversations. This
  * lists them: the first question, how many turns it took, when it was last
  * touched, and a way to forget one.
+ *
+ * The list comes from the SERVER (job 150 §B) — the threads used to live in
+ * the browser's `localStorage`, which meant they were lost with the data and
+ * invisible from any other device.
  */
 export function AskThreadList({
   onOpenThread,
@@ -23,21 +31,31 @@ export function AskThreadList({
   /** Open the thread in the Ask canvas. */
   onOpenThread: (threadId: string) => void;
 }) {
-  const [threads, setThreads] = useState<AskThread[]>([]);
+  const [threads, setThreads] = useState<AskThread[]>(() => getAskThreads());
 
-  // Read on mount: the Ask canvas may have added a thread since this list
-  // was last rendered.
-  const reload = useCallback(() => {
-    setThreads(loadAskThreads());
-  }, []);
+  // The store is the one copy of the thread data: this list reads it
+  // instead of keeping a private copy.
+  useEffect(() => subscribeAskThreadList(() => setThreads(getAskThreads())), []);
 
+  // The first load: the browser's old history is carried over to the
+  // server, and the list is read from there.
   useEffect(() => {
-    reload();
-  }, [reload]);
-
-  const forget = (id: string) => {
-    setThreads((prev) => saveAskThreads(deleteAskThread(prev, id)));
-  };
+    void ensureAskThreadsLoaded();
+  }, []);
+  const forget = useCallback(async (id: string) => {
+    // The dashboard's own destructive-confirm pattern (the same one the
+    // device revoke uses).
+    if (!window.confirm("Delete this research thread? It cannot be undone.")) return;
+    try {
+      await deleteAskThread(id);
+      // The thread that was open in the Ask canvas is gone: the canvas
+      // empties, so it is not left pointing at a thread that no longer
+      // exists.
+      if (getActiveAskThreadId() === id) setActiveAskThreadId(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete the thread");
+    }
+  }, []);
 
   if (threads.length === 0) {
     return (
@@ -63,16 +81,17 @@ export function AskThreadList({
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm">{thread.title}</span>
               <span className="block text-xs text-muted-foreground">
-                {thread.turns.length}{" "}
-                {thread.turns.length === 1 ? "turn" : "turns"} ·{" "}
+                {thread.turnCount}{" "}
+                {thread.turnCount === 1 ? "turn" : "turns"} ·{" "}
                 {relativeTime(thread.updatedAt)}
               </span>
             </span>
           </button>
           <button
             type="button"
-            onClick={() => forget(thread.id)}
-            aria-label="Forget this research thread"
+            onClick={() => void forget(thread.id)}
+            aria-label="Delete this research thread"
+            title="Delete this research thread"
             data-testid="ask-thread-forget"
             className="rounded px-1.5 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
           >

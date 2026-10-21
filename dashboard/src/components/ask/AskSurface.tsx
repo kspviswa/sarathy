@@ -2,12 +2,14 @@ import { Sparkles } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { AskComposer } from "@/components/ask/AskComposer";
+import { AskHeader } from "@/components/ask/AskHeader";
 import { AskMediaView } from "@/components/ask/AskMediaView";
 import { AskTurnCard } from "@/components/ask/AskTurnCard";
 import { JumpToLatest } from "@/components/JumpToLatest";
 import { QuoteActionBar, useTextSelection } from "@/components/QuoteAsk";
 import {
   useAskStream,
+  requestAskHistory,
   type AskHistoryTurn,
   type AskMode,
   type AskSourceKind,
@@ -35,7 +37,7 @@ import { useChatScroll } from "@/lib/useChatScroll";
  * this file is presentation plus the composer interactions.
  */
 export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mobile" }) {
-  const { state, turns, run, stop, threadId, updateMedia } = useAskStream() as any;
+  const { state, turns, run, stop, reset, threadId, threads, updateMedia } = useAskStream();
 
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<AskMode>("speed");
@@ -145,9 +147,32 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
 
   const isMobile = variant === "mobile";
 
+  /** The open thread's title — shown in the header beside the buttons. */
+  const threadTitle = useMemo(
+    () => threads.find((thread) => thread.id === threadId)?.title ?? "",
+    [threads, threadId],
+  );
+
+  /**
+   * Start a new ask.
+   *
+   * The canvas empties and the active thread is dropped, so the next
+   * question opens a FRESH thread (job 150 §C). The old thread stays in
+   * the history.
+   */
+  const startNewAsk = useCallback(() => {
+    reset();
+  }, [reset]);
+
   return (
     <div className="flex h-full min-h-0" data-testid={isMobile ? "ask-mobile" : "ask-surface"}>
       <div className="flex min-w-0 flex-1 flex-col">
+        <AskHeader
+          title={threadTitle}
+          hasThread={Boolean(threadId)}
+          onNewAsk={startNewAsk}
+          onOpenHistory={requestAskHistory}
+        />
         <div className="relative flex min-h-0 flex-1 flex-col">
           <div
             ref={scrollRef}

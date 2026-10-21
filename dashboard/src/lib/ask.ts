@@ -463,6 +463,30 @@ export interface AskThread {
    * history rail stays cheap however long the history gets.
    */
   turnCount: number;
+  /**
+   * The group the thread is filed under — null when it is uncategorized.
+   *
+   * The group is the SERVER's business: it comes with the thread and it is
+   * changed with a PATCH, never by the browser on its own.
+   */
+  groupId: string | null;
+}
+
+/**
+ * A group of threads — the named bucket the Ask history is sorted into.
+ *
+ * Uttaram calls them projects; the shape and the rules are the same: a
+ * thread belongs to one group (or to none), and deleting a group leaves its
+ * threads behind, uncategorized.
+ */
+export interface AskGroup {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: number;
+  updatedAt: number;
+  /** How many threads the group holds right now. */
+  threadCount: number;
 }
 
 /**
@@ -510,6 +534,7 @@ export function createAskThread(turn: AskTurn, id?: string): AskThread {
     createdAt: now,
     updatedAt: now,
     turnCount: 1,
+    groupId: null,
   };
 }
 
@@ -532,6 +557,10 @@ export function appendAskTurn(
     thread.id === threadId
       ? {
           ...thread,
+          // A thread born inside a group is created empty, before it has a
+          // question: the first question names it, exactly as the server
+          // names it.
+          title: thread.title || askThreadTitle(turn.query),
           turns: [...thread.turns, turn],
           turnCount: thread.turns.length + 1,
           updatedAt: turn.createdAt || Date.now(),
@@ -666,6 +695,7 @@ function toThread(value: any): AskThread | null {
     createdAt,
     updatedAt: Number(value.updatedAt) || createdAt,
     turnCount: turns.length,
+    groupId: typeof value.groupId === "string" ? value.groupId : null,
   };
 }
 
@@ -696,6 +726,7 @@ export async function loadAskThreads(): Promise<AskThread[]> {
       createdAt: Number(row.createdAt) || existing?.createdAt || Date.now(),
       updatedAt: Number(row.updatedAt) || existing?.updatedAt || Date.now(),
       turnCount: Number.isFinite(count) ? count : existing?.turnCount ?? 0,
+      groupId: typeof row.groupId === "string" ? row.groupId : null,
     });
   }
   // A thread the server no longer knows about is gone — it was deleted.
@@ -737,6 +768,7 @@ export async function loadAskThread(id: string): Promise<AskThread | null> {
     createdAt: Number(meta.createdAt) || Date.now(),
     updatedAt: Number(meta.updatedAt) || Date.now(),
     turnCount: Number(meta.turnCount) || turns.length,
+    groupId: typeof meta.groupId === "string" ? meta.groupId : null,
   };
   putAskThread(thread);
   return thread;
@@ -751,6 +783,7 @@ export async function postAskThread(thread: AskThread): Promise<AskThread | null
       id: thread.id,
       title: thread.title,
       turns: thread.turns.map(turnPayload),
+      groupId: thread.groupId ?? null,
     }),
   });
   if (!res.ok) throw new Error(`Could not save the Ask thread (${res.status})`);
@@ -763,6 +796,7 @@ export async function postAskThread(thread: AskThread): Promise<AskThread | null
     createdAt: Number(meta.createdAt) || thread.createdAt,
     updatedAt: Number(meta.updatedAt) || thread.updatedAt,
     turnCount: Number(meta.turnCount) || thread.turns.length,
+    groupId: typeof meta.groupId === "string" ? meta.groupId : thread.groupId,
   };
 }
 
@@ -778,6 +812,248 @@ export async function deleteAskThread(id: string): Promise<void> {
   }
   threadStore.delete(id);
   notifyThreadList();
+}
+
+// ---------------------------------------------------------------------------
+// The group store — the SERVER is the source of truth
+//
+// The Ask history is not a flat list any more: the threads are sorted into
+// named GROUPS (Uttaram calls them projects). The groups live on the server
+// beside the threads, and the store below is the ONE copy of them in the
+// browser — the history list reads it instead of keeping a private copy.
+//
+// The rules are Uttaram's: a thread belongs to one group or to none, a
+// thread can be moved, and deleting a group does NOT delete its threads —
+// they fall back to uncategorized.
+// ---------------------------------------------------------------------------
+
+/** The Ask group endpoints. */
+export const ASK_GROUPS_ENDPOINT = "/api/ask/groups";
+
+const groupStore = new Map<string, AskGroup>();
+const groupListeners = new Set<() => void>();
+
+/**
+ * The order the SERVER sent the groups in.
+ *
+ * Two groups created in the same millisecond share a timestamp, and the
+ * server breaks that tie by the order it created them in. The browser keeps
+ * that order so the sections here are the sections there.
+ */
+const groupOrder = new Map<string, number>();
+
+function notifyGroups(): void {
+  groupListeners.forEach((listener) => listener());
+}
+
+/** Every group the browser knows about, newest first. */
+export function getAskGroups(): AskGroup[] {
+  return Array.from(groupStore.values()).sort(
+    (a, b) =>
+      b.createdAt - a.createdAt ||
+      (groupOrder.get(a.id) ?? 0) - (groupOrder.get(b.id) ?? 0),
+  );
+}
+
+/** Subscribe to the group list. */
+export function subscribeAskGroups(listener: () => void): () => void {
+  groupListeners.add(listener);
+  return () => {
+    groupListeners.delete(listener);
+  };
+}
+
+/** Coerce a stored payload into a group, dropping anything malformed. */
+function toGroup(value: any): AskGroup | null {
+  if (!value || typeof value !== "object") return null;
+  if (typeof value.id !== "string" || !value.id) return null;
+  return {
+    id: value.id,
+    name: typeof value.name === "string" ? value.name : "",
+    description: typeof value.description === "string" ? value.description : "",
+    createdAt: Number(value.createdAt) || Date.now(),
+    updatedAt: Number(value.updatedAt) || Number(value.createdAt) || Date.now(),
+    threadCount: Number(value.threadCount) || 0,
+  };
+}
+
+/** Read the groups from the server. */
+export async function loadAskGroups(): Promise<AskGroup[]> {
+  const res = await fetch(ASK_GROUPS_ENDPOINT, { headers: askHeaders() });
+  if (!res.ok) throw new Error(`Could not load the Ask groups (${res.status})`);
+  const data = await res.json();
+  const rows = Array.isArray(data?.groups) ? data.groups : [];
+
+  groupStore.clear();
+  groupOrder.clear();
+  rows.forEach((row: any, index: number) => {
+    const group = toGroup(row);
+    if (!group) return;
+    groupStore.set(group.id, group);
+    groupOrder.set(group.id, index);
+  });
+  notifyGroups();
+  return getAskGroups();
+}
+
+/** The first load of the groups — a failed read leaves the list alone. */
+export function ensureAskGroupsLoaded(): Promise<AskGroup[]> {
+  return loadAskGroups().catch(() => getAskGroups());
+}
+
+/** Create a group on the server and put it in the store. */
+export async function createAskGroup(
+  name: string,
+  description = "",
+): Promise<AskGroup> {
+  const res = await fetch(ASK_GROUPS_ENDPOINT, {
+    method: "POST",
+    headers: askHeaders(),
+    body: JSON.stringify({ name, description }),
+  });
+  if (!res.ok) throw new Error(`Could not create the Ask group (${res.status})`);
+  const data = await res.json();
+  const group = toGroup(data?.group);
+  if (!group) throw new Error("The gateway did not return the group");
+  groupStore.set(group.id, group);
+  // A group just made is the newest one: it leads the list, even when it
+  // shares its timestamp with another group.
+  groupOrder.set(group.id, -1);
+  notifyGroups();
+  return group;
+}
+
+/** Rename a group on the server (or change its description). */
+export async function renameAskGroup(
+  id: string,
+  name: string,
+  description?: string,
+): Promise<AskGroup> {
+  const res = await fetch(`${ASK_GROUPS_ENDPOINT}/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: askHeaders(),
+    body: JSON.stringify(description === undefined ? { name } : { name, description }),
+  });
+  if (!res.ok) throw new Error(`Could not rename the Ask group (${res.status})`);
+  const data = await res.json();
+  const group = toGroup(data?.group);
+  if (!group) throw new Error("The gateway did not return the group");
+  groupStore.set(group.id, group);
+  notifyGroups();
+  return group;
+}
+
+/**
+ * Delete a group on the server.
+ *
+ * The threads of the group SURVIVE: the gateway clears their group and they
+ * fall back to uncategorized. The list is read again afterwards, so the
+ * threads come back where they belong.
+ */
+export async function deleteAskGroup(id: string): Promise<void> {
+  if (!id) return;
+  const res = await fetch(`${ASK_GROUPS_ENDPOINT}/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: askHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Could not delete the Ask group (${res.status})`);
+  }
+  groupStore.delete(id);
+  notifyGroups();
+}
+
+/**
+ * Move a thread into a group — or out of every group.
+ *
+ * `groupId` of null is uncategorized. The move is the server's business:
+ * the thread is PATCHed and the list is read again, so what the history
+ * shows is what the server holds.
+ */
+export async function moveAskThread(
+  threadId: string,
+  groupId: string | null,
+): Promise<void> {
+  if (!threadId) return;
+  const res = await fetch(`${ASK_THREADS_ENDPOINT}/${encodeURIComponent(threadId)}`, {
+    method: "PATCH",
+    headers: askHeaders(),
+    body: JSON.stringify({ groupId }),
+  });
+  if (!res.ok) throw new Error(`Could not move the Ask thread (${res.status})`);
+  const thread = threadStore.get(threadId);
+  if (thread) {
+    threadStore.set(threadId, { ...thread, groupId });
+    notifyThreadList();
+  }
+}
+
+/**
+ * Start a new thread INSIDE a group.
+ *
+ * The thread is created on the server first — with the group it belongs to —
+ * and only then is the canvas pointed at it. A thread that was born in the
+ * browser would have no group until it was saved.
+ */
+export async function createAskThreadInGroup(groupId: string | null): Promise<AskThread> {
+  const id = askId("thread");
+  const res = await fetch(ASK_THREADS_ENDPOINT, {
+    method: "POST",
+    headers: askHeaders(),
+    body: JSON.stringify({ id, title: "", groupId }),
+  });
+  if (!res.ok) throw new Error(`Could not create the Ask thread (${res.status})`);
+  const data = await res.json();
+  const meta = data?.thread ?? {};
+  const thread: AskThread = {
+    id: typeof meta.id === "string" ? meta.id : id,
+    title: typeof meta.title === "string" ? meta.title : "",
+    turns: [],
+    createdAt: Number(meta.createdAt) || Date.now(),
+    updatedAt: Number(meta.updatedAt) || Date.now(),
+    turnCount: Number(meta.turnCount) || 0,
+    groupId: typeof meta.groupId === "string" ? meta.groupId : groupId,
+  };
+  putAskThread(thread);
+  return thread;
+}
+
+// ---------------------------------------------------------------------------
+// Which groups are collapsed
+//
+// The collapsed state lives in the shared module, not in a component: the
+// history list is unmounted every time the Sessions surface switches to the
+// chats, and a section that springs open again would be a papercut. The
+// state lasts for the session and no longer.
+// ---------------------------------------------------------------------------
+
+const collapsedGroups = new Set<string>();
+const collapseListeners = new Set<() => void>();
+
+/** The groups that are collapsed. */
+export function getCollapsedAskGroups(): string[] {
+  return Array.from(collapsedGroups);
+}
+
+/** True when the group is collapsed. */
+export function isAskGroupCollapsed(id: string): boolean {
+  return collapsedGroups.has(id);
+}
+
+/** Collapse a group, or open it again. */
+export function toggleAskGroupCollapsed(id: string): void {
+  if (!id) return;
+  if (collapsedGroups.has(id)) collapsedGroups.delete(id);
+  else collapsedGroups.add(id);
+  collapseListeners.forEach((listener) => listener());
+}
+
+/** Subscribe to the collapsed state. */
+export function subscribeAskGroupCollapse(listener: () => void): () => void {
+  collapseListeners.add(listener);
+  return () => {
+    collapseListeners.delete(listener);
+  };
 }
 
 // ---------------------------------------------------------------------------

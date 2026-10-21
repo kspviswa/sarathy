@@ -766,6 +766,45 @@ export function parseAskFrames(buffer: string): { frames: AskFrame[]; rest: stri
 /** One turn of the engine's own history: `[role, text]`. */
 export type AskHistoryTurn = [role: "human" | "assistant", text: string];
 
+/**
+ * How many earlier turns of a thread travel with a follow-up.
+ *
+ * The gateway caps the list at `ASK_MAX_HISTORY` (20 items = 10 turns), so this
+ * stays comfortably inside it. Six turns is enough for a follow-up to resolve
+ * "it", "that one" and "the second option" without dragging a whole thread into
+ * every prompt.
+ */
+export const ASK_HISTORY_TURNS = 6;
+
+/**
+ * The conversation a follow-up is grounded in — the thread itself.
+ *
+ * A follow-up is only a follow-up if the engine can see what came before it, so
+ * this is derived from the open thread rather than from an explicit "Reply"
+ * click. Turns that errored or produced no answer are skipped: an empty
+ * assistant message teaches the model nothing and burns context.
+ *
+ * Returns `undefined` for a thread's first turn, so the request stays exactly
+ * as it was before (no `history` key on the wire).
+ */
+export function buildAskHistory(
+  turns: AskTurn[],
+  limit: number = ASK_HISTORY_TURNS,
+): AskHistoryTurn[] | undefined {
+  const usable = turns.filter(
+    (turn) => !turn.error && turn.query.trim() && turn.answer.trim(),
+  );
+  if (usable.length === 0) return undefined;
+
+  const recent = usable.slice(-limit);
+  const history: AskHistoryTurn[] = [];
+  for (const turn of recent) {
+    history.push(["human", turn.query]);
+    history.push(["assistant", turn.answer]);
+  }
+  return history;
+}
+
 export interface AskRunRequest {
   query: string;
   mode: AskMode;

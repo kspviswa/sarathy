@@ -12,6 +12,7 @@ import {
   type AskMode,
   type AskSourceKind,
   type AskTurn,
+  buildAskHistory,
 } from "@/lib/ask";
 import {
   addQuote,
@@ -122,12 +123,12 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
     if (!trimmed || state.streaming) return;
 
     const quotes = buildQuotesPayload(quoteChips);
-    const history: AskHistoryTurn[] | undefined = replyTurn
-      ? [
-          ["human", replyTurn.query],
-          ["assistant", replyTurn.answer],
-        ]
-      : undefined;
+
+    // EVERY follow-up carries the thread, not just the ones started from
+    // "Reply". Deriving it from the open thread is what makes a typed follow-up
+    // ("and the second one?") resolvable at all — an explicit Reply only
+    // pins which turn the composer refers to.
+    const history = buildAskHistory(turns);
 
     setQuery("");
     setQuoteChips(clearQuotes());
@@ -140,7 +141,7 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
       quotes: quotes.length ? quotes : undefined,
       history,
     });
-  }, [query, state.streaming, quoteChips, replyTurn, mode, sources, run]);
+  }, [query, state.streaming, quoteChips, turns, mode, sources, run]);
 
   const isMobile = variant === "mobile";
 

@@ -101,6 +101,19 @@ class BackendConfig(Base):
     )
 
 
+class AskConfig(Base):
+    """Ask mode configuration (the research engine behind the dashboard tab).
+
+    The engine itself lives in the separate ``uttaram-backend`` service; the
+    gateway only proxies to it, so the URL is configuration and never a
+    literal in the handler.
+    """
+
+    enabled: bool = True  # Serve /api/ask (the proxy)
+    backend_url: str = "http://127.0.0.1:7777"  # The uttaram-backend service
+    timeout_s: int = 300  # Upstream request timeout for one Ask turn
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -348,6 +361,7 @@ class Config(BaseSettings):
     modalities: ModalitiesConfig = Field(default_factory=ModalitiesConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    ask: AskConfig = Field(default_factory=AskConfig)
 
     @property
     def workspace_path(self) -> Path:

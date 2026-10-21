@@ -45,6 +45,14 @@ vi.mock("@/lib/api", () => ({
     job: vi.fn().mockResolvedValue({ job: null, events: [], spec_text: null, result_text: null }),
     getConfig: vi.fn().mockResolvedValue({}),
     providers: vi.fn().mockResolvedValue({ providers: [], active: "" }),
+    // The Config view reads the modality bindings on mount. Without this the
+    // view throws an unhandled rejection on every visit.
+    modalities: vi.fn().mockResolvedValue({
+      main: { provider: "", model: "" },
+      local: { provider: "", model: "" },
+      image: { provider: "", model: "" },
+      active: "",
+    }),
     usageSummary: vi.fn().mockResolvedValue({ available: false }),
     status: vi
       .fn()

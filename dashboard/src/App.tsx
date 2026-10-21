@@ -9,6 +9,7 @@ import {
   MessageSquareText,
   Search,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -45,6 +46,7 @@ import { useNotifications } from "@/lib/useNotifications";
 import type { AppNotification } from "@/lib/useNotifications";
 import { cn } from "@/lib/utils";
 import { DashboardSocket } from "@/lib/ws";
+import { AskView } from "@/views/AskView";
 import { ChatView, type ChatMessage } from "@/views/ChatView";
 import { ConfigView } from "@/views/ConfigView";
 import { FilesView } from "@/views/FilesView";
@@ -57,10 +59,18 @@ export type { ChatMessage } from "@/views/ChatView";
 
 /** Navigation is tab-style: picking a section swaps the main content area
  *  (spec §A). Chat is the default; the rest are peer sections, not drawers. */
-export type Section = "chat" | "sessions" | "files" | "jobs" | "config" | "status";
+export type Section =
+  | "chat"
+  | "ask"
+  | "sessions"
+  | "files"
+  | "jobs"
+  | "config"
+  | "status";
 
 const SECTIONS: { id: Section; label: string; icon: typeof Gauge; mobile?: boolean }[] = [
   { id: "chat", label: "Chat", icon: MessageSquareText, mobile: true },
+  { id: "ask", label: "Ask", icon: Sparkles, mobile: true },
   { id: "sessions", label: "Sessions", icon: History, mobile: true },
   { id: "files", label: "Files", icon: FileCode2, mobile: true },
   { id: "jobs", label: "Jobs", icon: Briefcase, mobile: true },
@@ -637,6 +647,12 @@ function AppInner() {
                 onFollowUpSeedConsumed={clearFollowUpSeed}
               />
             </>
+          )}
+
+          {section === "ask" && (
+            <div className="h-full overflow-y-auto">
+              <AskView />
+            </div>
           )}
 
           {section === "sessions" && (

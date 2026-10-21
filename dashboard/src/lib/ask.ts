@@ -70,16 +70,15 @@ export interface AskError {
 
 /**
  * One media item of the answer's media strip.
- *
- * The frozen backend contract has no media frame yet, so the strip stays
- * empty today — the frame is handled anyway so a backend that grows one does
- * not need a dashboard change.
  */
 export interface AskMedia {
   kind: "image" | "video";
   url: string;
   thumb?: string;
+  img_src?: string;
   title?: string;
+  iframe_src?: string;
+  iframeUrl?: string;
 }
 
 export interface AskState {
@@ -240,7 +239,10 @@ export function reduceAskFrame(state: AskState, frame: AskFrame): AskState {
           kind: item.kind === "video" ? ("video" as const) : ("image" as const),
           url: item.url,
           thumb: item.thumb,
+          img_src: item.img_src,
           title: item.title,
+          iframe_src: item.iframe_src,
+          iframeUrl: item.iframeUrl || item.iframe_src,
         }));
       return { ...state, media };
     }
@@ -439,6 +441,8 @@ export interface AskTurn {
   sourcesList: AskSource[];
   /** The research timeline, so reopening keeps the stages. */
   steps: AskStep[];
+  /** Media fetched on-demand for this turn. */
+  media?: AskMedia[];
   usage?: AskUsage;
   error?: AskError;
   createdAt: number;
@@ -538,6 +542,26 @@ export function appendAskTurn(
 /** Drop one thread. */
 export function deleteAskThread(threads: AskThread[], id: string): AskThread[] {
   return threads.filter((thread) => thread.id !== id);
+}
+
+/** Update media for a specific turn in a thread. */
+export function updateAskTurnMedia(
+  threads: AskThread[],
+  threadId: string,
+  turnId: string,
+  media: AskMedia[],
+): AskThread[] {
+  const next = threads.map((thread) => {
+    if (thread.id !== threadId) return thread;
+    return {
+      ...thread,
+      updatedAt: Date.now(),
+      turns: thread.turns.map((turn) =>
+        turn.id === turnId ? { ...turn, media: media.length ? [...media] : undefined } : turn,
+      ),
+    };
+  });
+  return saveAskThreads(next);
 }
 
 const isAskTurn = (value: any): value is AskTurn =>
@@ -903,6 +927,7 @@ export function useAskStream() {
           answer: folded.answer,
           sourcesList: folded.sources,
           steps: folded.steps,
+          media: folded.media && folded.media.length > 0 ? folded.media : undefined,
           usage: folded.usage ?? undefined,
           error: folded.error ?? undefined,
           createdAt: live.createdAt,
@@ -1060,6 +1085,7 @@ export function useAskStream() {
       answer: state.answer,
       sourcesList: state.sources,
       steps: state.steps,
+      media: state.media && state.media.length > 0 ? [...state.media] : undefined,
       usage: state.usage ?? undefined,
       error: state.error ?? undefined,
       createdAt: pending.createdAt,
@@ -1129,5 +1155,9 @@ export function useAskStream() {
     reopen,
     /** @deprecated use `forgetThread`. */
     forget,
+    updateMedia: (turnId: string, media: AskMedia[]) => {
+      if (!threadId) return;
+      setThreads((prev) => updateAskTurnMedia(prev, threadId, turnId, media));
+    },
   };
 }

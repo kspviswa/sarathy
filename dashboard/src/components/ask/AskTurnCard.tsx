@@ -10,6 +10,7 @@ import { useState } from "react";
 import { AskAnswer } from "@/components/ask/AskAnswer";
 import { AskResearchProgress } from "@/components/ask/AskResearchProgress";
 import { AskSources } from "@/components/ask/AskSources";
+import { AskMediaButtons } from "@/components/ask/AskMediaButtons";
 import { copyText } from "@/components/ask/copy";
 import {
   formatAskUsage,
@@ -39,6 +40,9 @@ export function AskTurnCard({
   onQuote,
   onRewrite,
   onSummarize,
+  turns,
+  threadId,
+  onMediaUpdate,
   /** Touch devices have no hover, so the actions are always visible there. */
   alwaysShowActions = false,
 }: {
@@ -57,6 +61,9 @@ export function AskTurnCard({
   onRewrite: (turn: AskTurn) => void;
   /** Research a summary of this answer. */
   onSummarize: (turn: AskTurn) => void;
+  turns?: AskTurn[];
+  threadId?: string | null;
+  onMediaUpdate?: (turnId: string, media: any[]) => void;
   alwaysShowActions?: boolean;
 }) {
   const [queryExpanded, setQueryExpanded] = useState(false);
@@ -156,6 +163,17 @@ export function AskTurnCard({
       )}
 
       {/* ------------------------------------------------------- action row */}
+      {hasAnswer && (
+        <AskMediaButtons
+          turn={turn}
+          turns={turns || [turn]}
+          threadId={threadId ?? null}
+          onMediaLoaded={(turnId, media) => {
+            if (onMediaUpdate) onMediaUpdate(turnId, media);
+          }}
+        />
+      )}
+
       {hasAnswer && (
         <div
           className={cn(

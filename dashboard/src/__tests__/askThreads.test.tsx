@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, cleanup } from "@testing-library/react";
 
 import {
+  ASK_ORPHANED_KEY,
   ASK_THREADS_KEY,
   getAskListMode,
   loadAskThread,
@@ -443,6 +444,31 @@ describe("The one-time migration", () => {
 
     // The history is still there: a failed migration must not lose it.
     expect(localStorage.getItem(ASK_THREADS_KEY)).not.toBeNull();
+  });
+
+  it("never deletes a payload it could not read — it parks it", async () => {
+    const gateway = installGateway();
+    // A shape this build does not understand: threads with no readable turns.
+    const unknown = JSON.stringify([{ id: "old-1", turns: [{ nope: true }] }]);
+    localStorage.setItem(ASK_THREADS_KEY, unknown);
+
+    await migrateAskThreads();
+
+    // Nothing was posted (there was nothing readable)...
+    expect(gateway.posts).toHaveLength(0);
+    // ...and the payload was NOT destroyed: it is parked, and the original
+    // key keeps its copy so a later build can still read it.
+    expect(localStorage.getItem(ASK_ORPHANED_KEY)).toBe(unknown);
+    expect(localStorage.getItem(ASK_THREADS_KEY)).toBe(unknown);
+  });
+
+  it("removes a key that holds an empty history", async () => {
+    installGateway();
+    localStorage.setItem(ASK_THREADS_KEY, "[]");
+
+    await migrateAskThreads();
+
+    expect(localStorage.getItem(ASK_THREADS_KEY)).toBeNull();
   });
 });
 

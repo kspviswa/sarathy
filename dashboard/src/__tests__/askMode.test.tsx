@@ -22,7 +22,9 @@ import {
   splitAnswerCitations,
   useAskStream,
   ASK_HISTORY_KEY,
+  ASK_HISTORY_TURNS,
   ASK_THREADS_KEY,
+  buildAskHistory,
   type AskFrame,
   type AskState,
   type AskThread,
@@ -852,5 +854,71 @@ describe("useAskStream", () => {
 
     fireEvent.click(screen.getByText("reset"));
     expect(screen.getByTestId("probe-phase")).toHaveTextContent("idle");
+  });
+});
+
+/**
+ * Follow-up context (regression, 2026-10-21).
+ *
+ * A typed follow-up used to travel with NO history: `submit()` only built one
+ * when the user had clicked "Reply" on an earlier turn, so "and the second
+ * one?" reached the engine as a brand-new question. The thread is the
+ * conversation, so the history is derived from it.
+ */
+describe("Ask follow-up history", () => {
+  const turn = (over: Partial<AskTurn> = {}): AskTurn => ({
+    id: "t1",
+    query: "best budget laptops",
+    mode: "speed",
+    sources: ["web"],
+    answer: "Three options: A, B, C.",
+    sourcesList: [],
+    steps: [],
+    createdAt: 1,
+    ...over,
+  });
+
+  it("a follow-up carries every earlier turn of the thread", () => {
+    const history = buildAskHistory([turn()]);
+    expect(history).toEqual([
+      ["human", "best budget laptops"],
+      ["assistant", "Three options: A, B, C."],
+    ]);
+  });
+
+  it("a thread's first turn carries no history at all", () => {
+    expect(buildAskHistory([])).toBeUndefined();
+  });
+
+  it("errored turns and empty answers are skipped", () => {
+    const history = buildAskHistory([
+      turn({ id: "t1" }),
+      turn({ id: "t2", error: { message: "boom", code: "x" } }),
+      turn({ id: "t3", answer: "   " }),
+      turn({ id: "t4", query: "the second one?", answer: "B." }),
+    ]);
+    expect(history).toEqual([
+      ["human", "best budget laptops"],
+      ["assistant", "Three options: A, B, C."],
+      ["human", "the second one?"],
+      ["assistant", "B."],
+    ]);
+  });
+
+  it("only the most recent turns travel, oldest dropped first", () => {
+    const many = Array.from({ length: 10 }, (_, i) =>
+      turn({ id: `t${i}`, query: `q${i}`, answer: `a${i}` }),
+    );
+    const history = buildAskHistory(many)!;
+    expect(history).toHaveLength(ASK_HISTORY_TURNS * 2);
+    expect(history[0]).toEqual(["human", `q${10 - ASK_HISTORY_TURNS}`]);
+    expect(history[history.length - 1]).toEqual(["assistant", "a9"]);
+  });
+
+  it("stays inside the gateway's own cap (ASK_MAX_HISTORY = 20 items)", () => {
+    const many = Array.from({ length: 30 }, (_, i) =>
+      turn({ id: `t${i}`, query: `q${i}`, answer: `a${i}` }),
+    );
+    expect(buildAskHistory(many)!.length).toBeLessThanOrEqual(20);
   });
 });

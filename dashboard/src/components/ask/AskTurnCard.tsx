@@ -34,7 +34,6 @@ const QUERY_CLAMP = 200;
 
 export function AskTurnCard({
   turn,
-  isLast,
   streaming,
   phase,
   onReply,
@@ -48,8 +47,6 @@ export function AskTurnCard({
   alwaysShowActions = false,
 }: {
   turn: AskTurn;
-  /** Is this the newest turn? */
-  isLast: boolean;
   /** Is this turn still streaming? */
   streaming: boolean;
   /** The live phase of the turn — drives the state line. */
@@ -144,11 +141,7 @@ export function AskTurnCard({
       )}
 
       {/* ------------------------------------------------- research progress */}
-      <AskResearchProgress
-        steps={turn.steps}
-        isLast={isLast}
-        streaming={streaming}
-      />
+      <AskResearchProgress steps={turn.steps} streaming={streaming} />
 
       {/* --------------------------------------------------------- sources */}
       {turn.sourcesList.length > 0 && <AskSources sources={turn.sourcesList} />}

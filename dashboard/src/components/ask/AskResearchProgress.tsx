@@ -9,7 +9,7 @@ import {
   Search,
   Timer,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { AskStep } from "@/lib/ask";
 import { cn } from "@/lib/utils";
@@ -139,26 +139,23 @@ function StepDetail({ step, streaming }: { step: AskStep; streaming: boolean }) 
 
 export function AskResearchProgress({
   steps,
-  isLast,
   streaming,
 }: {
   steps: AskStep[];
-  /** Is this the newest turn? Only the newest one auto-expands. */
-  isLast: boolean;
-  /** Is the turn still being written? */
+  /** Is the turn still being written? Only affects the live step's wording. */
   streaming: boolean;
 }) {
-  // Auto-expanded while the newest turn streams, auto-collapsed when it is
-  // done — the same rule Uttaram's `AssistantSteps.tsx` follows.
-  const [expanded, setExpanded] = useState(isLast && streaming);
-
-  useEffect(() => {
-    if (streaming && isLast) {
-      setExpanded(true);
-    } else if (!streaming) {
-      setExpanded(false);
-    }
-  }, [streaming, isLast]);
+  // Collapsed by default, and the reader decides when to open it.
+  //
+  // This used to auto-expand while the newest turn streamed, which pushed the
+  // answer itself down the page — on a phone the progress list filled the
+  // screen and every answer began with a long scroll. The step count in the
+  // header is enough of a live signal; the detail is there on request.
+  //
+  // Deliberately no effect on `streaming`: once the reader opens or closes the
+  // panel, it stays where they put it. Auto-collapsing a panel someone just
+  // opened is its own small betrayal.
+  const [expanded, setExpanded] = useState(false);
 
   if (steps.length === 0) return null;
 

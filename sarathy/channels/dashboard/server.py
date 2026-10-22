@@ -1548,17 +1548,12 @@ class DashboardChannel(BaseChannel):
         if quotes:
             payload_body["quotes"] = quotes
 
-        # Who is asking, and what time it is for them.
-        #
-        # The research engine personalizes the answer with this: the writer
-        # prompt says "the user lives in X" so a question with no place in it
-        # resolves to the asker's place, and a follow-up can lean on what the
-        # asker already told us. Uttaram's browser supplies its own profile
-        # from localStorage; ours comes from CONFIGURATION, so a compromised
-        # page cannot impersonate the user to the research engine.
-        profile, ask_timezone = self._ask_profile()
-        if profile:
-            payload_body["userProfile"] = profile
+        # Who is asking is NOT sent. The backend reads
+        # `~/.sarathy/workspace/memory/PROFILE.md` off the disk itself
+        # (mtime-cached), so there is no hop to forget — which is precisely how
+        # an Ottawa user was once answered with US passport pages. Only the
+        # clock travels, because that is per-request, not per-user.
+        _profile, ask_timezone = self._ask_profile()
         payload_body["enableMemories"] = True
         payload_body["metadata"] = {
             "currentDate": datetime.now(timezone.utc).isoformat(),
@@ -1745,13 +1740,6 @@ class DashboardChannel(BaseChannel):
             logger.warning("Could not read the media chat model from config: {}", err)
             data.pop("chatModel", None)
 
-        # Who is asking. An image or video search has no location of its own, so
-        # without this "passport application" returns whatever the engines think
-        # is the default — for this box, the US State Department. The backend
-        # folds the location into the rewritten query.
-        profile, _tz = self._ask_profile()
-        if profile:
-            data["userProfile"] = profile
 
         payload = json.dumps(data).encode("utf-8")
         backend_url = self._ask_backend_url()

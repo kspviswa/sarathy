@@ -12,6 +12,8 @@ import { AskResearchProgress } from "@/components/ask/AskResearchProgress";
 import { AskSources } from "@/components/ask/AskSources";
 import { AskMediaButtons } from "@/components/ask/AskMediaButtons";
 import { AskMediaView } from "@/components/ask/AskMediaView";
+import { Collapsible } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 import { copyText } from "@/components/ask/copy";
 import {
   formatAskUsage,
@@ -20,7 +22,6 @@ import {
   type AskPhase,
   type AskTurn,
 } from "@/lib/ask";
-import { cn } from "@/lib/utils";
 
 /**
  * One turn of an Ask thread.
@@ -45,6 +46,8 @@ export function AskTurnCard({
   onMediaUpdate,
   /** Touch devices have no hover, so the actions are always visible there. */
   alwaysShowActions = false,
+  /** The mobile shell renders the collapsible; the desktop shell the rail. */
+  isMobile = false,
 }: {
   turn: AskTurn;
   /** Is this turn still streaming? */
@@ -63,9 +66,11 @@ export function AskTurnCard({
   threadId?: string | null;
   onMediaUpdate?: (turnId: string, media: any[]) => void;
   alwaysShowActions?: boolean;
+  isMobile?: boolean;
 }) {
   const [queryExpanded, setQueryExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
 
   const isLongQuery = turn.query.length > QUERY_CLAMP;
   const displayQuery =
@@ -86,166 +91,204 @@ export function AskTurnCard({
 
   const hasAnswer = turn.answer.trim().length > 0;
 
+  const media = turn.media ?? [];
+  const hasMedia = media.length > 0;
+  const images = media.filter((m) => m.kind === "image");
+  const videos = media.filter((m) => m.kind === "video");
+  const mediaParts: string[] = [];
+  if (images.length > 0) {
+    mediaParts.push(`${images.length} image${images.length === 1 ? "" : "s"}`);
+  }
+  if (videos.length > 0) {
+    mediaParts.push(`${videos.length} video${videos.length === 1 ? "" : "s"}`);
+  }
+  const mediaTitle = mediaParts.length > 0 ? `Media · ${mediaParts.join(" · ")}` : null;
+
+  const onMediaLoaded = (turnId: string, loaded: any[]) => {
+    if (onMediaUpdate) onMediaUpdate(turnId, loaded);
+  };
+
+  const mediaButtons = (
+    <AskMediaButtons
+      turn={turn}
+      turns={turns || [turn]}
+      threadId={threadId ?? null}
+      onMediaLoaded={onMediaLoaded}
+    />
+  );
+
   return (
-    <article className="flex flex-col gap-4" data-testid="ask-turn">
-      {/* --------------------------------------------------------- heading */}
-      <div className="flex items-start gap-2">
-        <h2
-          className="min-w-0 flex-1 break-words text-xl font-medium sm:text-2xl"
-          data-testid="ask-turn-query"
-        >
-          {displayQuery}
-        </h2>
-        <button
-          type="button"
-          onClick={() => void copyQuery()}
-          aria-label="Copy prompt"
-          title="Copy prompt"
-          data-testid="ask-copy-query"
-          className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <Copy className="size-4" />
-        </button>
-      </div>
-
-      {isLongQuery && (
-        <button
-          type="button"
-          onClick={() => setQueryExpanded((value) => !value)}
-          data-testid="ask-query-expand"
-          className="-mt-2 self-start text-xs text-primary hover:underline"
-        >
-          {queryExpanded ? "Show less" : "Show more"}
-        </button>
-      )}
-
-      {/* ------------------------------------------------------ state line */}
-      {streaming && (
-        <div
-          className="flex items-center gap-2 text-sm text-muted-foreground"
-          data-testid="ask-phase"
-        >
-          <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
-          <span>{phaseLabel(phase ?? "researching")}</span>
-        </div>
-      )}
-
-      {/* ----------------------------------------------------------- error */}
-      {turn.error && (
-        <div
-          className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-          data-testid="ask-error"
-        >
-          {turn.error.message}
-        </div>
-      )}
-
-      {/* ------------------------------------------------- research progress */}
-      <AskResearchProgress steps={turn.steps} streaming={streaming} />
-
-      {/* --------------------------------------------------------- sources */}
-      {turn.sourcesList.length > 0 && <AskSources sources={turn.sourcesList} />}
-
-      {/* ---------------------------------------------------------- answer */}
-      {(hasAnswer || streaming) && (
-        <div className="flex flex-col gap-2" data-testid="ask-answer">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Answer
-          </h3>
-          <AskAnswer answer={turn.answer} sources={turn.sourcesList} />
-        </div>
-      )}
-
-      {/* ------------------------------------------------------------- media */}
-      {/*
-        The media belongs to THIS turn, so it is drawn HERE. It used to be a
-        single rail fed by the LAST turn only: clicking "Search images" on any
-        earlier answer filled the store and drew nothing.
-      */}
-      {hasAnswer && (
-        <AskMediaButtons
-          turn={turn}
-          turns={turns || [turn]}
-          threadId={threadId ?? null}
-          onMediaLoaded={(turnId, media) => {
-            if (onMediaUpdate) onMediaUpdate(turnId, media);
-          }}
-        />
-      )}
-
-      {hasAnswer && turn.media && turn.media.length > 0 && (
-        <AskMediaView media={turn.media} variant="strip" />
-      )}
-
-      {hasAnswer && (
-        <div
-          className={cn(
-            "flex items-center gap-1 border-t pt-2",
-            alwaysShowActions ? "opacity-100" : "opacity-0 transition-opacity group-hover:opacity-100",
-          )}
-          data-testid="ask-actions"
-        >
-          <button
-            type="button"
-            onClick={() => onRewrite(turn)}
-            aria-label="Rewrite this answer"
-            title="Research this query again"
-            data-testid="ask-action-rewrite"
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    <article className="flex flex-col gap-4 lg:flex-row lg:gap-6 lg:justify-center" data-testid="ask-turn">
+      <div className="flex min-w-0 w-full flex-col gap-4 lg:max-w-3xl">
+        {/* --------------------------------------------------------- heading */}
+        <div className="flex items-start gap-2">
+          <h2
+            className="min-w-0 flex-1 break-words text-xl font-medium sm:text-2xl"
+            data-testid="ask-turn-query"
           >
-            <RefreshCw className="size-4" />
-          </button>
+            {displayQuery}
+          </h2>
           <button
             type="button"
-            onClick={() => onSummarize(turn)}
-            aria-label="Summarize this answer"
-            title="Summarize this answer"
-            data-testid="ask-action-summarize"
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <Wand2 className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => void copyAnswer()}
-            aria-label="Copy answer"
-            title="Copy answer"
-            data-testid="ask-action-copy"
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            onClick={() => void copyQuery()}
+            aria-label="Copy prompt"
+            title="Copy prompt"
+            data-testid="ask-copy-query"
+            className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <Copy className="size-4" />
           </button>
-          <button
-            type="button"
-            onClick={() => onReply(turn)}
-            aria-label="Reply to this answer"
-            title="Reply — re-research in this thread"
-            data-testid="ask-action-reply"
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <CornerUpLeft className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => onQuote(turn)}
-            aria-label="Quote this answer"
-            title="Quote this answer"
-            data-testid="ask-action-quote"
-            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <Quote className="size-4" />
-          </button>
-          {copied && (
-            <span className="text-xs text-muted-foreground" data-testid="ask-copied">
-              Copied
-            </span>
-          )}
         </div>
-      )}
 
-      {turn.usage && (
-        <div className="text-xs text-muted-foreground" data-testid="ask-usage">
-          {formatAskUsage(turn.usage)}
+        {isLongQuery && (
+          <button
+            type="button"
+            onClick={() => setQueryExpanded((value) => !value)}
+            data-testid="ask-query-expand"
+            className="-mt-2 self-start text-xs text-primary hover:underline"
+          >
+            {queryExpanded ? "Show less" : "Show more"}
+          </button>
+        )}
+
+        {/* ------------------------------------------------------ state line */}
+        {streaming && (
+          <div
+            className="flex items-center gap-2 text-sm text-muted-foreground"
+            data-testid="ask-phase"
+          >
+            <span className="inline-block size-2 animate-pulse rounded-full bg-primary" />
+            <span>{phaseLabel(phase ?? "researching")}</span>
+          </div>
+        )}
+
+        {/* --------------------------------------------------------- error */}
+        {turn.error && (
+          <div
+            className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            data-testid="ask-error"
+          >
+            {turn.error.message}
+          </div>
+        )}
+
+        {/* ------------------------------------------------- research progress */}
+        <AskResearchProgress steps={turn.steps} streaming={streaming} />
+
+        {/* --------------------------------------------------------- sources */}
+        {turn.sourcesList.length > 0 && <AskSources sources={turn.sourcesList} />}
+
+        {/* ---------------------------------------------------------- answer */}
+        {(hasAnswer || streaming) && (
+          <div className="flex flex-col gap-2" data-testid="ask-answer">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Answer
+            </h3>
+            <AskAnswer answer={turn.answer} sources={turn.sourcesList} />
+          </div>
+        )}
+
+        {/*
+          The media belongs to THIS turn, so it is drawn HERE. It used to be a
+          single rail fed by the LAST turn only: clicking "Search images" on any
+          earlier answer filled the store and drew nothing.
+
+          The parent decides which shell shows it (spec 153 §C): the desktop
+          aside is wrapped in `hidden lg:block`, the mobile collapsible in
+          `lg:hidden` — never the other way round.
+        */}
+        {hasAnswer && isMobile && (
+          <div className="lg:hidden">
+            {mediaButtons}
+            {hasMedia && (
+              <Collapsible
+                open={mediaOpen}
+                onOpenChange={setMediaOpen}
+                title={mediaTitle}
+                testId="ask-media-collapsible-trigger"
+              >
+                <AskMediaView media={media} variant="strip" />
+              </Collapsible>
+            )}
+          </div>
+        )}
+
+        {hasAnswer && (
+          <div
+            className={cn(
+              "flex items-center gap-1 border-t pt-2",
+              alwaysShowActions ? "opacity-100" : "opacity-0 transition-opacity group-hover:opacity-100",
+            )}
+            data-testid="ask-actions"
+          >
+            <button
+              type="button"
+              onClick={() => onRewrite(turn)}
+              aria-label="Rewrite this answer"
+              title="Research this query again"
+              data-testid="ask-action-rewrite"
+              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <RefreshCw className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onSummarize(turn)}
+              aria-label="Summarize this answer"
+              title="Summarize this answer"
+              data-testid="ask-action-summarize"
+              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Wand2 className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => void copyAnswer()}
+              aria-label="Copy answer"
+              title="Copy answer"
+              data-testid="ask-action-copy"
+              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Copy className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onReply(turn)}
+              aria-label="Reply to this answer"
+              title="Reply — re-research in this thread"
+              data-testid="ask-action-reply"
+              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <CornerUpLeft className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onQuote(turn)}
+              aria-label="Quote this answer"
+              title="Quote this answer"
+              data-testid="ask-action-quote"
+              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Quote className="size-4" />
+            </button>
+            {copied && (
+              <span className="text-xs text-muted-foreground" data-testid="ask-copied">
+                Copied
+              </span>
+            )}
+          </div>
+        )}
+
+        {turn.usage && (
+          <div className="text-xs text-muted-foreground" data-testid="ask-usage">
+            {formatAskUsage(turn.usage)}
+          </div>
+        )}
+      </div>
+
+      {hasAnswer && !isMobile && (
+        <div className="hidden lg:block">
+          <AskMediaView media={media} variant="rail" toolbar={mediaButtons} />
         </div>
       )}
     </article>

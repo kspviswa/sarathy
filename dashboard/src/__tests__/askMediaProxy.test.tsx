@@ -290,10 +290,11 @@ describe("Ask — the media is included by default", () => {
 
     await askAQuestion(<AskView />);
 
-    await waitFor(() => expect(screen.getByTestId("ask-media-strip")).toBeInTheDocument());
+    // Desktop draws the sticky rail now (spec 153 §A); the strip is the mobile layout.
+    await waitFor(() => expect(screen.getByTestId("ask-media-rail")).toBeInTheDocument());
 
     const images = Array.from(
-      screen.getByTestId("ask-media-strip").querySelectorAll("img"),
+      screen.getByTestId("ask-media-rail").querySelectorAll("img"),
     );
     expect(images.length).toBe(2);
     for (const img of images) {

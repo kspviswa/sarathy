@@ -1724,10 +1724,15 @@ class DashboardChannel(BaseChannel):
         thread_id = str(data.pop("thread_id", "") or "").strip()
         turn_id = str(data.pop("turn_id", "") or "").strip()
 
-        # The upstream media endpoints REQUIRE a `chatModel`, because they spend
-        # an LLM call rewriting the query. Uttaram's browser supplies its own;
-        # ours must not — which model a request bills is the gateway's call.
-        # Overwrite unconditionally so a compromised page cannot pick the model.
+        # The media endpoints spend an LLM call rewriting the query before they
+        # search. Uttaram's browser supplies its own model; ours must not —
+        # which model a request bills is the gateway's call. Overwrite
+        # unconditionally so a compromised page cannot pick the model.
+        #
+        # When no media model is configured we OMIT the field rather than send
+        # an empty one: the backend then falls back to this deployment's default
+        # chat model. Stripping it outright is what made every Images/Video
+        # click fail with a 500.
         try:
             ask_cfg = self._load_full_config().ask
             provider = getattr(ask_cfg, "media_model_provider", "") or ""
@@ -1739,6 +1744,14 @@ class DashboardChannel(BaseChannel):
         except Exception as err:
             logger.warning("Could not read the media chat model from config: {}", err)
             data.pop("chatModel", None)
+
+        # Who is asking. An image or video search has no location of its own, so
+        # without this "passport application" returns whatever the engines think
+        # is the default — for this box, the US State Department. The backend
+        # folds the location into the rewritten query.
+        profile, _tz = self._ask_profile()
+        if profile:
+            data["userProfile"] = profile
 
         payload = json.dumps(data).encode("utf-8")
         backend_url = self._ask_backend_url()

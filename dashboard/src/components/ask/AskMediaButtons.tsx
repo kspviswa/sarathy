@@ -1,7 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Images, Video } from "lucide-react";
-import { buildAskHistory, type AskTurn } from "@/lib/ask";
-import { askAuthToken } from "@/lib/ask";
+import { buildAskHistory, fetchAskMedia, type AskTurn } from "@/lib/ask";
 import { cn } from "@/lib/utils";
 
 interface AskMediaButtonsProps {
@@ -16,34 +15,17 @@ type MediaState = {
   videos: { status: "idle" | "loading" | "loaded" | "error"; items: any[]; error?: string } | null;
 };
 
-function mapImages(data: any): any[] {
-  const list = Array.isArray(data?.images) ? data.images : [];
-  return list
-    .filter((item: any) => item && (item.url || item.img_src))
-    .map((item: any) => ({
-      kind: "image",
-      url: item.url || item.img_src,
-      img_src: item.img_src || item.url,
-      thumb: item.img_src || item.thumb || item.url,
-      title: item.title || "",
-    }));
-}
-
-function mapVideos(data: any): any[] {
-  const list = Array.isArray(data?.videos) ? data.videos : [];
-  return list
-    .filter((item: any) => item && (item.url || item.iframe_src))
-    .map((item: any) => ({
-      kind: "video",
-      url: item.url,
-      img_src: item.img_src || item.thumb,
-      thumb: item.img_src || item.thumb,
-      title: item.title || "",
-      iframe_src: item.iframe_src,
-      iframeUrl: item.iframe_src || item.iframeUrl,
-    }));
-}
-
+/**
+ * The media of one turn.
+ *
+ * The buttons are the REFRESH: the media of a turn is fetched on its own
+ * when the answer finishes (spec 152 §C — see `fetchAskMediaQuiet` in
+ * `@/lib/ask`), so a button here is a retry, never the only way to see the
+ * media.
+ *
+ * The fetch itself lives in `@/lib/ask` — the same call the automatic
+ * fetch makes, so the two cannot drift apart.
+ */
 export function AskMediaButtons({ turn, turns, threadId, onMediaLoaded }: AskMediaButtonsProps) {
   const [state, setState] = useState<MediaState>(() => {
     const existing = turn.media || [];
@@ -56,18 +38,22 @@ export function AskMediaButtons({ turn, turns, threadId, onMediaLoaded }: AskMed
     };
   });
 
+  /**
+   * What this component has loaded, per kind.
+   *
+   * The two kinds are fetched in PARALLEL, so neither of them can merge
+   * into the other's result — the accumulator is the single copy both of
+   * them publish from, and the last one to land carries both.
+   */
+  const loadedRef = useRef<{ images: any[]; videos: any[] }>({
+    images: (turn.media || []).filter((m: any) => m.kind === "image"),
+    videos: (turn.media || []).filter((m: any) => m.kind === "video"),
+  });
+
   const history = useMemo(() => buildAskHistory(turns), [turns]);
 
   const fetchMedia = useCallback(
     async (kind: "images" | "videos") => {
-      if (kind === "images" && state.images?.status === "loaded") {
-        // collapse/expand behavior is handled by parent via state; second click shouldn't re-fetch
-        return;
-      }
-      if (kind === "videos" && state.videos?.status === "loaded") {
-        return;
-      }
-
       setState((prev) => ({
         ...prev,
         [kind === "images" ? "images" : "videos"]: {
@@ -77,51 +63,20 @@ export function AskMediaButtons({ turn, turns, threadId, onMediaLoaded }: AskMed
       }));
 
       try {
-        const token = askAuthToken();
-        const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (token) headers.Authorization = `Bearer ${token}`;
-
-        const body: Record<string, unknown> = {
+        const items = await fetchAskMedia(kind, {
           query: turn.query,
-          chatHistory: history && history.length ? history : [],
-          // The turn the media belongs to (job 150 §A): the gateway attaches
-          // the media to the stored turn, so a thread reopened from the
-          // server shows it too. The ids are gateway routing hints — they
-          // are stripped before the request reaches the research engine.
-          thread_id: threadId,
-          turn_id: turn.id,
-        };
-
-        const res = await fetch(`/api/ask/${kind}`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
+          history,
+          threadId,
+          turnId: turn.id,
         });
-
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          const message = (data as any)?.error || (data as any)?.message || `Request failed (${res.status})`;
-          setState((prev) => ({
-            ...prev,
-            [kind === "images" ? "images" : "videos"]: {
-              status: "error",
-              items: [],
-              error: message,
-            } as any,
-          }));
-          return;
-        }
-
-        const data = await res.json();
-        const items = kind === "images" ? mapImages(data) : mapVideos(data);
         setState((prev) => ({
           ...prev,
           [kind === "images" ? "images" : "videos"]: { status: "loaded", items },
         }));
-        // persist merged media for this turn
-        const existing = turn.media || [];
-        const others = existing.filter((m: any) => m.kind !== (kind === "images" ? "image" : "video"));
-        const merged = [...others, ...items];
+        // Publish the merged media for this turn — the accumulator holds
+        // BOTH kinds, so the two fetches cannot lose each other.
+        loadedRef.current[kind === "images" ? "images" : "videos"] = items;
+        const merged = [...loadedRef.current.images, ...loadedRef.current.videos];
         onMediaLoaded(turn.id, merged);
       } catch (e: any) {
         setState((prev) => ({
@@ -134,7 +89,7 @@ export function AskMediaButtons({ turn, turns, threadId, onMediaLoaded }: AskMed
         }));
       }
     },
-    [turn, turns, history, state.images?.status, state.videos?.status, onMediaLoaded],
+    [turn, history, threadId, onMediaLoaded],
   );
 
   const imagesLoading = state.images?.status === "loading";

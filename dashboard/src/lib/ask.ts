@@ -1464,6 +1464,118 @@ interface PendingTurn {
   createdAt: number;
 }
 
+// ---------------------------------------------------------------------------
+// The media (spec 152 §C)
+//
+// The media used to be fetched only when the user tapped a button, so the
+// default answer was text only. It is fetched on its own as soon as the
+// answer is finished — and it is fetched HERE, in the ONE module both shells
+// use, so the automatic fetch and the manual buttons cannot drift apart.
+// ---------------------------------------------------------------------------
+
+/** One image of the media search, in the shape the UI draws. */
+export function mapAskImages(data: any): AskMedia[] {
+  const list = Array.isArray(data?.images) ? data.images : [];
+  return list
+    .filter((item: any) => item && (item.url || item.img_src))
+    .map((item: any) => ({
+      kind: "image" as const,
+      url: item.url || item.img_src,
+      img_src: item.img_src || item.url,
+      thumb: item.img_src || item.thumb || item.url,
+      title: item.title || "",
+    }));
+}
+
+/** One video of the media search, in the shape the UI draws. */
+export function mapAskVideos(data: any): AskMedia[] {
+  const list = Array.isArray(data?.videos) ? data.videos : [];
+  return list
+    .filter((item: any) => item && (item.url || item.iframe_src))
+    .map((item: any) => ({
+      kind: "video" as const,
+      url: item.url,
+      img_src: item.img_src || item.thumb,
+      thumb: item.img_src || item.thumb,
+      title: item.title || "",
+      iframe_src: item.iframe_src,
+      iframeUrl: item.iframe_src || item.iframeUrl,
+    }));
+}
+
+/** What one media request needs. */
+export interface AskMediaRequest {
+  /** The turn's question — the engine rewrites it before it searches. */
+  query: string;
+  /** The thread's conversation, so the search knows what the turn is about. */
+  history: AskHistoryTurn[] | undefined;
+  /** The thread and the turn the media belongs to (gateway routing hints). */
+  threadId: string | null;
+  turnId: string;
+}
+
+/**
+ * Fetch one kind of media for a turn.
+ *
+ * The request carries the thread and the turn ids, so the gateway attaches
+ * the media to the STORED turn: a thread reopened from the server shows the
+ * media and fetches nothing again.
+ *
+ * Throws when the request fails — the caller decides whether that is an
+ * error the user has to read or a silent no-op.
+ */
+export async function fetchAskMedia(
+  kind: "images" | "videos",
+  request: AskMediaRequest,
+): Promise<AskMedia[]> {
+  const token = askAuthToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const body: Record<string, unknown> = {
+    query: request.query,
+    chatHistory: request.history && request.history.length ? request.history : [],
+    thread_id: request.threadId,
+    turn_id: request.turnId,
+  };
+
+  const res = await fetch(`/api/ask/${kind}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const message =
+      (data as any)?.error || (data as any)?.message || `Request failed (${res.status})`;
+    throw new Error(message);
+  }
+
+  const data = await res.json();
+  return kind === "images" ? mapAskImages(data) : mapAskVideos(data);
+}
+
+/**
+ * Both kinds of media, in parallel — and SILENTLY.
+ *
+ * A failure of either one is not an error the user has to read: a text-only
+ * answer is a valid outcome, and the manual buttons are there to retry.
+ */
+export async function fetchAskMediaQuiet(request: AskMediaRequest): Promise<{
+  images: AskMedia[];
+  videos: AskMedia[];
+}> {
+  const [images, videos] = await Promise.allSettled([
+    fetchAskMedia("images", request),
+    fetchAskMedia("videos", request),
+  ]);
+  return {
+    images: images.status === "fulfilled" ? images.value : [],
+    videos: videos.status === "fulfilled" ? videos.value : [],
+  };
+}
+
 /**
  * The Ask session — the hook both shells use.
  *
@@ -1480,6 +1592,8 @@ export function useAskStream() {
   const abortRef = useRef<AbortController | null>(null);
   /** The thread being streamed into — it does not exist on the server yet. */
   const liveThreadRef = useRef<string | null>(null);
+  /** The turns whose media was already fetched on its own (spec 152 §C). */
+  const autoMediaRef = useRef<Set<string>>(new Set());
 
   // The store is the ONE copy of the thread data: the canvas and the
   // history list both read it, so they cannot drift apart.
@@ -1523,6 +1637,35 @@ export function useAskStream() {
     threadStore.clear();
     next.forEach((thread) => threadStore.set(thread.id, thread));
     notifyThreadList();
+  }, []);
+
+  /**
+   * The media of a finished turn, fetched on its own (spec 152 §C).
+   *
+   * The answer used to be text only: the images and the videos were there,
+   * but only after the user tapped a button. They are now fetched as soon
+   * as the answer is finished — in parallel, and SILENTLY: a failure is not
+   * an error the user has to read, and a text-only answer is a valid
+   * outcome.
+   *
+   * The request carries the thread and the turn ids, so the gateway attaches
+   * the media to the STORED turn: a thread reopened from the server shows
+   * the media and fetches nothing again.
+   */
+  const autoFetchMedia = useCallback(async (turn: AskTurn, targetThreadId: string) => {
+    // The turn is already in the store — `commit` put it there a moment ago
+    // — so the thread's turns ARE the history, this turn included.
+    const stored = getAskThreads().find((thread) => thread.id === targetThreadId);
+    const history = buildAskHistory(stored?.turns ?? []);
+    const { images, videos } = await fetchAskMediaQuiet({
+      query: turn.query,
+      history,
+      threadId: targetThreadId,
+      turnId: turn.id,
+    });
+    const media = [...images, ...videos];
+    if (!media.length) return;
+    setAskTurnMedia(targetThreadId, turn.id, media);
   }, []);
 
   const run = useCallback(
@@ -1576,6 +1719,14 @@ export function useAskStream() {
         };
         commit(turn, targetThreadId);
         setPending(null);
+        // The media of this turn, fetched on its own (spec 152 §C). It runs
+        // in the background — the answer is already on the screen — and it
+        // fails silently. A turn that errored has no answer to illustrate,
+        // so it is left alone.
+        if (!turn.error && !autoMediaRef.current.has(turn.id)) {
+          autoMediaRef.current.add(turn.id);
+          void autoFetchMedia(turn, targetThreadId);
+        }
       };
 
       try {
@@ -1672,7 +1823,7 @@ export function useAskStream() {
         liveThreadRef.current = null;
       }
     },
-    [commit, threadId],
+    [commit, threadId, autoFetchMedia],
   );
 
   const stop = useCallback(async () => {

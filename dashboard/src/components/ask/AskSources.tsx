@@ -9,6 +9,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { AskSource } from "@/lib/ask";
+import { proxiedImage } from "@/lib/mediaProxy";
+import { cn } from "@/lib/utils";
 
 /**
  * The source cards — Uttaram's `MessageSources.tsx`, mapped onto the
@@ -19,9 +21,49 @@ import type { AskSource } from "@/lib/ask";
  * title and the citation index the answer points at.
  */
 
-/** The favicon of a source. Google's favicon service, like Uttaram's. */
+/**
+ * The favicon of a source.
+ *
+ * The favicon service is a THIRD-PARTY host, and the browser asking it
+ * directly is exactly what broke: the installed PWA and filtered networks
+ * cannot reach it, so every card showed a blank square. The image is
+ * fetched by the GATEWAY instead and served from this origin (spec 152 §A),
+ * so the browser only ever talks to us.
+ */
 function faviconUrl(url: string): string {
   return `https://s2.googleusercontent.com/s2/favicons?domain_url=${encodeURIComponent(url)}`;
+}
+
+/**
+ * One favicon.
+ *
+ * A favicon that cannot be fetched falls back to the globe — at the same
+ * size, so a card never shows an empty square. The tile ("View N more")
+ * uses the same component, so it gets the same fallback.
+ */
+function Favicon({ url, className }: { url: string; className?: string }) {
+  const [broken, setBroken] = useState(false);
+
+  if (broken) {
+    return (
+      <Globe
+        data-testid="ask-favicon-fallback"
+        className={cn("size-4 shrink-0 rounded text-muted-foreground", className)}
+      />
+    );
+  }
+
+  return (
+    <img
+      src={proxiedImage(faviconUrl(url))}
+      width={16}
+      height={16}
+      alt=""
+      loading="lazy"
+      onError={() => setBroken(true)}
+      className={cn("size-4 shrink-0 rounded", className)}
+    />
+  );
 }
 
 /** The host of a URL, without the `www.` prefix. */
@@ -42,7 +84,6 @@ function SourceCard({
   source: AskSource;
   className?: string;
 }) {
-  const [broken, setBroken] = useState(false);
   const domain = sourceDomain(source);
 
   return (
@@ -57,19 +98,7 @@ function SourceCard({
       <span className="truncate text-xs text-foreground">{source.title}</span>
       <span className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1">
-          {broken ? (
-            <Globe className="size-4 shrink-0 rounded text-muted-foreground" />
-          ) : (
-            <img
-              src={faviconUrl(source.url)}
-              width={16}
-              height={16}
-              alt=""
-              loading="lazy"
-              onError={() => setBroken(true)}
-              className="size-4 shrink-0 rounded"
-            />
-          )}
+          <Favicon url={source.url} />
           <span className="truncate text-xs text-muted-foreground">{domain}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
@@ -110,15 +139,7 @@ export function AskSources({ sources }: { sources: AskSource[] }) {
           >
             <span className="flex flex-row items-center gap-1">
               {sources.slice(3, 6).map((source) => (
-                <img
-                  key={source.idx}
-                  src={faviconUrl(source.url)}
-                  width={16}
-                  height={16}
-                  alt=""
-                  loading="lazy"
-                  className="size-4 rounded"
-                />
+                <Favicon key={source.idx} url={source.url} />
               ))}
             </span>
             <span className="text-xs text-muted-foreground">View {hidden} more</span>

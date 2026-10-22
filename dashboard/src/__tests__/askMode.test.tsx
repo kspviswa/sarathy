@@ -25,6 +25,7 @@ import {
   type AskThread,
   type AskTurn,
 } from "@/lib/ask";
+import { AskResearchProgress } from "@/components/ask/AskResearchProgress";
 import { AskView } from "@/views/AskView";
 import { AskView as MobileAskView } from "@/mobile/AskView";
 
@@ -884,5 +885,34 @@ describe("Ask follow-up history", () => {
       turn({ id: `t${i}`, query: `q${i}`, answer: `a${i}` }),
     );
     expect(buildAskHistory(many)!.length).toBeLessThanOrEqual(20);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Research progress — collapsed until asked for
+// ---------------------------------------------------------------------------
+
+describe("Ask research progress", () => {
+  const steps = [
+    { kind: "searching" as const, queries: ["capital of France"] },
+    { kind: "reading" as const, url: "https://en.wikipedia.org/wiki/Paris", title: "Paris" },
+  ];
+
+  it("starts collapsed even while the turn streams", () => {
+    render(<AskResearchProgress steps={steps} streaming />);
+
+    expect(screen.getByTestId("ask-steps")).toHaveAttribute("data-expanded", "false");
+    expect(screen.queryByTestId("ask-step-list")).toBeNull();
+  });
+
+  it("opens on demand and stays open when the stream ends", () => {
+    const { rerender } = render(<AskResearchProgress steps={steps} streaming />);
+
+    fireEvent.click(screen.getByTestId("ask-steps-toggle"));
+    expect(screen.getByTestId("ask-step-list")).toBeInTheDocument();
+
+    // The turn finishing must not fold the panel the reader just opened.
+    rerender(<AskResearchProgress steps={steps} streaming={false} />);
+    expect(screen.getByTestId("ask-step-list")).toBeInTheDocument();
   });
 });

@@ -203,7 +203,6 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
                   <AskTurnCard
                     key={turn.id}
                     turn={turn}
-                    isLast={index === turns.length - 1}
                     streaming={state.streaming && index === turns.length - 1}
                     phase={state.phase}
                     onReply={replyToTurn}

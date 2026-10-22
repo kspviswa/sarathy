@@ -209,9 +209,9 @@ export function ChatView({
    * file comes from: the device, or the workspace — the workspace branch
    * switches to the Files tab, so nothing became unreachable.
    *
-   * The native picker is one more tap away: the sheet's own row is a
-   * `<label>` for the very same input, so the browser still opens its own
-   * dialog (the reason this input is rendered and not display:none).
+   * The native picker is one more tap away: the sheet's own row clicks the
+   * very same input (the reason this input is rendered and not
+   * display:none).
    */
   const handleAttachClick = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
@@ -219,6 +219,21 @@ export function ChatView({
   }, []);
 
   const closeAttachSheet = useCallback(() => setAttachSheetOpen(false), []);
+
+  /**
+   * "Upload from device" — the OS file picker.
+   *
+   * The row used to be a `<label htmlFor="attach-file-input">` that ALSO
+   * closed the sheet. Closing unmounts the label in the middle of the
+   * click, so the label→input activation was lost and no picker ever
+   * opened (spec 152 §D). The sheet is closed FIRST and the input is
+   * clicked on the NEXT tick — the input itself lives outside the sheet,
+   * so it is still in the DOM when the click lands.
+   */
+  const uploadFromDevice = useCallback(() => {
+    setAttachSheetOpen(false);
+    window.setTimeout(() => fileInputRef.current?.click(), 0);
+  }, []);
 
   const browseWorkspaceFiles = useCallback(() => {
     setAttachSheetOpen(false);
@@ -739,16 +754,15 @@ export function ChatView({
             className="absolute inset-x-0 bottom-0 flex flex-col gap-1 rounded-t-2xl border-t bg-background p-3 pb-6"
             data-testid="mobile-attach-sheet-panel"
           >
-            <label
-              htmlFor="attach-file-input"
-              role="button"
+            <button
+              type="button"
+              onClick={uploadFromDevice}
               data-testid="mobile-attach-upload"
-              onClick={closeAttachSheet}
-              className="flex min-h-12 cursor-pointer items-center gap-3 rounded-lg px-3 text-base hover:bg-accent"
+              className="flex min-h-12 items-center gap-3 rounded-lg px-3 text-left text-base hover:bg-accent"
             >
               <Paperclip className="size-5 shrink-0" />
               Upload from device
-            </label>
+            </button>
             <button
               type="button"
               onClick={browseWorkspaceFiles}

@@ -39,6 +39,11 @@ from sarathy.channels.dashboard.auth import (
     merge_config,
     redact_config,
 )
+from sarathy.channels.dashboard.media_proxy import (
+    CACHE_MAX_AGE_S,
+    MediaProxy,
+    ProxyError,
+)
 from sarathy.config.schema import DashboardConfig
 from sarathy.session.manager import channel_for_key
 
@@ -1016,7 +1021,14 @@ class DashboardChannel(BaseChannel):
     async def _auth_middleware(self, request: web.Request, handler: Callable):
         path = request.path
         public = path == "/api/auth/pair"
-        if (path.startswith("/api/") or path == "/ws") and not public:
+        # The image proxy (spec 152 §A) is a PUBLIC read route: an <img>
+        # request cannot carry a device token, and the dashboard draws the
+        # source favicons and the media thumbnails through it. It changes
+        # nothing on the box and it is guarded by the SSRF rules in
+        # media_proxy.py (public addresses only, http(s) only, the default
+        # ports only, image/* only, a capped body).
+        proxy_read = path == "/api/media/proxy" and request.method == "GET"
+        if (path.startswith("/api/") or path == "/ws") and not public and not proxy_read:
             token = self._extract_token(request)
             device_id = self._registry.validate(token) if token else None
             if not device_id and path == "/api/media" and request.method == "GET":
@@ -1044,9 +1056,11 @@ class DashboardChannel(BaseChannel):
         """Attach the CSP and hardening headers to a response.
 
         Applied in the middleware so it covers HTML shells, static assets and
-        API responses alike, including the early-return 401/403 paths.
+        API responses alike, including the early-return 401/403 paths. A
+        response that already carries its own CSP keeps it — the image proxy
+        serves remote bytes and sandboxes them (see `_api_media_proxy`).
         """
-        response.headers["Content-Security-Policy"] = _CSP
+        response.headers.setdefault("Content-Security-Policy", _CSP)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "DENY"
@@ -1112,6 +1126,9 @@ class DashboardChannel(BaseChannel):
         app.router.add_delete("/api/ask/groups/{group_id}", self._api_ask_group_delete)
         app.router.add_post("/api/media", self._api_media_upload)
         app.router.add_get("/api/media", self._api_media_serve)
+        # The same-origin image proxy (spec 152 §A): the Ask UI's favicons
+        # and media thumbnails are fetched HERE and served from this origin.
+        app.router.add_get("/api/media/proxy", self._api_media_proxy)
         app.router.add_get("/api/config", self._api_get_config)
         app.router.add_put("/api/config", self._api_put_config)
         app.router.add_get("/api/providers", self._api_providers_list)
@@ -2145,6 +2162,66 @@ class DashboardChannel(BaseChannel):
             return web.json_response({"error": "not found"}, status=404)
 
         return web.FileResponse(resolved)
+
+    # ------------------------------------------------------------- media proxy api
+
+    def _media_proxy(self) -> MediaProxy:
+        """The image proxy — the cache lives under the media directory.
+
+        The directory is read at call time, so it follows the media
+        directory the tests point elsewhere.
+        """
+        return MediaProxy(cache_dir=_MEDIA_DIR / "proxy")
+
+    async def _api_media_proxy(self, request: web.Request) -> web.Response:
+        """Serve a remote image from THIS origin (spec 152 §A).
+
+        The browser asks for ``/api/media/proxy?url=<encoded>``; the gateway
+        fetches the image (browser UA, matching Referer, SSRF-guarded),
+        caches it under the media directory and serves it from here. A
+        repeat request is answered from the disk and never leaves the box.
+
+        Every refusal is a status and a one-line log — never a stack trace.
+        """
+        raw = request.query.get("url", "")
+        try:
+            image = await self._media_proxy().get(raw)
+        except ProxyError as err:
+            if err.status >= 500:
+                logger.warning("Media proxy failed for {}: {}", raw, err.message)
+            return web.json_response(
+                {"error": err.message, "code": err.code}, status=err.status
+            )
+        except Exception as err:
+            logger.warning("Media proxy failed for {}: {}", raw, err)
+            return web.json_response(
+                {"error": "media proxy failed", "code": "proxy_failed"}, status=502
+            )
+
+        etag = f'"{image.etag}"'
+        headers = {
+            "Cache-Control": f"public, max-age={CACHE_MAX_AGE_S}",
+            "ETag": etag,
+            "Last-Modified": image.last_modified,
+            # The evidence that a repeat request never left the box.
+            "X-Media-Proxy": "hit" if image.from_cache else "miss",
+            # The bytes come from the open web, so they are sandboxed: an
+            # SVG opened directly at this URL must not be able to run
+            # script on our origin.
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        }
+
+        if image.from_cache:
+            logger.debug("Media proxy cache hit for {}", raw)
+        else:
+            logger.info("Media proxy fetched {} ({} bytes)", raw, len(image.data))
+
+        if request.headers.get("If-None-Match", "").strip() == etag:
+            return web.Response(status=304, headers=headers)
+
+        return web.Response(
+            body=image.data, content_type=image.content_type, headers=headers
+        )
 
     # ------------------------------------------------------------------ config api
 

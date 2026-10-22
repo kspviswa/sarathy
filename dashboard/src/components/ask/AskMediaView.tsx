@@ -1,11 +1,61 @@
+import { ImageOff } from "lucide-react";
 import { useState } from "react";
 import type { AskMedia } from "@/lib/ask";
+import { proxiedImage } from "@/lib/mediaProxy";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 
 /**
  * The answer's media.
  */
+
+/**
+ * One thumbnail.
+ *
+ * The bytes are fetched by the GATEWAY and served from this origin (spec
+ * 152 §A): pointing the browser straight at the result host left the rail
+ * full of empty boxes, because many of them refuse hotlinking. A thumbnail
+ * that cannot be fetched leaves a placeholder — never an empty box.
+ */
+function Thumb({
+  src,
+  alt,
+  title,
+  className,
+}: {
+  src?: string;
+  alt?: string;
+  title?: string;
+  className?: string;
+}) {
+  const [broken, setBroken] = useState(false);
+
+  if (!src || broken) {
+    return (
+      <div
+        data-testid="ask-media-thumb-missing"
+        className={cn(
+          "flex h-full w-full items-center justify-center bg-muted/40 text-muted-foreground",
+          className,
+        )}
+      >
+        <ImageOff className="size-4 shrink-0" aria-hidden="true" />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={proxiedImage(src)}
+      alt={alt ?? ""}
+      title={title}
+      loading="lazy"
+      onError={() => setBroken(true)}
+      className={className}
+    />
+  );
+}
+
 export function AskMediaView({
   media,
   variant,
@@ -47,13 +97,12 @@ export function AskMediaView({
                       rel="noreferrer noopener"
                       className="group relative block overflow-hidden rounded-lg border bg-card"
                     >
-                      <div className="aspect-video w-full overflow-hidden">
-                        <img
+                      <div className="relative aspect-video w-full overflow-hidden">
+                        <Thumb
                           src={src}
                           alt={item.title || ""}
                           title={item.title || ""}
-                          loading="lazy"
-                          className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                          className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
                         />
                       </div>
                       {item.title && (
@@ -89,13 +138,12 @@ export function AskMediaView({
                       }}
                       className="group relative block w-full"
                     >
-                      <div className="aspect-video w-full overflow-hidden bg-muted">
+                      <div className="relative aspect-video w-full overflow-hidden bg-muted">
                         {src ? (
-                          <img
+                          <Thumb
                             src={src}
                             alt={item.title || ""}
-                            loading="lazy"
-                            className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                            className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
                           />
                         ) : (
                           <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
@@ -163,13 +211,12 @@ export function AskMediaView({
                   rel="noreferrer noopener"
                   className="group relative block overflow-hidden rounded-lg border bg-card"
                 >
-                  <div className="aspect-video w-full overflow-hidden">
-                    <img
+                  <div className="relative aspect-video w-full overflow-hidden">
+                    <Thumb
                       src={src}
                       alt={item.title || ""}
                       title={item.title || ""}
-                      loading="lazy"
-                      className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                      className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
                     />
                   </div>
                   {item.title && (
@@ -207,13 +254,12 @@ export function AskMediaView({
                     }}
                     className="group relative block w-full"
                   >
-                    <div className="aspect-video w-full overflow-hidden bg-muted">
+                    <div className="relative aspect-video w-full overflow-hidden bg-muted">
                       {src ? (
-                        <img
+                        <Thumb
                           src={src}
                           alt={item.title || ""}
-                          loading="lazy"
-                          className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                          className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
                         />
                       ) : (
                         <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">

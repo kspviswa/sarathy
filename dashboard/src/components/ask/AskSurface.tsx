@@ -182,7 +182,7 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
             <div
               ref={listRef}
               className={`mx-auto flex w-full flex-col gap-8 ${
-                isMobile ? "p-3" : "max-w-3xl p-4"
+                isMobile ? "p-3" : "max-w-6xl p-4"
               }`}
               data-testid="ask-turns"
             >
@@ -215,6 +215,7 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
                       if (updateMedia) updateMedia(turnId, media);
                     }}
                     alwaysShowActions={isMobile}
+                    isMobile={isMobile}
                   />
                 ))
               )}

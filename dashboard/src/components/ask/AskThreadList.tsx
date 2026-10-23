@@ -12,9 +12,10 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { useCoarsePointer } from "@/lib/useCoarsePointer";
 import { Button } from "@/components/ui/button";
 import {
   createAskGroup,
@@ -41,6 +42,14 @@ import {
 } from "@/lib/ask";
 import { relativeTime } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 /**
  * The Ask threads — the "Asks" list of the Sessions surface (spec §C).
@@ -71,6 +80,7 @@ export function AskThreadList({
   const [threads, setThreads] = useState<AskThread[]>(() => getAskThreads());
   const [groups, setGroups] = useState<AskGroup[]>(() => getAskGroups());
   const [collapsed, setCollapsed] = useState<string[]>(() => getCollapsedAskGroups());
+  const coarse = useCoarsePointer();
 
   // The stores are the one copy of the data: this list reads them instead
   // of keeping a private copy.
@@ -102,20 +112,45 @@ export function AskThreadList({
     ]);
   }, []);
 
-  const forget = useCallback(async (id: string) => {
-    // The dashboard's own destructive-confirm pattern (the same one the
-    // device revoke uses).
-    if (!window.confirm("Delete this research thread? It cannot be undone.")) return;
-    try {
-      await deleteAskThread(id);
-      // The thread that was open in the Ask canvas is gone: the canvas
-      // empties, so it is not left pointing at a thread that no longer
-      // exists.
-      if (getActiveAskThreadId() === id) setActiveAskThreadId(null);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not delete the thread");
-    }
+  // Deleting a thread destroys its turns, so BOTH entry points (the
+  // always-visible button and the touch swipe action) go through ONE
+  // confirmation dialog. It lives here, not inside every row: one instance,
+  // driven by the pending thread id.
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+
+  // Which row is swiped open on a touch device. One at a time, by
+  // construction — opening a row is setting this to its id.
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
+
+  const closeDeleteDialog = useCallback(() => {
+    setPendingDeleteId(null);
   }, []);
+
+  /** Ask before deleting: the dialog is the only entry to the delete path. */
+  const requestDelete = useCallback((id: string) => {
+    setPendingDeleteId(id);
+  }, []);
+
+  const handleDeleteConfirm = useCallback(
+    async (id: string) => {
+      try {
+        // Clear the canvas when the thread being deleted is the open one.
+        if (getActiveAskThreadId() === id) setActiveAskThreadId(null);
+        await deleteAskThread(id);
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Could not delete the thread",
+        );
+      }
+      closeDeleteDialog();
+      setOpenSwipeId(null);
+    },
+    [closeDeleteDialog],
+  );
+
+  const pendingThread = pendingDeleteId
+    ? threads.find((thread) => thread.id === pendingDeleteId)
+    : undefined;
 
   /** Start a new ask inside a group: the thread is born there. */
   const startInGroup = useCallback(
@@ -166,8 +201,11 @@ export function AskThreadList({
             onNewAsk={() => void startInGroup(group)}
             onRefresh={refresh}
             onOpen={onOpenThread}
-            onForget={forget}
+            onRequestDelete={requestDelete}
             onMove={move}
+            coarse={coarse}
+            openSwipeId={openSwipeId}
+            onSwipeOpen={setOpenSwipeId}
           />
         ))}
 
@@ -192,8 +230,11 @@ export function AskThreadList({
                   thread={thread}
                   groups={groups}
                   onOpen={onOpenThread}
-                  onForget={forget}
+                  onRequestDelete={requestDelete}
                   onMove={move}
+                  coarse={coarse}
+                  openSwipeId={openSwipeId}
+                  onSwipeOpen={setOpenSwipeId}
                 />
               ))}
             </ul>
@@ -205,7 +246,50 @@ export function AskThreadList({
             No research threads yet — ask something in the Ask tab.
           </p>
         )}
+
       </div>
+
+      {/* ONE dialog for the whole list — driven by the pending thread id, so
+          both the always-visible button and the touch swipe action confirm
+          through the same place. It is mounted outside the scroller so the
+          overlay is not clipped. */}
+      <Dialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) closeDeleteDialog();
+        }}
+      >
+        <DialogContent data-testid="ask-thread-delete-dialog">
+          <DialogHeader>
+            <DialogTitle>Delete this ask?</DialogTitle>
+          </DialogHeader>
+          <DialogDescription>
+            {pendingThread ? `"${pendingThread.title || "New ask"}"` : "This thread"}{" "}
+            and its turns will be deleted. This cannot be undone.
+          </DialogDescription>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={closeDeleteDialog}
+              data-testid="ask-thread-delete-cancel"
+              className="flex items-center gap-2 rounded-sm border px-3 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (pendingDeleteId) void handleDeleteConfirm(pendingDeleteId);
+              }}
+              data-testid="ask-thread-delete-confirm"
+              className="flex items-center gap-2 rounded-sm bg-destructive px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-destructive/90"
+            >
+              <Trash2 className="size-3.5" />
+              Delete
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -309,8 +393,11 @@ function GroupSection({
   onNewAsk,
   onRefresh,
   onOpen,
-  onForget,
+  onRequestDelete,
   onMove,
+  coarse,
+  openSwipeId,
+  onSwipeOpen,
 }: {
   group: AskGroup;
   threads: AskThread[];
@@ -320,8 +407,11 @@ function GroupSection({
   onNewAsk: () => void;
   onRefresh: () => void | Promise<void>;
   onOpen: (threadId: string) => void;
-  onForget: (id: string) => void;
+  onRequestDelete: (id: string) => void;
   onMove: (thread: AskThread, groupId: string | null) => void;
+  coarse: boolean;
+  openSwipeId: string | null;
+  onSwipeOpen: (id: string | null) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(group.name);
@@ -455,8 +545,11 @@ function GroupSection({
               thread={thread}
               groups={groups}
               onOpen={onOpen}
-              onForget={onForget}
+              onRequestDelete={onRequestDelete}
               onMove={onMove}
+              coarse={coarse}
+              openSwipeId={openSwipeId}
+              onSwipeOpen={onSwipeOpen}
             />
           ))}
         </ul>
@@ -531,117 +624,256 @@ function GroupMenu({
 /**
  * One thread — its title, how old it is, and the controls that act on it.
  *
+ * Deleting is discoverable on both shells: the trash button is always
+ * visible on a fine pointer, and on a coarse pointer (touch) swiping the row
+ * left reveals a red Delete. Both paths end in the same confirmation dialog
+ * rendered by the list.
+ *
  * The move control lists every group plus "Uncategorized", and the group the
  * thread is in is the one that is highlighted.
  */
+
+/** How far a row travels when it snaps open. */
+const SWIPE_OPEN_X = -88;
+/** Travel past which the row stays open instead of snapping back. */
+const SWIPE_THRESHOLD = 40;
+
 function ThreadRow({
   thread,
   groups,
   onOpen,
-  onForget,
+  onRequestDelete,
   onMove,
+  coarse,
+  openSwipeId,
+  onSwipeOpen,
 }: {
   thread: AskThread;
   groups: AskGroup[];
   onOpen: (threadId: string) => void;
-  onForget: (id: string) => void;
+  onRequestDelete: (id: string) => void;
   onMove: (thread: AskThread, groupId: string | null) => void;
+  coarse: boolean;
+  /** The row that is currently swiped open, if any. */
+  openSwipeId: string | null;
+  onSwipeOpen: (id: string | null) => void;
 }) {
   const [moveOpen, setMoveOpen] = useState(false);
+  const [swipeX, setSwipeX] = useState(0);
+  const startXRef = useRef(0);
+  const startYRef = useRef(0);
+  // The gesture is decided once: a vertical drag hands the row back to the
+  // list's scroller and stays inert until the pointer is lifted.
+  const draggingRef = useRef(false);
+  const verticalRef = useRef(false);
+
+  const open = coarse && openSwipeId === thread.id;
+  const offset = open ? SWIPE_OPEN_X : swipeX;
+
+  // Only one row may be open: when another row takes the swipe, this one
+  // closes.
+  useEffect(() => {
+    if (!open) setSwipeX(0);
+  }, [open]);
+
+  const resetGesture = () => {
+    draggingRef.current = false;
+    verticalRef.current = false;
+  };
+
+  const onPointerDown = (event: React.PointerEvent<HTMLLIElement>) => {
+    if (!coarse) return;
+    // A press on an ACTION control (move, delete) is a tap, not a swipe. The
+    // row body is itself a button, though — that is where a swipe starts.
+    const target = event.target as HTMLElement;
+    if (target.closest("button") && !target.closest('[data-testid="ask-thread-item"]')) return;
+    draggingRef.current = true;
+    verticalRef.current = false;
+    startXRef.current = event.clientX;
+    startYRef.current = event.clientY;
+    setSwipeX(open ? SWIPE_OPEN_X : 0);
+  };
+
+  const onPointerMove = (event: React.PointerEvent<HTMLLIElement>) => {
+    if (!coarse || !draggingRef.current) return;
+    const dx = event.clientX - startXRef.current;
+    const dy = event.clientY - startYRef.current;
+
+    // A vertical drag scrolls the list — it must never open a row.
+    if (!verticalRef.current && Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 8) {
+      verticalRef.current = true;
+      setSwipeX(0);
+      return;
+    }
+    if (verticalRef.current) return;
+
+    const base = open ? SWIPE_OPEN_X : 0;
+    setSwipeX(Math.max(SWIPE_OPEN_X, Math.min(0, base + dx)));
+  };
+
+  /** The browser took the gesture (a scroll, or the OS): drop it, unopened. */
+  const onPointerCancel = () => {
+    resetGesture();
+    setSwipeX(open ? SWIPE_OPEN_X : 0);
+  };
+
+  const onPointerUp = () => {
+    if (!coarse || !draggingRef.current) {
+      resetGesture();
+      return;
+    }
+    resetGesture();
+    if (verticalRef.current) {
+      setSwipeX(0);
+      return;
+    }
+    const travelled = Math.abs(swipeX);
+    if (travelled >= SWIPE_THRESHOLD) {
+      onSwipeOpen(thread.id);
+      setSwipeX(SWIPE_OPEN_X);
+    } else {
+      if (open) onSwipeOpen(null);
+      setSwipeX(0);
+    }
+  };
 
   return (
-    <li className="group flex items-start gap-1">
-      <button
-        type="button"
-        onClick={() => onOpen(thread.id)}
-        data-testid="ask-thread-item"
-        data-thread-id={thread.id}
-        data-group-id={thread.groupId ?? ""}
-        title={thread.title}
-        className="flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-accent"
-      >
-        <MessageSquareText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">
-          {/* A thread born in a group has no question yet: it takes the name
-              of its first one. Until then it shows what it is. */}
-          <span className="block truncate text-sm">
-            {thread.title || "New ask"}
-          </span>
-          <span className="block text-xs text-muted-foreground">
-            {thread.turnCount}{" "}
-            {thread.turnCount === 1 ? "turn" : "turns"} ·{" "}
-            {relativeTime(thread.updatedAt)}
-          </span>
-        </span>
-      </button>
-
-      <div className="relative">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground"
-          onClick={() => setMoveOpen((value) => !value)}
-          aria-label={`Move "${thread.title}" to another group`}
-          title="Move to a group"
-          data-testid="ask-thread-move"
+    <li
+      className="group relative flex items-start gap-1 overflow-hidden rounded-md"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      /* `pan-y` keeps the vertical scroll with the list and leaves horizontal
+         travel to the swipe — with the default `auto` the scroller claims any
+         drag and the browser fires pointercancel before the gesture can
+         open a row. */
+      style={coarse ? { touchAction: "pan-y" } : undefined}
+      data-swipe-open={open ? "true" : undefined}
+    >
+      {/* The action revealed by the swipe. It sits BEHIND the row, so it is
+          only reachable once the row has moved out of the way. */}
+      {coarse && (
+        <button
+          type="button"
+          data-testid="ask-thread-swipe-delete"
+          aria-label={`Delete ${thread.title}`}
+          title={`Delete ${thread.title}`}
+          onClick={() => onRequestDelete(thread.id)}
+          className="absolute inset-y-0 right-0 flex items-center gap-1 bg-destructive px-3 text-xs font-medium text-white"
         >
-          <FolderKanban className="size-3.5" />
-        </Button>
-        {moveOpen && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={() => setMoveOpen(false)} />
-            <div
-              className="absolute right-0 top-full z-20 mt-1 min-w-[10rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
-              data-testid="ask-move-menu"
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  setMoveOpen(false);
-                  onMove(thread, null);
-                }}
-                data-testid="ask-move-none"
-                data-current={thread.groupId ? undefined : "true"}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
-                  !thread.groupId && "font-medium text-primary",
-                )}
+          <Trash2 className="size-3.5" />
+          Delete
+        </button>
+      )}
+
+      <div
+        className="flex min-w-0 flex-1 items-start gap-1 bg-background transition-transform"
+        style={coarse ? { transform: `translateX(${offset}px)` } : undefined}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            // Tapping the body of an open row closes it instead of opening
+            // the thread.
+            if (open) {
+              onSwipeOpen(null);
+              setSwipeX(0);
+              return;
+            }
+            onOpen(thread.id);
+          }}
+          data-testid="ask-thread-item"
+          data-thread-id={thread.id}
+          data-group-id={thread.groupId ?? ""}
+          title={thread.title}
+          className="flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-accent"
+        >
+          <MessageSquareText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            {/* A thread born in a group has no question yet: it takes the name
+                of its first one. Until then it shows what it is. */}
+            <span className="block truncate text-sm">
+              {thread.title || "New ask"}
+            </span>
+            <span className="block text-xs text-muted-foreground">
+              {thread.turnCount}{" "}
+              {thread.turnCount === 1 ? "turn" : "turns"} ·{" "}
+              {relativeTime(thread.updatedAt)}
+            </span>
+          </span>
+        </button>
+
+        <div className="relative">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground"
+            onClick={() => setMoveOpen((value) => !value)}
+            aria-label={`Move "${thread.title}" to another group`}
+            title="Move to a group"
+            data-testid="ask-thread-move"
+          >
+            <FolderKanban className="size-3.5" />
+          </Button>
+          {moveOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setMoveOpen(false)} />
+              <div
+                className="absolute right-0 top-full z-20 mt-1 min-w-[10rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+                data-testid="ask-move-menu"
               >
-                Uncategorized
-              </button>
-              {groups.map((group) => (
                 <button
-                  key={group.id}
                   type="button"
                   onClick={() => {
                     setMoveOpen(false);
-                    onMove(thread, group.id);
+                    onMove(thread, null);
                   }}
-                  data-testid={`ask-move-${group.id}`}
-                  data-current={thread.groupId === group.id ? "true" : undefined}
+                  data-testid="ask-move-none"
+                  data-current={thread.groupId ? undefined : "true"}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
-                    thread.groupId === group.id && "font-medium text-primary",
+                    !thread.groupId && "font-medium text-primary",
                   )}
                 >
-                  {group.name}
+                  Uncategorized
                 </button>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
+                {groups.map((group) => (
+                  <button
+                    key={group.id}
+                    type="button"
+                    onClick={() => {
+                      setMoveOpen(false);
+                      onMove(thread, group.id);
+                    }}
+                    data-testid={`ask-move-${group.id}`}
+                    data-current={thread.groupId === group.id ? "true" : undefined}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
+                      thread.groupId === group.id && "font-medium text-primary",
+                    )}
+                  >
+                    {group.name}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
 
-      <button
-        type="button"
-        onClick={() => void onForget(thread.id)}
-        aria-label="Delete this research thread"
-        title="Delete this research thread"
-        data-testid="ask-thread-forget"
-        className="rounded px-1.5 py-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
-      >
-        <Trash2 className="size-3.5" />
-      </button>
+        {/* Always visible — hover only strengthens the colour, so the control
+            is discoverable on desktop and reachable by keyboard. */}
+        <button
+          type="button"
+          onClick={() => onRequestDelete(thread.id)}
+          aria-label={`Delete "${thread.title}"`}
+          title="Delete this research thread"
+          data-testid="ask-thread-forget"
+          className="rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:text-destructive"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </div>
     </li>
   );
 }

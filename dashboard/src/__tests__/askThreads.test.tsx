@@ -653,16 +653,18 @@ describe("Deleting a thread", () => {
   it("asks first, then deletes it on the server", async () => {
     const gateway = installGateway();
     seedThread(gateway, "t1", "Capital of France?");
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("confirm", confirm);
 
     render(<AskThreadList onOpenThread={() => {}} />);
     await waitFor(() => expect(screen.getByTestId("ask-thread-forget")).toBeInTheDocument());
 
+    // The confirmation is a real dialog now (job 158), not window.confirm.
     fireEvent.click(screen.getByTestId("ask-thread-forget"));
+    await waitFor(() => expect(screen.getByTestId("ask-thread-delete-dialog")).toBeInTheDocument());
+    expect(gateway.deletes).toEqual([]);
+
+    fireEvent.click(screen.getByTestId("ask-thread-delete-confirm"));
 
     await waitFor(() => expect(gateway.deletes).toEqual(["t1"]));
-    expect(confirm).toHaveBeenCalled();
     // The row is gone.
     await waitFor(() => expect(screen.queryByTestId("ask-thread-item")).toBeNull());
   });
@@ -670,15 +672,15 @@ describe("Deleting a thread", () => {
   it("a cancelled confirmation deletes nothing", async () => {
     const gateway = installGateway();
     seedThread(gateway, "t1", "Capital of France?");
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("confirm", confirm);
 
     render(<AskThreadList onOpenThread={() => {}} />);
     await waitFor(() => expect(screen.getByTestId("ask-thread-forget")).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId("ask-thread-forget"));
+    await waitFor(() => expect(screen.getByTestId("ask-thread-delete-dialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("ask-thread-delete-cancel"));
 
-    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("ask-thread-delete-dialog")).toBeNull());
     expect(gateway.deletes).toEqual([]);
     expect(screen.getByTestId("ask-thread-item")).toBeInTheDocument();
   });
@@ -686,7 +688,6 @@ describe("Deleting a thread", () => {
   it("clears the canvas when the open thread is the one deleted", async () => {
     const gateway = installGateway();
     seedThread(gateway, "t1", "Capital of France?");
-    vi.stubGlobal("confirm", vi.fn(() => true));
 
     render(<AskView />);
     act(() => {
@@ -697,6 +698,8 @@ describe("Deleting a thread", () => {
     render(<AskThreadList onOpenThread={() => {}} />);
     await waitFor(() => expect(screen.getByTestId("ask-thread-forget")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("ask-thread-forget"));
+    await waitFor(() => expect(screen.getByTestId("ask-thread-delete-confirm")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("ask-thread-delete-confirm"));
 
     await waitFor(() => expect(gateway.deletes).toEqual(["t1"]));
     // The canvas empties — the thread it was showing is gone.

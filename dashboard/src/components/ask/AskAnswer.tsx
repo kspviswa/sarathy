@@ -9,6 +9,7 @@ import {
   type AskSource,
 } from "@/lib/ask";
 import { MD_COMPONENTS, SafeLink } from "@/lib/markdown";
+import { extractProse, hasOpenUIBlock, UIBlock } from "@/lib/uiBlocks";
 
 /**
  * The Ask answer — REAL markdown, with the citation pills intact.
@@ -28,11 +29,28 @@ import { MD_COMPONENTS, SafeLink } from "@/lib/markdown";
 export function AskAnswer({
   answer,
   sources,
+  isStreaming = false,
+  onSend,
 }: {
   answer: string;
   sources: AskSource[];
+  /** Let a partially-arrived openUI block render progressively. */
+  isStreaming?: boolean;
+  /** A widget button's follow-up question starts the next Ask turn. */
+  onSend?: (message: string) => void;
 }) {
-  const content = useMemo(() => preprocessAskCitations(answer), [answer]);
+  // The same cheap fence gate ChatView uses, so a plain answer never pays for
+  // the heavy lazy renderer. When a block IS present, prose is split out FIRST
+  // and citation markers are rewritten per chunk — a `[n]` inside a widget
+  // body must stay part of the widget source, not become a pill.
+  const hasUI = useMemo(() => hasOpenUIBlock(answer), [answer]);
+  const chunks = useMemo(
+    () =>
+      (hasUI ? extractProse(answer) : [answer]).map((chunk) =>
+        preprocessAskCitations(chunk),
+      ),
+    [answer, hasUI],
+  );
 
   const components = useMemo<Components>(
     () => ({
@@ -93,8 +111,17 @@ export function AskAnswer({
   );
 
   return (
-    <div data-testid="ask-answer-markdown">
-      <MarkdownBubble content={content} components={components} />
+    <div className="flex flex-col gap-2">
+      <div data-testid="ask-answer-markdown">
+        {chunks.map((chunk, i) => (
+          <MarkdownBubble key={i} content={chunk} components={components} />
+        ))}
+      </div>
+      {hasUI && (
+        <div data-testid="ask-answer-block">
+          <UIBlock source={answer} isStreaming={isStreaming} onSend={onSend} />
+        </div>
+      )}
     </div>
   );
 }

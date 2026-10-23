@@ -33,7 +33,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ExternalLink, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -41,6 +41,10 @@ import { cn } from "@/lib/utils";
 export interface LightboxItem {
   src: string;
   alt?: string;
+  /** The page the image came from — renders a "Source" link when present. */
+  href?: string;
+  /** A human title for the image, used when the alt text is absent. */
+  title?: string;
 }
 
 interface LightboxApi {
@@ -305,7 +309,7 @@ function LightboxOverlay({ item, onClose }: { item: LightboxItem; onClose: () =>
       data-testid="image-lightbox"
       role="dialog"
       aria-modal="true"
-      aria-label={item.alt ? `Image: ${item.alt}` : "Image preview"}
+      aria-label={item.alt || item.title ? `Image: ${item.alt || item.title}` : "Image preview"}
       className="fixed inset-0 z-[60] flex touch-none select-none items-center justify-center overflow-hidden bg-black/90 backdrop-blur-sm"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -325,7 +329,7 @@ function LightboxOverlay({ item, onClose }: { item: LightboxItem; onClose: () =>
       <img
         data-lightbox-image
         src={item.src}
-        alt={item.alt ?? ""}
+        alt={item.alt ?? item.title ?? ""}
         draggable={false}
         onClick={onImageClick}
         className={cn(
@@ -388,6 +392,19 @@ function LightboxOverlay({ item, onClose }: { item: LightboxItem; onClose: () =>
           >
             <RotateCcw className="size-4" />
           </button>
+          {item.href && (
+            <a
+              data-testid="lightbox-source"
+              href={item.href}
+              target="_blank"
+              rel="noreferrer noopener"
+              onClick={(event) => event.stopPropagation()}
+              className="flex items-center gap-1 rounded-full px-2.5 py-2 text-xs font-medium transition-colors hover:bg-white/15"
+            >
+              <ExternalLink className="size-4" aria-hidden="true" />
+              <span>Source</span>
+            </a>
+          )}
         </div>
       </div>
     </div>,

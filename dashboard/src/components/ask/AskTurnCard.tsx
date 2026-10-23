@@ -16,7 +16,9 @@ import { Collapsible } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/components/ask/copy";
 import {
-  formatAskUsage,
+  formatAskUsageCost,
+  formatAskUsageMeta,
+  formatAskUsageTokens,
   normaliseCitationMarkers,
   phaseLabel,
   type AskPhase,
@@ -44,6 +46,8 @@ export function AskTurnCard({
   turns,
   threadId,
   onMediaUpdate,
+  /** Start the next Ask turn from a widget button inside the answer. */
+  onSend,
   /** Touch devices have no hover, so the actions are always visible there. */
   alwaysShowActions = false,
   /** The mobile shell renders the collapsible; the desktop shell the rail. */
@@ -65,6 +69,7 @@ export function AskTurnCard({
   turns?: AskTurn[];
   threadId?: string | null;
   onMediaUpdate?: (turnId: string, media: any[]) => void;
+  onSend?: (message: string) => void;
   alwaysShowActions?: boolean;
   isMobile?: boolean;
 }) {
@@ -176,7 +181,14 @@ export function AskTurnCard({
         <AskResearchProgress steps={turn.steps} streaming={streaming} />
 
         {/* --------------------------------------------------------- sources */}
-        {turn.sourcesList.length > 0 && <AskSources sources={turn.sourcesList} />}
+        {turn.sourcesList.length > 0 && (
+          <Collapsible
+            title={`Sources (${turn.sourcesList.length})`}
+            testId="ask-sources-collapsible-trigger"
+          >
+            <AskSources sources={turn.sourcesList} />
+          </Collapsible>
+        )}
 
         {/* ---------------------------------------------------------- answer */}
         {(hasAnswer || streaming) && (
@@ -184,7 +196,12 @@ export function AskTurnCard({
             <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               Answer
             </h3>
-            <AskAnswer answer={turn.answer} sources={turn.sourcesList} />
+            <AskAnswer
+              answer={turn.answer}
+              sources={turn.sourcesList}
+              isStreaming={streaming}
+              onSend={onSend}
+            />
           </div>
         )}
 
@@ -281,7 +298,17 @@ export function AskTurnCard({
 
         {turn.usage && (
           <div className="text-xs text-muted-foreground" data-testid="ask-usage">
-            {formatAskUsage(turn.usage)}
+            <span>{formatAskUsageMeta(turn.usage)}</span>
+            <span data-testid="ask-usage-tokens">
+              {" · "}
+              {formatAskUsageTokens(turn.usage)}
+            </span>
+            {formatAskUsageCost(turn.usage) && (
+              <span data-testid="ask-usage-cost">
+                {" · "}
+                {formatAskUsageCost(turn.usage)}
+              </span>
+            )}
           </div>
         )}
       </div>

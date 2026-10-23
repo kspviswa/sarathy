@@ -168,7 +168,10 @@ describe("adapter boundary", () => {
   it("keeps the heavy runtime in one lazy module", async () => {
     const { globSync, readFileSync, existsSync } = await import("node:fs");
     const allowed = new Set(["src/lib/openuiRenderer.tsx", "src/lib/openuiTheme.tsx"]);
-    const files = globSync("src/**/*.{ts,tsx}");
+    // Test files import @openuidev/* for contract testing but never enter the bundle.
+    // Filter them out so the guard only checks shipped source.
+    const testFiles = new Set(globSync("src/**/__tests__/**/*.{ts,tsx}"));
+    const files = globSync("src/**/*.{ts,tsx}").filter((f) => !testFiles.has(f));
     const offenders = files.filter((f) => {
       if (allowed.has(f)) return false;
       return /from\s+["']@openuidev\//.test(readFileSync(f, "utf8"));

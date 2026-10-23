@@ -318,7 +318,7 @@ describe("Ask helpers", () => {
         latencyMs: 4200,
         sources: 12,
       }),
-    ).toBe("4.2 s · 6 iterations · 12 sources · 2.1k tokens");
+    ).toBe("4.2 s · 6 iterations · 12 sources · 100 in · 2.0k out · 2.1k total tokens");
   });
 
   it("a step reads as a line", () => {
@@ -466,6 +466,15 @@ describe("Ask view — desktop and mobile render the same state", () => {
     expect(citation).toHaveAttribute("href", "https://en.wikipedia.org/wiki/Paris");
     expect(citation).toHaveAttribute("target", "_blank");
 
+    // The numbered source list is behind its own collapse, closed by default.
+    const sourcesTrigger = screen.getByTestId("ask-sources-collapsible-trigger");
+    expect(sourcesTrigger).toHaveTextContent("Sources (1)");
+    expect(sourcesTrigger).toHaveAttribute("aria-expanded", "false");
+    await act(async () => {
+      fireEvent.click(sourcesTrigger);
+      await Promise.resolve();
+    });
+
     // The numbered source list is there and clickable.
     const source = screen.getByTestId("ask-source-1");
     expect(source).toHaveTextContent("Paris - Wikipedia");
@@ -511,6 +520,12 @@ describe("Ask view — desktop and mobile render the same state", () => {
       "href",
       "https://en.wikipedia.org/wiki/Paris",
     );
+    const sourcesTrigger = screen.getByTestId("ask-sources-collapsible-trigger");
+    expect(sourcesTrigger).toHaveTextContent("Sources (1)");
+    await act(async () => {
+      fireEvent.click(sourcesTrigger);
+      await Promise.resolve();
+    });
     expect(screen.getByTestId("ask-source-1")).toHaveTextContent("Paris - Wikipedia");
     expect(screen.getByTestId("ask-usage")).toHaveTextContent("2 iterations");
   });

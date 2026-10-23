@@ -119,8 +119,12 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
     [run],
   );
 
-  const submit = useCallback(() => {
-    const trimmed = query.trim();
+  const submit = useCallback((explicit?: string) => {
+    // The composer calls this with no argument (or, via React's onClick, a
+    // MouseEvent — hence the `typeof` guard). A widget button passes the
+    // question it raised, which starts the next turn directly.
+    const raw = typeof explicit === "string" ? explicit : query;
+    const trimmed = raw.trim();
     if (!trimmed || state.streaming) return;
 
     const quotes = buildQuotesPayload(quoteChips);
@@ -214,6 +218,7 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
                     onMediaUpdate={(turnId: string, media: any[]) => {
                       if (updateMedia) updateMedia(turnId, media);
                     }}
+                    onSend={submit}
                     alwaysShowActions={isMobile}
                     isMobile={isMobile}
                   />

@@ -167,11 +167,12 @@ describe("AskMediaView — the thumbnails go through the proxy", () => {
     expect(screen.getByTestId("ask-media-thumb-missing")).toBeInTheDocument();
   });
 
-  it("the link still points at the original page", () => {
+  it("the image tile is a button, not a link away from the dashboard", () => {
     render(<AskMediaView media={media} variant="strip" />);
 
-    const link = document.querySelector('a[href="https://images.test/photo.jpg"]');
-    expect(link).toBeInTheDocument();
+    const thumb = screen.getByTestId("ask-media-thumb");
+    expect(thumb.tagName).toBe("BUTTON");
+    expect(document.querySelector('a[href="https://images.test/photo.jpg"]')).toBeNull();
   });
 });
 

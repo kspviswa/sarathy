@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 import { AskTurnCard } from "@/components/ask/AskTurnCard";
+import { LightboxProvider } from "@/lib/lightbox";
 import type { AskMedia, AskTurn } from "@/lib/ask";
 
 function makeTurn(overrides: Partial<AskTurn> = {}): AskTurn {
@@ -48,20 +49,22 @@ function videoMedia(count: number, startAt = 0): AskMedia[] {
 
 function renderTurn(turn: AskTurn, isMobile = false) {
   return render(
-    <AskTurnCard
-      turn={turn}
-      streaming={false}
-      phase="done"
-      onReply={vi.fn()}
-      onQuote={vi.fn()}
-      onRewrite={vi.fn()}
-      onSummarize={vi.fn()}
-      turns={[turn]}
-      threadId="thread-1"
-      onMediaUpdate={vi.fn()}
-      alwaysShowActions={false}
-      isMobile={isMobile}
-    />,
+    <LightboxProvider>
+      <AskTurnCard
+        turn={turn}
+        streaming={false}
+        phase="done"
+        onReply={vi.fn()}
+        onQuote={vi.fn()}
+        onRewrite={vi.fn()}
+        onSummarize={vi.fn()}
+        turns={[turn]}
+        threadId="thread-1"
+        onMediaUpdate={vi.fn()}
+        alwaysShowActions={false}
+        isMobile={isMobile}
+      />
+    </LightboxProvider>,
   );
 }
 
@@ -154,7 +157,7 @@ describe("AskTurnCard — no media means no rail and no collapsible", () => {
 // ---------------------------------------------------------------------------
 
 describe("AskMediaView — the rail's 'View N more' tile (spec 153 §A)", () => {
-  it("opens the preview dialog and shows the first of the hidden images", () => {
+  it("opens the shared lightbox on the first of the hidden images", () => {
     renderTurn(makeTurn({ media: imageMedia(5) }));
 
     const thumbs = screen.getAllByTestId("ask-media-thumb");
@@ -164,7 +167,8 @@ describe("AskMediaView — the rail's 'View N more' tile (spec 153 §A)", () => 
 
     fireEvent.click(screen.getByTestId("ask-media-more"));
 
-    expect(screen.getByTestId("ask-media-image-dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("image-lightbox")).toBeInTheDocument();
+    expect(screen.queryByTestId("ask-media-image-dialog")).not.toBeInTheDocument();
   });
 
   it("does not show the tile at four images or below", () => {

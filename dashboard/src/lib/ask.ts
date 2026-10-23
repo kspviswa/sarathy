@@ -61,6 +61,20 @@ export interface AskUsage {
   iterations: number;
   latencyMs: number;
   sources: number;
+  /** The turn's cost in USD, when the backend actually reports one. */
+  cost?: number | null;
+}
+
+/** The first finite numeric value, ignoring nulls and non-numbers. */
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
 }
 
 export interface AskError {
@@ -252,8 +266,11 @@ export function reduceAskFrame(state: AskState, frame: AskFrame): AskState {
       return { ...state, answer: state.answer + frame.data };
 
     case "usage": {
-      const usage = frame.data as Partial<AskUsage> | undefined;
+      const usage = frame.data as
+        | (Partial<AskUsage> & { costUsd?: unknown; totalCost?: unknown })
+        | undefined;
       if (!usage || typeof usage !== "object") return state;
+      const cost = firstFiniteNumber(usage.cost, usage.costUsd, usage.totalCost);
       return {
         ...state,
         usage: {
@@ -262,6 +279,7 @@ export function reduceAskFrame(state: AskState, frame: AskFrame): AskState {
           iterations: Number(usage.iterations) || 0,
           latencyMs: Number(usage.latencyMs) || 0,
           sources: Number(usage.sources) || 0,
+          ...(cost !== undefined ? { cost } : {}),
         },
       };
     }
@@ -309,16 +327,49 @@ export function phaseLabel(phase: AskPhase): string {
   }
 }
 
-/** `4.2 s · 6 iterations · 12 sources` — the usage footer. */
+/** A token count as the footer prints it: `940`, `14.7k`. */
+export function formatAskTokenCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return `${Math.round(value)}`;
+}
+
+/** The in / out / total fragment of the usage footer. */
+export function formatAskUsageTokens(usage: AskUsage | null): string {
+  if (!usage) return "";
+  const total = usage.tokensIn + usage.tokensOut;
+  return `${formatAskTokenCount(usage.tokensIn)} in · ${formatAskTokenCount(
+    usage.tokensOut,
+  )} out · ${formatAskTokenCount(total)} total tokens`;
+}
+
+/** The latency / iterations / sources fragment of the usage footer. */
+export function formatAskUsageMeta(usage: AskUsage | null): string {
+  if (!usage) return "";
+  const seconds = usage.latencyMs / 1000;
+  return [
+    `${seconds.toFixed(1)} s`,
+    `${usage.iterations} ${usage.iterations === 1 ? "iteration" : "iterations"}`,
+    `${usage.sources} ${usage.sources === 1 ? "source" : "sources"}`,
+  ].join(" · ");
+}
+
+/** The cost fragment — empty when the backend did not report a finite cost. */
+export function formatAskUsageCost(usage: AskUsage | null): string {
+  if (!usage || typeof usage.cost !== "number" || !Number.isFinite(usage.cost)) {
+    return "";
+  }
+  const cost = usage.cost;
+  if (cost === 0) return "$0";
+  return cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(2)}`;
+}
+
+/** `4.2 s · 6 iterations · 12 sources · 14.7k in · 1.8k out · 16.6k total tokens` */
 export function formatAskUsage(usage: AskUsage | null): string {
   if (!usage) return "";
-  const parts: string[] = [];
-  const seconds = usage.latencyMs / 1000;
-  parts.push(`${seconds.toFixed(1)} s`);
-  parts.push(`${usage.iterations} ${usage.iterations === 1 ? "iteration" : "iterations"}`);
-  parts.push(`${usage.sources} ${usage.sources === 1 ? "source" : "sources"}`);
-  const tokens = usage.tokensIn + usage.tokensOut;
-  if (tokens > 0) parts.push(`${(tokens / 1000).toFixed(1)}k tokens`);
+  const parts = [formatAskUsageMeta(usage), formatAskUsageTokens(usage)];
+  const cost = formatAskUsageCost(usage);
+  if (cost) parts.push(cost);
   return parts.join(" · ");
 }
 

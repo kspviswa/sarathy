@@ -549,6 +549,9 @@ describe("Opening a thread", () => {
       "href",
       "https://en.wikipedia.org/wiki/Paris",
     );
+    act(() => {
+      fireEvent.click(screen.getByTestId("ask-sources-collapsible-trigger"));
+    });
     expect(screen.getByTestId("ask-source-1")).toHaveTextContent("Paris - Wikipedia");
     // The research timeline came back too.
     expect(screen.getByTestId("ask-steps")).toBeInTheDocument();

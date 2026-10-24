@@ -10,7 +10,10 @@
     "test": "vitest run --pool=forks",
     "test:watch": "vitest --pool=forks",
     "gen:openui-prompt": "node scripts/gen-openui-prompt.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "check:spa-parity": "node scripts/check-spa-parity.mjs",
+    "pretest": "node scripts/check-spa-parity.mjs",
+    "prebuild": "node scripts/check-spa-parity.mjs"
   },
   "dependencies": {
     "@openuidev/lang-core": "1.0.1",

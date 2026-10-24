@@ -218,64 +218,56 @@ export function AskComposer({
     </Popover>
   );
 
-  const desktopRow = (
-    <div
-      data-testid="ask-input-row"
-      className="flex items-end gap-2 rounded-2xl border border-border bg-transparent p-2 backdrop-blur focus-within:border-primary focus-within:ring-1"
-    >
-      <Textarea
-        ref={textareaRef}
-        value={query}
-        onChange={(event) => onQueryChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            onSubmit();
-          }
-        }}
-        placeholder="Ask anything…"
-        className="min-h-[72px] max-h-48 w-full resize-none border-0 bg-transparent px-0 py-2 text-left focus-visible:ring-0"
-        data-testid="ask-query"
-        aria-label="Ask query"
-      />
+  // ONE field, ONE controls row, for BOTH shells (spec 163/164). Only the
+  // arrangement differs — the outer row's direction and the field's size.
+  // Never re-declare a control per variant: duplicated markup is exactly how
+  // the mobile composer drifted away from the desktop one.
+  //
+  // `text-base` on mobile is load-bearing: iOS Safari auto-zooms the page when
+  // a focused field's font-size is below 16px.
+  const queryField = (
+    <Textarea
+      ref={textareaRef}
+      value={query}
+      onChange={(event) => onQueryChange(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          onSubmit();
+        }
+      }}
+      placeholder="Ask anything…"
+      className={cn(
+        "w-full resize-none border-0 bg-transparent focus-visible:ring-0",
+        isMobile
+          ? "min-h-[56px] max-h-36 px-1 py-1.5 text-base"
+          : "min-h-[72px] max-h-48 min-w-0 flex-1 px-0 py-2 text-left",
+      )}
+      data-testid="ask-query"
+      aria-label="Ask query"
+    />
+  );
 
+  const controlsRow = (
+    <div className="flex items-center gap-1" data-testid="ask-controls-row">
       {sourcesTrigger}
       {modeTrigger}
+      <div className="min-w-0 flex-1" />
       {streaming ? stopControl : submitControl}
     </div>
   );
 
-  // The phone arrangement (spec 163): the input owns a full-width row so it is
-  // readable at 320–430px, and the controls sit beneath it — sources and mode
-  // on the left, the submit/stop alone at the right end of that same row.
-  // `text-base` is load-bearing: iOS Safari zooms the page on focus below 16px.
-  const mobileRow = (
+  const inputRow = (
     <div
       data-testid="ask-input-row"
-      className="flex flex-col gap-1 rounded-2xl border border-border bg-transparent p-2 backdrop-blur focus-within:border-primary focus-within:ring-1"
+      className={cn(
+        "rounded-2xl border border-border bg-transparent p-2 backdrop-blur",
+        "focus-within:border-primary focus-within:ring-1",
+        isMobile ? "flex flex-col gap-1" : "flex items-end gap-2",
+      )}
     >
-      <Textarea
-        ref={textareaRef}
-        value={query}
-        onChange={(event) => onQueryChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            onSubmit();
-          }
-        }}
-        placeholder="Ask anything…"
-        className="min-h-[56px] max-h-36 w-full resize-none border-0 bg-transparent px-1 py-1.5 text-base focus-visible:ring-0"
-        data-testid="ask-query"
-        aria-label="Ask query"
-      />
-
-      <div className="flex items-center gap-1" data-testid="ask-controls-row">
-        {sourcesTrigger}
-        {modeTrigger}
-        <div className="min-w-0 flex-1" />
-        {streaming ? stopControl : submitControl}
-      </div>
+      {queryField}
+      {controlsRow}
     </div>
   );
 
@@ -311,7 +303,7 @@ export function AskComposer({
 
       <QuoteChips chips={quoteChips} onRemove={onRemoveQuote} />
 
-      {isMobile ? mobileRow : desktopRow}
+      {inputRow}
     </div>
   );
 }

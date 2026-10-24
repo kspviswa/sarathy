@@ -403,6 +403,42 @@ class AskStore:
         stored = self.get_thread(thread_id)
         return stored["thread"] if stored else None
 
+    def rename_thread(self, thread_id: str, title: str) -> dict[str, Any] | None:
+        """Give a thread the title the answering LLM chose.
+
+        This is the SPA telling the store what the live stream already said —
+        the title is applied as given (whitespace-collapsed, clipped), never
+        falling back to the first query. The thread is returned as it is now,
+        or None when the id is unknown.
+        """
+        if not thread_id:
+            return None
+        flat = " ".join((title or "").split())
+        if len(flat) > TITLE_MAX:
+            flat = flat[:TITLE_MAX].rstrip()
+        try:
+            with self._lock:
+                conn = self._connect()
+                try:
+                    row = conn.execute(
+                        "SELECT id FROM ask_threads WHERE id = ?", (thread_id,)
+                    ).fetchone()
+                    if row is None:
+                        return None
+                    conn.execute(
+                        "UPDATE ask_threads SET title = ? WHERE id = ?",
+                        (flat, thread_id),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+        except Exception as err:
+            logger.warning("Could not rename the Ask thread {}: {}", thread_id, err)
+            return None
+
+        stored = self.get_thread(thread_id)
+        return stored["thread"] if stored else None
+
     def delete_thread(self, thread_id: str) -> bool:
         """Forget a thread and its turns. ``False`` when the id is unknown."""
         if not thread_id:
@@ -571,15 +607,26 @@ class AskStore:
 
     # ------------------------------------------------------------------ turns
 
-    def add_turn(self, thread_id: str, turn: dict[str, Any]) -> dict[str, Any] | None:
+    def add_turn(
+        self, thread_id: str, turn: dict[str, Any], title: str = ""
+    ) -> dict[str, Any] | None:
         """Append one turn to a thread, creating the thread when it is new.
 
         A stream that lands in a thread the store has never seen creates it —
-        the first turn of a new conversation IS the thread, and its title is
-        the question that started it.
+        the first turn of a new conversation IS the thread.
+
+        The title comes from the ANSWERING LLM (spec 162): the first turn
+        carries one, every later turn carries none. It names a new or still
+        unnamed thread; an existing title is never overwritten, which is what
+        makes the follow-up turns (no title frame) harmless.
         """
         if not thread_id:
             return None
+        named = " ".join((title or "").split())
+        if len(named) > TITLE_MAX:
+            named = named[:TITLE_MAX].rstrip()
+        fallback = thread_title(str(turn.get("query") or ""))
+        chosen = named or fallback
         try:
             with self._lock:
                 conn = self._connect()
@@ -594,7 +641,7 @@ class AskStore:
                         conn.execute(
                             "INSERT INTO ask_threads (id, title, created_at, updated_at)"
                             " VALUES (?, ?, ?, ?)",
-                            (thread_id, thread_title(str(turn.get("query") or "")), now, now),
+                            (thread_id, chosen, now, now),
                         )
                     elif not (row["title"] or "").strip():
                         # A thread born inside a group is created empty, before
@@ -602,7 +649,7 @@ class AskStore:
                         # same rule a thread created with its first turn follows.
                         conn.execute(
                             "UPDATE ask_threads SET title = ? WHERE id = ?",
-                            (thread_title(str(turn.get("query") or "")), thread_id),
+                            (chosen, thread_id),
                         )
                     else:
                         now = _now_iso()
@@ -758,6 +805,10 @@ class AskTurnAccumulator:
         self.media: list[dict[str, Any]] = []
         self.usage: dict[str, Any] | None = None
         self.error: dict[str, Any] | None = None
+        # The title the ANSWERING LLM named this thread with (spec 162). It is
+        # a property of the thread, not of the turn, so it never enters the
+        # turn body. Only the first turn of a conversation emits one.
+        self.title: str = ""
         self.done = False
         self.failed = False
 
@@ -778,11 +829,29 @@ class AskTurnAccumulator:
             self._feed_media(data)
         elif kind == "usage" and isinstance(data, dict):
             self.usage = data
+        elif kind == "title" and isinstance(data, dict):
+            self._feed_title(data)
         elif kind == "error":
             self.failed = True
             self.error = data if isinstance(data, dict) else {"message": str(data)}
         elif kind == "done":
             self.done = True
+
+    def _feed_title(self, data: Any) -> None:
+        """Remember the LLM-authored thread title — the first non-empty one wins.
+
+        The engine emits at most one such frame per run, but the fold is
+        defensive: a repeated or empty frame must never blank a good title.
+        """
+        if self.title:
+            return
+        title = data.get("title")
+        if not isinstance(title, str):
+            return
+        flat = " ".join(title.split())
+        if len(flat) > TITLE_MAX:
+            flat = flat[:TITLE_MAX].rstrip()
+        self.title = flat
 
     def _feed_step(self, data: Any) -> None:
         if not isinstance(data, dict):

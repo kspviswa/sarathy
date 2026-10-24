@@ -1650,6 +1650,9 @@ class DashboardChannel(BaseChannel):
                         sources=list(sources),
                         created_at=turn_created_at,
                     ),
+                    # The LLM named the thread while it was answering (spec
+                    # 162). Empty on every turn but the first.
+                    title=accumulator.title,
                 )
             except Exception as err:
                 logger.warning("Could not record the Ask turn: {}", err)
@@ -1953,11 +1956,14 @@ class DashboardChannel(BaseChannel):
         return web.json_response(stored)
 
     async def _api_ask_thread_move(self, request: web.Request) -> web.Response:
-        """PATCH /api/ask/threads/{id} — move a thread into a group.
+        """PATCH /api/ask/threads/{id} — move a thread, rename it, or both.
 
-        The body is ``{groupId}``. A group id files the thread under that
-        group; ``null`` takes it out of every group (uncategorized). A group
-        that does not exist is a 400, an unknown thread a 404.
+        The body carries ``groupId``, ``title``, or both.
+        - ``groupId``: an id files the thread under that group; ``null`` takes
+          it out of every group (uncategorized). A group that does not exist is
+          a 400, an unknown thread a 404.
+        - ``title``: the name the answering LLM gave the thread. The SPA sends
+          it as the title frame lands, so the store keeps what history shows.
         """
         if self._ask_disabled():
             return self._ask_error("not found", "not_found", 404)
@@ -1973,14 +1979,25 @@ class DashboardChannel(BaseChannel):
         if group_id == _ASK_BAD_GROUP:
             return self._ask_error("invalid group", "invalid_group", 400)
 
+        raw_title = data.get("title")
+        rename = isinstance(raw_title, str) and raw_title.strip() != ""
+        wants_move = "groupId" in data
+
         store = self._ask_store_instance()
-        if group_id and store.get_group(group_id) is None:
+        if wants_move and group_id and store.get_group(group_id) is None:
             return self._ask_error("unknown group", "unknown_group", 400)
 
+        thread = store.get_thread(thread_id)
+        if thread is None:
+            return self._ask_error("not found", "not_found", 404)
+
         try:
-            thread = store.move_thread(thread_id, group_id)
+            if wants_move:
+                thread = store.move_thread(thread_id, group_id)
+            if rename:
+                thread = store.rename_thread(thread_id, raw_title) or thread
         except Exception as err:
-            logger.warning("Could not move the Ask thread {}: {}", thread_id, err)
+            logger.warning("Could not update the Ask thread {}: {}", thread_id, err)
             return self._ask_error("ask threads unavailable", "store_unavailable", 503)
         if thread is None:
             return self._ask_error("not found", "not_found", 404)

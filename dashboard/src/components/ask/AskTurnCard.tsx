@@ -1,8 +1,15 @@
 import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  CircleDollarSign,
   Copy,
   CornerUpLeft,
+  Link2,
   Quote,
   RefreshCw,
+  Repeat2,
+  Sigma,
+  Timer,
   Wand2,
 } from "lucide-react";
 import { useState } from "react";
@@ -17,8 +24,7 @@ import { cn } from "@/lib/utils";
 import { copyText } from "@/components/ask/copy";
 import {
   formatAskUsageCost,
-  formatAskUsageMeta,
-  formatAskUsageTokens,
+  formatAskTokenCount,
   normaliseCitationMarkers,
   phaseLabel,
   type AskPhase,
@@ -297,15 +303,52 @@ export function AskTurnCard({
         )}
 
         {turn.usage && (
-          <div className="text-xs text-muted-foreground" data-testid="ask-usage">
-            <span>{formatAskUsageMeta(turn.usage)}</span>
-            <span data-testid="ask-usage-tokens">
-              {" · "}
-              {formatAskUsageTokens(turn.usage)}
+          <div
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+            data-testid="ask-usage"
+          >
+            <span
+              className="inline-flex items-center gap-1 tabular-nums"
+              data-testid="ask-usage-latency"
+            >
+              <Timer className="size-3" aria-hidden="true" />
+              {(turn.usage.latencyMs / 1000).toFixed(1)} s
+            </span>
+            <span
+              className="inline-flex items-center gap-1 tabular-nums"
+              data-testid="ask-usage-iterations"
+            >
+              <Repeat2 className="size-3" aria-hidden="true" />
+              {turn.usage.iterations}{" "}
+              {turn.usage.iterations === 1 ? "iteration" : "iterations"}
+            </span>
+            <span
+              className="inline-flex items-center gap-1 tabular-nums"
+              data-testid="ask-usage-sources"
+            >
+              <Link2 className="size-3" aria-hidden="true" />
+              {turn.usage.sources} {turn.usage.sources === 1 ? "source" : "sources"}
+            </span>
+            <span
+              className="inline-flex items-center gap-1 tabular-nums"
+              data-testid="ask-usage-tokens"
+            >
+              <ArrowDownToLine className="size-3" aria-hidden="true" />
+              {formatAskTokenCount(turn.usage.tokensIn)} in ·{" "}
+              <ArrowUpFromLine className="size-3" aria-hidden="true" />
+              {formatAskTokenCount(turn.usage.tokensOut)} out ·{" "}
+              <Sigma className="size-3" aria-hidden="true" />
+              {formatAskTokenCount(
+                turn.usage.tokensIn + turn.usage.tokensOut,
+              )}{" "}
+              total tokens
             </span>
             {formatAskUsageCost(turn.usage) && (
-              <span data-testid="ask-usage-cost">
-                {" · "}
+              <span
+                className="inline-flex items-center gap-1 tabular-nums"
+                data-testid="ask-usage-cost"
+              >
+                <CircleDollarSign className="size-3" aria-hidden="true" />
                 {formatAskUsageCost(turn.usage)}
               </span>
             )}

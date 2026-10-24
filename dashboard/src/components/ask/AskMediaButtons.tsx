@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Images, Video } from "lucide-react";
+import { Images, Loader2, Video } from "lucide-react";
 import { buildAskHistory, fetchAskMedia, type AskTurn } from "@/lib/ask";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +25,9 @@ type MediaState = {
  *
  * The fetch itself lives in `@/lib/ask` — the same call the automatic
  * fetch makes, so the two cannot drift apart.
+ *
+ * The bar is a single-line segmented action bar (spec 159 §C): ghost buttons
+ * with an icon and a label, a spinner while searching, a count when loaded.
  */
 export function AskMediaButtons({ turn, turns, threadId, onMediaLoaded }: AskMediaButtonsProps) {
   const [state, setState] = useState<MediaState>(() => {
@@ -96,8 +99,23 @@ export function AskMediaButtons({ turn, turns, threadId, onMediaLoaded }: AskMed
   const videosLoading = state.videos?.status === "loading";
   const imagesLoaded = state.images?.status === "loaded";
   const videosLoaded = state.videos?.status === "loaded";
-  const imagesError = state.images?.status === "error" ? state.images?.error : null;
-  const videosError = state.videos?.status === "error" ? state.videos?.error : null;
+  const imagesError = state.images?.status === "error" ? state.images.error : null;
+  const videosError = state.videos?.status === "error" ? state.videos.error : null;
+
+  const imagesLabel = imagesLoading
+    ? "Searching images…"
+    : imagesLoaded
+      ? `Images · ${state.images?.items.length ?? 0}`
+      : "Search images";
+  const videosLabel = videosLoading
+    ? "Searching videos…"
+    : videosLoaded
+      ? `Videos · ${state.videos?.items.length ?? 0}`
+      : "Search videos";
+
+  const mediaButtonClass = cn(
+    "flex h-9 items-center gap-2 rounded-md px-3 text-xs font-medium transition-colors hover:bg-accent",
+  );
 
   return (
     <div className="flex flex-col gap-2" data-testid="ask-media-buttons">
@@ -107,30 +125,34 @@ export function AskMediaButtons({ turn, turns, threadId, onMediaLoaded }: AskMed
           data-testid="ask-media-images-btn"
           disabled={imagesLoading}
           onClick={() => void fetchMedia("images")}
+          aria-pressed={imagesLoaded}
           className={cn(
-            "flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors",
-            imagesLoading ? "opacity-70" : "hover:bg-accent",
+            mediaButtonClass,
+            imagesLoaded && !imagesLoading && "bg-accent text-foreground",
+            imagesLoading && "opacity-70",
           )}
         >
-          <Images className="size-4" />
-          {imagesLoading ? "Loading..." : imagesLoaded ? "Images" : "Search images"}
+          {imagesLoading ? <Loader2 className="size-4 animate-spin" /> : <Images className="size-4" />}
+          <span>{imagesLabel}</span>
         </button>
         <button
           type="button"
           data-testid="ask-media-videos-btn"
           disabled={videosLoading}
           onClick={() => void fetchMedia("videos")}
+          aria-pressed={videosLoaded}
           className={cn(
-            "flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors",
-            videosLoading ? "opacity-70" : "hover:bg-accent",
+            mediaButtonClass,
+            videosLoaded && !videosLoading && "bg-accent text-foreground",
+            videosLoading && "opacity-70",
           )}
         >
-          <Video className="size-4" />
-          {videosLoading ? "Loading..." : videosLoaded ? "Videos" : "Search videos"}
+          {videosLoading ? <Loader2 className="size-4 animate-spin" /> : <Video className="size-4" />}
+          <span>{videosLabel}</span>
         </button>
       </div>
-      {imagesError && <div className="text-sm text-destructive">Could not load images — {imagesError}</div>}
-      {videosError && <div className="text-sm text-destructive">Could not load videos — {videosError}</div>}
+      {imagesError && <div className="text-xs text-destructive">Could not load images — {imagesError}</div>}
+      {videosError && <div className="text-xs text-destructive">Could not load videos — {videosError}</div>}
     </div>
   );
 }

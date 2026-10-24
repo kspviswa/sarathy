@@ -17,6 +17,7 @@ import { toast } from "sonner";
 
 import { useCoarsePointer } from "@/lib/useCoarsePointer";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   createAskGroup,
   createAskThreadInGroup,
@@ -570,54 +571,53 @@ function GroupMenu({
 }) {
   const [open, setOpen] = useState(false);
 
+  // PORTALED, not absolutely positioned (spec 165). The list scrolls, and a
+  // menu drawn inside it is clipped the moment it would cross the scroller's
+  // edge — "the categories dropdown is cut off". A portal escapes every
+  // ancestor's `overflow`, and Radix flips it when it would leave the viewport.
   return (
-    <div className="relative">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-7"
-        onClick={() => setOpen((value) => !value)}
-        aria-label={`Options for ${group.name}`}
-        title="Group options"
-        data-testid="ask-group-menu"
-      >
-        <MoreHorizontal className="size-4" />
-      </Button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div
-            className="absolute right-0 top-full z-20 mt-1 min-w-[9rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
-            data-testid="ask-group-menu-panel"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          aria-label={`Options for ${group.name}`}
+          title="Group options"
+          data-testid="ask-group-menu"
+        >
+          <MoreHorizontal className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-auto min-w-[9rem] p-1">
+        <div data-testid="ask-group-menu-panel">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onRename();
+            }}
+            data-testid="ask-group-rename"
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
           >
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onRename();
-              }}
-              data-testid="ask-group-rename"
-              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              <Pencil className="size-3.5" />
-              Rename
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onDelete();
-              }}
-              data-testid="ask-group-delete"
-              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive transition-colors hover:bg-accent"
-            >
-              <Trash2 className="size-3.5" />
-              Delete
-            </button>
-          </div>
-        </>
-      )}
-    </div>
+            <Pencil className="size-3.5" />
+            Rename
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            data-testid="ask-group-delete"
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive transition-colors hover:bg-accent"
+          >
+            <Trash2 className="size-3.5" />
+            Delete
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -804,62 +804,59 @@ function ThreadRow({
           </span>
         </button>
 
-        <div className="relative">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground"
-            onClick={() => setMoveOpen((value) => !value)}
-            aria-label={`Move "${thread.title}" to another group`}
-            title="Move to a group"
-            data-testid="ask-thread-move"
-          >
-            <FolderKanban className="size-3.5" />
-          </Button>
-          {moveOpen && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={() => setMoveOpen(false)} />
-              <div
-                className="absolute right-0 top-full z-20 mt-1 min-w-[10rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
-                data-testid="ask-move-menu"
+        <Popover open={moveOpen} onOpenChange={setMoveOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 text-muted-foreground"
+              aria-label={`Move "${thread.title}" to another group`}
+              title="Move to a group"
+              data-testid="ask-thread-move"
+            >
+              <FolderKanban className="size-3.5" />
+            </Button>
+          </PopoverTrigger>
+          {/* Portaled: the row is `overflow-hidden` for the swipe reveal, which
+              used to clip this menu to a sliver on BOTH shells (spec 165). */}
+          <PopoverContent align="end" className="w-auto min-w-[10rem] p-1">
+            <div data-testid="ask-move-menu">
+              <button
+                type="button"
+                onClick={() => {
+                  setMoveOpen(false);
+                  onMove(thread, null);
+                }}
+                data-testid="ask-move-none"
+                data-current={thread.groupId ? undefined : "true"}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
+                  !thread.groupId && "font-medium text-primary",
+                )}
               >
+                Uncategorized
+              </button>
+              {groups.map((group) => (
                 <button
+                  key={group.id}
                   type="button"
                   onClick={() => {
                     setMoveOpen(false);
-                    onMove(thread, null);
+                    onMove(thread, group.id);
                   }}
-                  data-testid="ask-move-none"
-                  data-current={thread.groupId ? undefined : "true"}
+                  data-testid={`ask-move-${group.id}`}
+                  data-current={thread.groupId === group.id ? "true" : undefined}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
-                    !thread.groupId && "font-medium text-primary",
+                    thread.groupId === group.id && "font-medium text-primary",
                   )}
                 >
-                  Uncategorized
+                  {group.name}
                 </button>
-                {groups.map((group) => (
-                  <button
-                    key={group.id}
-                    type="button"
-                    onClick={() => {
-                      setMoveOpen(false);
-                      onMove(thread, group.id);
-                    }}
-                    data-testid={`ask-move-${group.id}`}
-                    data-current={thread.groupId === group.id ? "true" : undefined}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
-                      thread.groupId === group.id && "font-medium text-primary",
-                    )}
-                  >
-                    {group.name}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
 
         {/* Always visible — hover only strengthens the colour, so the control
             is discoverable on desktop and reachable by keyboard. */}

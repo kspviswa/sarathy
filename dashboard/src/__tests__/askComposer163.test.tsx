@@ -76,11 +76,46 @@ describe("AskComposer — spec 163 (mobile composer)", () => {
     expect(within(controls).getByTestId("ask-submit")).toBeInTheDocument();
   });
 
-  it("the desktop composer keeps its single inline row", () => {
+  it("the desktop composer arranges the SAME controls inline, not stacked", () => {
     renderComposer("desktop", true);
     const row = screen.getByTestId("ask-input-row");
     expect(within(row).getByTestId("ask-query")).toBeInTheDocument();
     expect(within(row).getByTestId("ask-stop")).toHaveClass("bg-destructive");
-    expect(screen.queryByTestId("ask-controls-row")).not.toBeInTheDocument();
+    // Same controls row as mobile — only the outer arrangement differs (spec 164).
+    expect(within(row).getByTestId("ask-controls-row")).toBeInTheDocument();
+    expect(row).toHaveClass("items-end");
+    expect(row).not.toHaveClass("flex-col");
+  });
+
+  it("both shells expose exactly the same controls (spec 164 parity)", () => {
+    const controls = ["ask-query", "ask-controls-row", "ask-sources-trigger", "ask-modes-trigger"];
+
+    const { unmount } = render(
+      <AskComposer
+        query=""
+        onQueryChange={vi.fn()}
+        mode={"speed" as AskMode}
+        onModeChange={vi.fn()}
+        sources={["web"] as AskSourceKind[]}
+        onSourcesChange={vi.fn()}
+        streaming={false}
+        onSubmit={vi.fn()}
+        onStop={vi.fn()}
+        quoteChips={[]}
+        onRemoveQuote={vi.fn()}
+        variant="desktop"
+      />,
+    );
+    const desktop = controls.filter((id) => screen.queryByTestId(id));
+    const desktopSubmit = screen.getByTestId("ask-submit").className;
+    unmount();
+
+    renderComposer("mobile");
+    const mobile = controls.filter((id) => screen.queryByTestId(id));
+    const mobileSubmit = screen.getByTestId("ask-submit").className;
+
+    expect(mobile).toEqual(desktop);
+    // The submit is one declaration — identical classes in both shells.
+    expect(mobileSubmit).toBe(desktopSubmit);
   });
 });

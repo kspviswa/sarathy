@@ -55,6 +55,17 @@ Channels (Telegram/Discord/Email) → MessageBus → AgentLoop → LLM + Tools
 - **Tool registry**: Tools are discovered at runtime and registered; MCP servers supported via `agent/tools/mcp.py`
 - **Session-based**: Conversations keyed by `channel:chat_id` format
 
+## Dashboard frontend — MANDATORY reading
+
+Any work under `dashboard/` starts by reading **`dashboard/AGENTS.md`**.
+
+The dashboard is **two SPAs** (desktop `dashboard/src/App.tsx`, mobile
+`dashboard/src/mobile/App.tsx`) and they are one product: every change lands in
+both shells in the same commit, shared logic in one module, and a
+`variant`-branching component may change only the arrangement — never
+re-declare a control. This is enforced by `dashboard/scripts/check-spa-parity.mjs`
+(`prebuild` / `pretest`), so a duplicated control fails the build.
+
 ## Configuration
 
 Config is in `~/.sarathy/config.json` (see README.md for schema). The config loader (`config/loader.py`) supports environment variable interpolation.

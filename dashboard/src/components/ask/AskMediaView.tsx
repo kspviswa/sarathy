@@ -210,7 +210,7 @@ export function AskMediaView({
       <aside
         className="flex w-full shrink-0 flex-col gap-3 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:w-72"
         data-testid="ask-media-rail"
-        aria-label="Media"
+        aria-label="Media rail"
       >
         {toolbar}
         {hasMedia && images.length > 0 && (
@@ -220,27 +220,12 @@ export function AskMediaView({
                 const src = imageSrc(item);
                 const href = item.url || src;
                 return (
-                  <button
+                  <MediaThumb
                     key={`${href}-${index}`}
-                    type="button"
-                    data-testid="ask-media-thumb"
-                    onClick={() => openImage(item)}
+                    item={item}
+                    onOpen={() => openImage(item)}
                     className="group relative block overflow-hidden rounded-lg border bg-card text-left"
-                  >
-                    <div className="relative aspect-video w-full overflow-hidden">
-                      <Thumb
-                        src={src}
-                        alt={item.title || ""}
-                        title={item.title || ""}
-                        className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
-                      />
-                    </div>
-                    {item.title && (
-                      <div className="truncate p-1 text-[10px] text-muted-foreground">
-                        {item.title}
-                      </div>
-                    )}
-                  </button>
+                  />
                 );
               })}
               {showMore && (
@@ -284,7 +269,7 @@ export function AskMediaView({
   if (!hasMedia) return null;
 
   return (
-    <div className={cn("flex flex-col gap-3")} data-testid="ask-media-strip" aria-label="Media">
+    <div className={cn("flex flex-col gap-3")} data-testid="ask-media-strip" aria-label="Media strip">
       {images.length > 0 && (
         <div>
           <div className="mb-1 text-xs text-muted-foreground">Images</div>
@@ -296,27 +281,12 @@ export function AskMediaView({
               const src = imageSrc(item);
               const href = item.url || src;
               return (
-                <button
+                <MediaThumb
                   key={`${href}-${index}`}
-                  type="button"
-                  data-testid="ask-media-thumb"
-                  onClick={() => openImage(item)}
+                  item={item}
+                  onOpen={() => openImage(item)}
                   className="group relative block w-40 shrink-0 snap-start overflow-hidden rounded-lg border bg-card text-left sm:w-48"
-                >
-                  <div className="relative aspect-video w-full overflow-hidden">
-                    <Thumb
-                      src={src}
-                      alt={item.title || ""}
-                      title={item.title || ""}
-                      className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
-                    />
-                  </div>
-                  {item.title && (
-                    <div className="truncate p-1 text-[10px] text-muted-foreground">
-                      {item.title}
-                    </div>
-                  )}
-                </button>
+                />
               );
             })}
           </div>
@@ -343,6 +313,42 @@ export function AskMediaView({
         <div className="text-xs text-muted-foreground">No media found</div>
       )}
     </div>
+  );
+}
+
+/**
+ * One media thumbnail — shared by the desktop rail and the mobile strip
+ * (spec 164). Only the placement className differs; the markup, the test id
+ * and the lightbox wiring are declared once.
+ */
+function MediaThumb({
+  item,
+  onOpen,
+  className,
+}: {
+  item: AskMedia;
+  onOpen: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="ask-media-thumb"
+      onClick={onOpen}
+      className={className}
+    >
+      <div className="relative aspect-video w-full overflow-hidden">
+        <Thumb
+          src={imageSrc(item)}
+          alt={item.title || ""}
+          title={item.title || ""}
+          className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
+        />
+      </div>
+      {item.title && (
+        <div className="truncate p-1 text-[10px] text-muted-foreground">{item.title}</div>
+      )}
+    </button>
   );
 }
 

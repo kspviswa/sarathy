@@ -150,10 +150,17 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
 
   const isMobile = variant === "mobile";
 
-  /** The open thread's title — shown in the header beside the buttons. */
+  /**
+   * The open thread's title — shown in the header beside the buttons.
+   *
+   * The live `title` frame outranks the stored title: the thread being
+   * streamed into is not in the store until its first turn is committed, so
+   * the store cannot carry the name the LLM just gave it (spec 162). The
+   * store takes over the moment the turn lands, with the same string.
+   */
   const threadTitle = useMemo(
-    () => threads.find((thread) => thread.id === threadId)?.title ?? "",
-    [threads, threadId],
+    () => state.title || threads.find((thread) => thread.id === threadId)?.title || "",
+    [state.title, threads, threadId],
   );
 
   /**

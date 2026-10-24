@@ -111,6 +111,14 @@ export interface AskState {
   usage: AskUsage | null;
   /** The terminal error, if the stream failed. */
   error: AskError | null;
+  /**
+   * The title the ANSWERING LLM gave the thread (spec 162).
+   *
+   * It is a property of the thread, not of the answer — so it is exposed
+   * here and never appended to `answer`. Empty until the `title` frame
+   * lands, and empty on every follow-up turn.
+   */
+  title: string;
   /** True while the stream is open. */
   streaming: boolean;
 }
@@ -123,6 +131,7 @@ export const initialAskState: AskState = {
   media: [],
   usage: null,
   error: null,
+  title: "",
   streaming: false,
 };
 
@@ -270,6 +279,20 @@ export function reduceAskFrame(state: AskState, frame: AskFrame): AskState {
     case "response":
       if (typeof frame.data !== "string") return state;
       return { ...state, answer: state.answer + frame.data };
+
+    case "title": {
+      // The LLM named the thread while it was answering (spec 162). It is a
+      // property of the THREAD, so it never enters `answer`. The first
+      // non-empty title wins; a repeated or empty frame changes nothing.
+      const raw = frame.data?.title;
+      if (typeof raw !== "string") return state;
+      const title = raw.replace(/\s+/g, " ").trim();
+      if (!title || state.title) return state;
+      return {
+        ...state,
+        title: title.length > ASK_TITLE_MAX ? title.slice(0, ASK_TITLE_MAX).trim() : title,
+      };
+    }
 
     case "usage": {
       const usage = frame.data as
@@ -596,6 +619,15 @@ export function createAskThread(turn: AskTurn, id?: string): AskThread {
 }
 
 /**
+ * Titles that arrived before their thread existed in the store.
+ *
+ * The `title` frame lands mid-stream, before the first turn is committed — so
+ * `renameAskThread` usually has no thread to rename yet. The title is parked
+ * here and claimed by `appendAskTurn` when the thread appears (spec 162).
+ */
+const pendingTitles = new Map<string, string>();
+
+/**
  * Append a turn to a thread.
  *
  * A thread that is not in the list yet is created — that is how the first
@@ -606,9 +638,15 @@ export function appendAskTurn(
   threadId: string,
   turn: AskTurn,
 ): AskThread[] {
+  // A title that arrived mid-stream, before its thread existed (spec 162).
+  // It outranks the question — that was only ever the temporary title.
+  const llmTitle = pendingTitles.get(threadId);
+  if (llmTitle) pendingTitles.delete(threadId);
+
   const existing = threads.find((thread) => thread.id === threadId);
   if (!existing) {
-    return [createAskThread(turn, threadId), ...threads];
+    const created = createAskThread(turn, threadId);
+    return [llmTitle ? { ...created, title: llmTitle } : created, ...threads];
   }
   return threads.map((thread) =>
     thread.id === threadId
@@ -616,8 +654,8 @@ export function appendAskTurn(
           ...thread,
           // A thread born inside a group is created empty, before it has a
           // question: the first question names it, exactly as the server
-          // names it.
-          title: thread.title || askThreadTitle(turn.query),
+          // names it. The LLM title wins over that question.
+          title: llmTitle || thread.title || askThreadTitle(turn.query),
           turns: [...thread.turns, turn],
           turnCount: thread.turns.length + 1,
           updatedAt: turn.createdAt || Date.now(),
@@ -1043,6 +1081,48 @@ export async function moveAskThread(
     threadStore.set(threadId, { ...thread, groupId });
     notifyThreadList();
   }
+}
+
+/**
+ * Rename a thread to the title the answering LLM chose (spec 162).
+ *
+ * Two things happen, and both are needed:
+ *   1. the store is updated and its listeners fire, so the header and the
+ *      history row rename WITHOUT a reload;
+ *   2. the server is PATCHed, so reopening the thread from history shows the
+ *      same string the live stream showed.
+ *
+ * The PATCH is fire-and-forget: it must never throw into the stream loop that
+ * called it. A failed rename leaves the browser copy correct for this session
+ * and logs — it does not break the answer that is still arriving.
+ */
+export function renameAskThread(threadId: string, title: string): void {
+  if (!threadId) return;
+  const flat = (title || "").replace(/\s+/g, " ").trim();
+  if (!flat) return;
+  const clipped =
+    flat.length > ASK_TITLE_MAX ? flat.slice(0, ASK_TITLE_MAX).trim() : flat;
+
+  const thread = threadStore.get(threadId);
+  // A thread that is not in the store yet is being streamed into its first
+  // turn — `commit` will put it there with the question as its title. The
+  // rename is applied to the store when it lands, so remember it here.
+  if (thread) {
+    threadStore.set(threadId, { ...thread, title: clipped });
+    notifyThreadList();
+  } else {
+    pendingTitles.set(threadId, clipped);
+  }
+
+  void fetch(`${ASK_THREADS_ENDPOINT}/${encodeURIComponent(threadId)}`, {
+    method: "PATCH",
+    headers: askHeaders(),
+    body: JSON.stringify({ title: clipped }),
+  }).catch((err) => {
+    // The live view is already renamed; only history would disagree. Worth a
+    // line in the console, never an error the user has to read.
+    console.warn("[ask] could not persist the thread title", err);
+  });
 }
 
 /**
@@ -1755,9 +1835,18 @@ export function useAskStream() {
       // commit at the end of the stream must see the final state, and a
       // setState callback would still be one render behind.
       let folded = initialAskState;
+      /** The title frame lands once per turn — rename the thread only once. */
+      let renamed = false;
       const apply = (frame: AskFrame) => {
         folded = reduceAskFrame(folded, frame);
         setState(folded);
+        // The thread renames the moment the LLM names it — mid-stream, before
+        // the answer finishes (spec 162). The header and the history row both
+        // read the store, so this one call updates both.
+        if (frame.type === "title" && folded.title && !renamed) {
+          renamed = true;
+          renameAskThread(targetThreadId, folded.title);
+        }
       };
 
       const finish = () => {

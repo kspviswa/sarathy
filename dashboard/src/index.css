@@ -188,9 +188,15 @@
   .safe-bottom {
     padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
   }
+  /* Fallback FIRST, modern second — a later declaration wins, so writing
+     `100dvh` before `100vh` made the fallback the only value that ever applied
+     (the dvh line was dead). On iOS Safari `100vh` is the LARGEST viewport —
+     the height with the toolbars collapsed — so the app was taller than the
+     visible area and the page scrolled under it, which is what made the screen
+     jump when the keyboard opened. */
   .standalone-fix {
-    height: 100dvh;
-    height: 100vh; /* fallback for standalone PWA where dvh may miscalculate */
+    height: 100vh; /* fallback for very old browsers */
+    height: 100dvh; /* tracks the toolbars / keyboard where supported */
   }
   .no-scrollbar::-webkit-scrollbar {
     display: none;

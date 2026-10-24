@@ -592,9 +592,10 @@ describe("Ask view — desktop and mobile render the same state", () => {
   it("the mode selector and the source toggles are there", () => {
     render(<AskView />);
 
-    expect(screen.getByTestId("ask-mode-speed")).toBeInTheDocument();
-    expect(screen.getByTestId("ask-mode-balanced")).toBeInTheDocument();
-    expect(screen.getByTestId("ask-mode-quality")).toBeInTheDocument();
+    // The desktop composer carries the sources and the mode as icon popovers
+    // (spec 159): the triggers sit in the composer row, the options in the
+    // panels they open.
+    fireEvent.click(screen.getByTestId("ask-sources-trigger"));
     expect(screen.getByTestId("ask-source-web")).toBeInTheDocument();
     expect(screen.getByTestId("ask-source-discussions")).toBeInTheDocument();
     expect(screen.getByTestId("ask-source-academic")).toBeInTheDocument();
@@ -604,6 +605,11 @@ describe("Ask view — desktop and mobile render the same state", () => {
     expect(academic).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(academic);
     expect(academic).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByTestId("ask-modes-trigger"));
+    expect(screen.getByTestId("ask-mode-speed")).toBeInTheDocument();
+    expect(screen.getByTestId("ask-mode-balanced")).toBeInTheDocument();
+    expect(screen.getByTestId("ask-mode-quality")).toBeInTheDocument();
   });
 });
 

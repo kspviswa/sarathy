@@ -21,6 +21,7 @@
  *   {"type":"error","data":{"message","code"}}
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GraduationCap, Globe, MessagesSquare, SlidersHorizontal, Star, Zap, type LucideIcon } from "lucide-react";
 
 import type { Quote } from "@/lib/quotes";
 
@@ -125,18 +126,23 @@ export const initialAskState: AskState = {
   streaming: false,
 };
 
-/** The modes, in the order the UI shows them. */
-export const ASK_MODES: { id: AskMode; label: string; hint: string }[] = [
-  { id: "speed", label: "Speed", hint: "2 iterations · one search" },
-  { id: "balanced", label: "Balanced", hint: "6 iterations" },
-  { id: "quality", label: "Deep", hint: "25 iterations · reads the pages" },
+/**
+ * The modes, in the order the UI shows them.
+ *
+ * `icon` is the ONE icon mapping the composer renders the triggers and the
+ * popover rows from — the two surfaces cannot drift apart (HARD LESSON 20/22).
+ */
+export const ASK_MODES: { id: AskMode; label: string; hint: string; icon: LucideIcon }[] = [
+  { id: "speed", label: "Speed", hint: "2 iterations · one search", icon: Zap },
+  { id: "balanced", label: "Balanced", hint: "6 iterations", icon: SlidersHorizontal },
+  { id: "quality", label: "Deep", hint: "25 iterations · reads the pages", icon: Star },
 ];
 
 /** The source toggles, in the order the UI shows them. */
-export const ASK_SOURCE_KINDS: { id: AskSourceKind; label: string }[] = [
-  { id: "web", label: "Web" },
-  { id: "discussions", label: "Discussions" },
-  { id: "academic", label: "Academic" },
+export const ASK_SOURCE_KINDS: { id: AskSourceKind; label: string; icon: LucideIcon }[] = [
+  { id: "web", label: "Web", icon: Globe },
+  { id: "discussions", label: "Discussions", icon: MessagesSquare },
+  { id: "academic", label: "Academic", icon: GraduationCap },
 ];
 
 /** One frame as it arrives on the wire. */

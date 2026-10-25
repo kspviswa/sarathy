@@ -183,11 +183,13 @@ async def _connect_server(
     await session.initialize()
 
     tools = await session.list_tools()
+    names: list[str] = []
     for tool_def in tools.tools:
         wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout)
         registry.register(wrapper)
+        names.append(wrapper.name)
         logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
-    return len(tools.tools)
+    return names
 
 
 async def _close_quietly(stack: AsyncExitStack) -> None:
@@ -228,7 +230,7 @@ async def connect_mcp_servers(
         started = time.monotonic()
         try:
             async with asyncio.timeout(timeout):
-                tool_count = await _connect_server(name, cfg, registry, server_stack)
+                tool_names = await _connect_server(name, cfg, registry, server_stack)
         except TimeoutError:
             await _close_quietly(server_stack)
             elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -278,11 +280,12 @@ async def connect_mcp_servers(
         # Success: the parent stack now owns the per-server stack.
         stack.push_async_callback(server_stack.aclose)
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        logger.info("MCP server '{}': connected, {} tools registered", name, tool_count)
+        logger.info("MCP server '{}': connected, {} tools registered", name, len(tool_names))
         results[name] = {
             "status": OK,
             "error": "",
-            "tools": tool_count,
+            "tools": len(tool_names),
+            "tool_names": tool_names,
             "duration_ms": elapsed_ms,
             "checked_at": _now(),
         }

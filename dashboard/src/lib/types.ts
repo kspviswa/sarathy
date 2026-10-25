@@ -114,6 +114,7 @@ export interface McpServerHealth {
   status: "ok" | "error" | "timeout" | "pending";
   error?: string;
   tools?: number;
+  tool_names?: string[];
   duration_ms?: number;
   checked_at?: string;
 }

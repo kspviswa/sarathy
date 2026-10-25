@@ -1264,6 +1264,20 @@ def status():
         elif mcp.get("servers"):
             console.print(f"MCP: [green]✓ {len(mcp['servers'])} server(s)[/green]")
 
+        # Disk: Viswa's 6 GiB red line. Cheap to check, expensive to miss.
+        from sarathy.utils.disk import disk_snapshot, disk_summary_line
+
+        disk = disk_snapshot("/")
+        if disk.get("level") == "critical":
+            console.print(
+                f"Disk: [red]✗ {disk_summary_line(disk)}[/red] "
+                f"[dim](below {disk.get('crit_free_gb')} GiB — free space or grow the disk)[/dim]"
+            )
+        elif disk.get("level") == "warn":
+            console.print(f"Disk: [yellow]⚠ {disk_summary_line(disk)}[/yellow]")
+        else:
+            console.print(f"Disk: [green]✓ {disk_summary_line(disk)}[/green]")
+
 
 # ============================================================================
 # Provider Management

@@ -145,6 +145,21 @@ _ARCHIVE_NAME_RE = re.compile(r"^session-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2})\.jsonl$
 _ARCHIVE_PREVIEW_CHARS = 280
 
 
+def _disk_status_snapshot() -> dict:
+    """Live root-filesystem headroom for the status page.
+
+    Computed on every request rather than read from the weekly job's marker:
+    disk fills between weekly runs, and a stale "ok" is worse than no card.
+    Never raises.
+    """
+    try:
+        from sarathy.utils.disk import disk_snapshot
+
+        return disk_snapshot("/")
+    except Exception:
+        return {"level": "unknown", "error": "disk check failed"}
+
+
 def _mcp_status_snapshot(cfg) -> dict:
     """MCP health for the status page: recorded results + configured-but-pending.
 
@@ -2997,6 +3012,7 @@ class DashboardChannel(BaseChannel):
                 "workspace": str(cfg.workspace_path),
                 "channels": enabled,
                 "mcp": _mcp_status_snapshot(cfg),
+                "disk": _disk_status_snapshot(),
                 "dashboard": {
                     "host": self.config.host,
                     "port": self.config.port,

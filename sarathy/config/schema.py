@@ -335,6 +335,10 @@ class MCPServerConfig(Base):
     url: str = ""  # HTTP: streamable HTTP endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP: Custom HTTP Headers
     tool_timeout: int = 30  # Seconds before a tool call is cancelled
+    # Seconds allowed for the initial connect (transport + handshake + list_tools).
+    # A server that exceeds this is skipped for the run — the gateway must never
+    # hang because an MCP endpoint is down.
+    connect_timeout: float = 10.0
 
 
 class ToolsConfig(Base):

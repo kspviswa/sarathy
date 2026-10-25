@@ -366,6 +366,10 @@ class AgentLoop:
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
         self._mcp_connecting = False
+        # Back-off after a failed connect sweep, so a dead MCP endpoint does not
+        # cost every single message its connect timeout.
+        self._mcp_retry_at = 0.0
+        self._mcp_retry_cooldown = 60.0
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         # Per-session lock registry (replaces single _processing_lock)
         self._session_locks: dict[str, asyncio.Lock] = {}
@@ -447,19 +451,42 @@ class AgentLoop:
         self.tools.register(SkillManageTool(workspace=self.workspace))
 
     async def _connect_mcp(self) -> None:
-        """Connect to configured MCP servers (one-time, lazy)."""
+        """Connect to configured MCP servers (one-time, lazy).
+
+        Bounded by each server's ``connect_timeout`` and never fatal: a server
+        that is down is skipped, logged, and recorded in the persisted MCP
+        health snapshot (surfaced by ``sarathy gateway status`` and the
+        dashboard status page).
+        """
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
             return
+        if self._mcp_retry_at and time.monotonic() < self._mcp_retry_at:
+            return
         self._mcp_connecting = True
-        from sarathy.agent.tools.mcp import connect_mcp_servers
+        from sarathy.agent.tools.mcp import OK, connect_mcp_servers
 
         try:
             self._mcp_stack = AsyncExitStack()
             await self._mcp_stack.__aenter__()
-            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+            results = await connect_mcp_servers(
+                self._mcp_servers, self.tools, self._mcp_stack
+            )
+            failed = [n for n, r in results.items() if r.get("status") != OK]
+            if failed:
+                # Partial success is still success — the working servers' tools
+                # are registered and stay registered. Retry the broken ones on a
+                # cooldown instead of on every message.
+                logger.warning(
+                    "MCP: {} of {} server(s) unavailable ({}); continuing without them",
+                    len(failed),
+                    len(results),
+                    ", ".join(failed),
+                )
+                self._mcp_retry_at = time.monotonic() + self._mcp_retry_cooldown
             self._mcp_connected = True
         except Exception as e:
-            logger.error("Failed to connect MCP servers (will retry next message): {}", e)
+            logger.error("Failed to connect MCP servers (will retry later): {}", e)
+            self._mcp_retry_at = time.monotonic() + self._mcp_retry_cooldown
             if self._mcp_stack:
                 try:
                     await self._mcp_stack.aclose()

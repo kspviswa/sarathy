@@ -895,6 +895,41 @@ async def test_media_cookie_rejected_for_outside_media_dir(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_header_auth_resyncs_stale_media_cookie(tmp_path, monkeypatch) -> None:
+    """A drifted media cookie must heal on the next header-authenticated call.
+
+    The SPA sends its token as a Bearer header, while <img>/<video> can only
+    present the mirrored cookie. If the cookie is dropped or left behind by a
+    re-pair, every media element 401s (a clicked attachment lands on a raw
+    {"error":"unauthorized"} page) even though the API keeps working. Any
+    header-authenticated request must therefore rewrite the cookie.
+    """
+    from sarathy.channels.dashboard import server as server_module
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    asset = media_dir / "clip.mp4"
+    asset.write_bytes(b"\x00" * 8)
+    monkeypatch.setattr(server_module, "_MEDIA_DIR", media_dir)
+
+    client, _ = await _authed_client(tmp_path)
+    async with client:
+        token = await _pair(client)
+        # Simulate the drift: the cookie is gone, the token still works.
+        client.session.cookie_jar.clear()
+        assert not client.session.cookie_jar
+
+        resp = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status == 200
+        refreshed = resp.cookies.get("sarathy_media")
+        assert refreshed is not None and refreshed.value == token
+
+        # With the cookie healed, the media element request succeeds.
+        media = await client.get("/api/media", params={"path": str(asset)})
+        assert media.status == 200
+
+
+@pytest.mark.asyncio
 async def test_logout_clears_media_cookie(tmp_path) -> None:
     client, _ = await _authed_client(tmp_path)
     async with client:

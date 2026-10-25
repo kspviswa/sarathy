@@ -412,6 +412,8 @@ def _print_mcp_status() -> None:
                 f"  [green]✓[/green] {name} [dim]({entry.get('tools', 0)} tools, "
                 f"{entry.get('duration_ms', 0)} ms)[/dim]"
             )
+            for tool_name in entry.get("tool_names") or []:
+                console.print(f"      [dim]· {tool_name}[/dim]")
         else:
             reason = entry.get("error") or state or "unknown error"
             console.print(f"  [red]✗ {name}: {reason}[/red] [dim](skipped — its tools are unavailable)[/dim]")

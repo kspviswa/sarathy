@@ -92,30 +92,48 @@ function McpCard({ status }: { status: StatusResponse | null }) {
             {entries.map(([name, entry]) => {
               const failed = (mcp?.failing ?? []).includes(name);
               const pending = entry.status === "pending";
+              const toolNames = entry.tool_names ?? [];
               return (
-                <div key={name} className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    {failed ? (
-                      <AlertTriangle className="size-3.5 shrink-0 text-amber-500" aria-hidden />
-                    ) : pending ? (
-                      <Plug className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                    ) : (
-                      <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" aria-hidden />
-                    )}
-                    <span className="truncate text-sm font-medium">{name}</span>
+                <div key={name} className="flex flex-col gap-1.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {failed ? (
+                        <AlertTriangle className="size-3.5 shrink-0 text-amber-500" aria-hidden />
+                      ) : pending ? (
+                        <Plug className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      ) : (
+                        <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" aria-hidden />
+                      )}
+                      <span className="truncate text-sm font-medium">{name}</span>
+                    </div>
+                    <span
+                      className={`min-w-0 truncate text-right text-xs ${
+                        failed ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
+                      }`}
+                      title={entry.error || undefined}
+                    >
+                      {failed
+                        ? entry.error || entry.status
+                        : pending
+                          ? "not connected yet"
+                          : `${entry.tools ?? 0} tools`}
+                    </span>
                   </div>
-                  <span
-                    className={`min-w-0 truncate text-right text-xs ${
-                      failed ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
-                    }`}
-                    title={entry.error || undefined}
-                  >
-                    {failed
-                      ? entry.error || entry.status
-                      : pending
-                        ? "not connected yet"
-                        : `${entry.tools ?? 0} tools`}
-                  </span>
+                  {!failed && !pending && toolNames.length > 0 ? (
+                    <div
+                      className="flex flex-wrap gap-1 pl-5.5"
+                      data-testid={`settings-mcp-tools-${name}`}
+                    >
+                      {toolNames.map((toolName) => (
+                        <span
+                          key={toolName}
+                          className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+                        >
+                          {toolName}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}

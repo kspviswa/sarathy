@@ -1075,9 +1075,12 @@ class DashboardChannel(BaseChannel):
         # media_proxy.py (public addresses only, http(s) only, the default
         # ports only, image/* only, a capped body).
         proxy_read = path == "/api/media/proxy" and request.method == "GET"
+        used_token: str | None = None
+        header_token: str | None = None
         if (path.startswith("/api/") or path == "/ws") and not public and not proxy_read:
             token = self._extract_token(request)
             device_id = self._registry.validate(token) if token else None
+            header_token = token if device_id else None
             if not device_id and path == "/api/media" and request.method == "GET":
                 # <img>/<audio> cannot send an Authorization header, so allow the
                 # auth cookie for this read-only route only (see _MEDIA_COOKIE).
@@ -1088,6 +1091,7 @@ class DashboardChannel(BaseChannel):
                     web.json_response({"error": "unauthorized"}, status=401)
                 )
             request["device_id"] = device_id
+            used_token = header_token
 
             ip = request.remote or ""
             if self.config.allow_from and ip not in self.config.allow_from:
@@ -1096,6 +1100,18 @@ class DashboardChannel(BaseChannel):
                 )
 
         response = await handler(request)
+        # Keep the media cookie in sync with the token the client actually used.
+        #
+        # The SPA keeps its token in localStorage and sends it as a Bearer
+        # header; media elements cannot, so they lean on the mirrored cookie.
+        # Those two drift apart whenever the cookie is dropped (a cleared
+        # cookie jar, a profile switch) or left behind by a re-pair — the API
+        # keeps working on the header while every <img>/<video> 401s and a
+        # click on an attachment lands on a raw {"error":"unauthorized"} page.
+        # Refreshing here heals the drift on the very next authenticated call.
+        if used_token and request.cookies.get(_MEDIA_COOKIE) != used_token:
+            if not isinstance(response, web.WebSocketResponse):
+                self._set_media_cookie(response, request, used_token)
         return self._with_security_headers(response)
 
     @staticmethod

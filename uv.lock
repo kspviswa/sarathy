@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -2373,7 +2373,7 @@ wheels = [
 
 [[package]]
 name = "sarathy"
-version = "0.19.6"
+version = "0.19.8"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

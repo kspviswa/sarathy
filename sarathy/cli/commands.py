@@ -364,6 +364,62 @@ def gateway_status():
     else:
         console.print("[dim]Gateway is [bold]not running[/bold]")
 
+    _print_mcp_status()
+
+
+def _print_mcp_status() -> None:
+    """Print the persisted MCP server health.
+
+    Failures are red and explicit — a skipped MCP server means missing tools,
+    and the user must be able to see that here without grepping logs.
+    """
+    from sarathy.agent.tools.mcp import OK, read_mcp_status
+    from sarathy.config.loader import get_config_path, load_config
+
+    configured: list[str] = []
+    try:
+        if get_config_path().exists():
+            configured = list(load_config().tools.mcp_servers.keys())
+    except Exception:
+        configured = []
+
+    snapshot = read_mcp_status()
+    servers = snapshot.get("servers") or {}
+    if not configured and not servers:
+        return
+
+    console.print()
+    if not servers:
+        console.print("[dim]MCP servers: not connected yet[/dim]")
+        for name in configured:
+            console.print(f"  [dim]· {name}: pending[/dim]")
+        return
+
+    failures = [n for n in servers if (servers[n] or {}).get("status") != OK]
+    if failures:
+        console.print(
+            f"[bold red]✗ MCP: {len(failures)} of {len(servers)} server(s) unavailable[/bold red]"
+        )
+    else:
+        console.print(f"[green]✓ MCP: {len(servers)} server(s) connected[/green]")
+    console.print(f"  [dim]last attempt: {snapshot.get('checked_at') or 'unknown'}[/dim]")
+
+    for name, entry in servers.items():
+        entry = entry or {}
+        state = entry.get("status")
+        if state == OK:
+            console.print(
+                f"  [green]✓[/green] {name} [dim]({entry.get('tools', 0)} tools, "
+                f"{entry.get('duration_ms', 0)} ms)[/dim]"
+            )
+        else:
+            reason = entry.get("error") or state or "unknown error"
+            console.print(f"  [red]✗ {name}: {reason}[/red] [dim](skipped — its tools are unavailable)[/dim]")
+
+    for name in configured:
+        if name not in servers:
+            console.print(f"  [dim]· {name}: pending[/dim]")
+
 
 @gateway_app.command("logs")
 def gateway_logs(
@@ -1188,6 +1244,23 @@ def status():
             )
         else:
             console.print("Web Search: [dim]disabled[/dim]")
+
+        # MCP: a skipped server silently removes tools — surface it here too.
+        from sarathy.agent.tools.mcp import read_mcp_status
+
+        mcp = read_mcp_status()
+        failing = [
+            name
+            for name, entry in (mcp.get("servers") or {}).items()
+            if (entry or {}).get("status") in ("error", "timeout")
+        ]
+        if failing:
+            console.print(
+                f"MCP: [yellow]⚠ {len(failing)} unreachable[/yellow] "
+                f"[dim]({', '.join(failing)}) — run 'sarathy gateway status'[/dim]"
+            )
+        elif mcp.get("servers"):
+            console.print(f"MCP: [green]✓ {len(mcp['servers'])} server(s)[/green]")
 
 
 # ============================================================================

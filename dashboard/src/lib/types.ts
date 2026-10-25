@@ -110,6 +110,20 @@ export interface WorkspaceTree {
   tree: FileNode[];
 }
 
+export interface McpServerHealth {
+  status: "ok" | "error" | "timeout" | "pending";
+  error?: string;
+  tools?: number;
+  duration_ms?: number;
+  checked_at?: string;
+}
+
+export interface McpStatus {
+  checked_at: string | null;
+  servers: Record<string, McpServerHealth>;
+  failing: string[];
+}
+
 export interface StatusResponse {
   version: string;
   gateway: { running: boolean; pid: number | null; log_file?: string | null };
@@ -117,6 +131,7 @@ export interface StatusResponse {
   provider: string;
   workspace: string;
   channels: string[];
+  mcp?: McpStatus;
   dashboard: {
     host: string;
     port: number;

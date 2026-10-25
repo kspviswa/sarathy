@@ -1,4 +1,15 @@
-import { Activity, LogOut, Moon, RefreshCw, Server, Smartphone, Sun } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  LogOut,
+  Moon,
+  Plug,
+  RefreshCw,
+  Server,
+  Smartphone,
+  Sun,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -33,6 +44,91 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
  * card, the dashboard card and the logout. The desktop and the mobile used to
  * carry two copies of this; the Settings surface has one now.
  */
+/**
+ * MCP server health. A skipped server means missing tools, so a failure is
+ * shown as a friendly amber warning (not an alarm) with the reason and the
+ * consequence spelled out — the user should be able to act on it from here.
+ */
+function McpCard({ status }: { status: StatusResponse | null }) {
+  const mcp = status?.mcp;
+  const entries = Object.entries(mcp?.servers ?? {});
+  const failing = mcp?.failing ?? [];
+
+  return (
+    <Card data-testid="settings-mcp">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Plug className="size-4 text-primary" />
+          MCP servers
+        </CardTitle>
+        <CardDescription>Tool servers the assistant connects to</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!status ? (
+          <p className="text-sm text-muted-foreground">Status unavailable</p>
+        ) : entries.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No MCP servers configured</p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {failing.length > 0 ? (
+              <div
+                className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3"
+                data-testid="settings-mcp-warning"
+              >
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" aria-hidden />
+                <div className="text-sm">
+                  <p className="font-medium text-amber-600 dark:text-amber-400">
+                    {failing.length === 1
+                      ? `1 server is unreachable: ${failing[0]}`
+                      : `${failing.length} servers are unreachable`}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Their tools were skipped so the assistant stays responsive. Check the
+                    endpoint or the config, then restart the gateway.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+            {entries.map(([name, entry]) => {
+              const failed = (mcp?.failing ?? []).includes(name);
+              const pending = entry.status === "pending";
+              return (
+                <div key={name} className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    {failed ? (
+                      <AlertTriangle className="size-3.5 shrink-0 text-amber-500" aria-hidden />
+                    ) : pending ? (
+                      <Plug className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                    ) : (
+                      <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" aria-hidden />
+                    )}
+                    <span className="truncate text-sm font-medium">{name}</span>
+                  </div>
+                  <span
+                    className={`min-w-0 truncate text-right text-xs ${
+                      failed ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
+                    }`}
+                    title={entry.error || undefined}
+                  >
+                    {failed
+                      ? entry.error || entry.status
+                      : pending
+                        ? "not connected yet"
+                        : `${entry.tools ?? 0} tools`}
+                  </span>
+                </div>
+              );
+            })}
+            {mcp?.checked_at ? (
+              <p className="text-xs text-muted-foreground">Last checked {mcp.checked_at}</p>
+            ) : null}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function StatusPanel({
   onLoggedOut,
   variant = "desktop",
@@ -174,6 +270,8 @@ export function StatusPanel({
           )}
         </CardContent>
       </Card>
+
+      <McpCard status={status} />
 
       <Card>
         <CardHeader>

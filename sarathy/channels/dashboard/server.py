@@ -145,6 +145,38 @@ _ARCHIVE_NAME_RE = re.compile(r"^session-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2})\.jsonl$
 _ARCHIVE_PREVIEW_CHARS = 280
 
 
+def _mcp_status_snapshot(cfg) -> dict:
+    """MCP health for the status page: recorded results + configured-but-pending.
+
+    Never raises — the status endpoint must answer even when the snapshot file
+    is missing (fresh install) or corrupt.
+    """
+    try:
+        from sarathy.agent.tools.mcp import read_mcp_status
+
+        snapshot = read_mcp_status()
+        servers = dict(snapshot.get("servers") or {})
+        try:
+            configured = list(cfg.tools.mcp_servers.keys())
+        except Exception:
+            configured = []
+        for name in configured:
+            servers.setdefault(
+                name,
+                {"status": "pending", "error": "not connected yet", "tools": 0, "duration_ms": 0},
+            )
+        return {
+            "checked_at": snapshot.get("checked_at"),
+            "servers": servers,
+            "failing": [
+                n for n, s in servers.items() if (s or {}).get("status") in ("error", "timeout")
+            ],
+        }
+    except Exception:
+        return {"checked_at": None, "servers": {}, "failing": []}
+
+
+
 def _is_openai_v1_base(base: str | None) -> bool:
     """True when ``base`` looks like an OpenAI-compatible ``…/v1`` endpoint."""
     if not base:
@@ -2964,6 +2996,7 @@ class DashboardChannel(BaseChannel):
                 "provider": provider,
                 "workspace": str(cfg.workspace_path),
                 "channels": enabled,
+                "mcp": _mcp_status_snapshot(cfg),
                 "dashboard": {
                     "host": self.config.host,
                     "port": self.config.port,

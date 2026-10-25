@@ -2,6 +2,7 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  HardDrive,
   LogOut,
   Moon,
   Plug,
@@ -139,6 +140,102 @@ function McpCard({ status }: { status: StatusResponse | null }) {
             })}
             {mcp?.checked_at ? (
               <p className="text-xs text-muted-foreground">Last checked {mcp.checked_at}</p>
+            ) : null}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Disk headroom. Viswa's rule: run freely until 6 GiB free, warn at 10 GiB.
+ * Shown as a plain figure when healthy and an amber/red warning when not —
+ * same visual language as the MCP card, so "something needs attention" reads
+ * the same way everywhere on this page.
+ */
+function DiskCard({ status }: { status: StatusResponse | null }) {
+  const disk = status?.disk;
+  const level = disk?.level ?? "unknown";
+  const warn = level === "warn" || level === "critical";
+
+  return (
+    <Card data-testid="settings-disk">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <HardDrive className="size-4 text-primary" />
+          Disk
+        </CardTitle>
+        <CardDescription>Free space on the root filesystem</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!status || !disk ? (
+          <p className="text-sm text-muted-foreground">Status unavailable</p>
+        ) : level === "unknown" ? (
+          <p className="text-sm text-muted-foreground">{disk.error || "Check failed"}</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {level === "critical" ? (
+                  <AlertTriangle className="size-3.5 shrink-0 text-red-500" aria-hidden />
+                ) : level === "warn" ? (
+                  <AlertTriangle className="size-3.5 shrink-0 text-amber-500" aria-hidden />
+                ) : (
+                  <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" aria-hidden />
+                )}
+                <span className="text-sm font-medium">
+                  {disk.free_gb} GiB free
+                  <span className="text-muted-foreground"> of {disk.total_gb} GiB</span>
+                </span>
+              </div>
+              <span
+                className={`text-xs ${
+                  level === "critical"
+                    ? "text-red-600 dark:text-red-400"
+                    : level === "warn"
+                      ? "text-amber-600 dark:text-amber-400"
+                      : "text-muted-foreground"
+                }`}
+              >
+                {disk.pct_used}% used
+              </span>
+            </div>
+            {warn ? (
+              <div
+                className={`flex items-start gap-2 rounded-md border p-3 ${
+                  level === "critical"
+                    ? "border-red-500/40 bg-red-500/10"
+                    : "border-amber-500/40 bg-amber-500/10"
+                }`}
+                data-testid="settings-disk-warning"
+              >
+                <AlertTriangle
+                  className={`mt-0.5 size-4 shrink-0 ${
+                    level === "critical" ? "text-red-500" : "text-amber-500"
+                  }`}
+                  aria-hidden
+                />
+                <div className="text-sm">
+                  <p
+                    className={`font-medium ${
+                      level === "critical"
+                        ? "text-red-600 dark:text-red-400"
+                        : "text-amber-600 dark:text-amber-400"
+                    }`}
+                  >
+                    {level === "critical"
+                      ? `Below the ${disk.crit_free_gb} GiB red line`
+                      : `Below the ${disk.warn_free_gb} GiB warning line`}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Free space before the weekly cleanup runs, or grow the VM disk.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+            {disk.checked_at ? (
+              <p className="text-xs text-muted-foreground">Checked {disk.checked_at}</p>
             ) : null}
           </div>
         )}
@@ -290,6 +387,8 @@ export function StatusPanel({
       </Card>
 
       <McpCard status={status} />
+
+      <DiskCard status={status} />
 
       <Card>
         <CardHeader>

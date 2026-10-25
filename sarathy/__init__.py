@@ -7,5 +7,5 @@ sarathy - my personal assistant
 # the change) must report the version of the code it is actually running.
 #
 # Keep it in step with the `version` field of pyproject.toml.
-__version__ = "0.19.9"
+__version__ = "0.19.10"
 __logo__ = "🪆"

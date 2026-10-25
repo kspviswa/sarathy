@@ -125,6 +125,19 @@ export interface McpStatus {
   failing: string[];
 }
 
+export interface DiskStatus {
+  path: string;
+  level: "ok" | "warn" | "critical" | "unknown";
+  total_gb?: number;
+  used_gb?: number;
+  free_gb?: number;
+  pct_used?: number;
+  warn_free_gb?: number;
+  crit_free_gb?: number;
+  checked_at?: string;
+  error?: string;
+}
+
 export interface StatusResponse {
   version: string;
   gateway: { running: boolean; pid: number | null; log_file?: string | null };
@@ -133,6 +146,7 @@ export interface StatusResponse {
   workspace: string;
   channels: string[];
   mcp?: McpStatus;
+  disk?: DiskStatus;
   dashboard: {
     host: string;
     port: number;

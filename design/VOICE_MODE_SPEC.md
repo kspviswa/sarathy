@@ -161,13 +161,6 @@ Server → client frames:
 
 ### B. Synthesis — streaming TTS
 
-> **⚠ TTS ENGINE UNDER REVISION (2026-11-07).** This section is written against Woof,
-> which is measured and working. Viswa has ported **Maya-2-Native to CPU** and will
-> supply the repo. When that lands, swap the engine behind the same interface — the
-> streaming contract below (stripper → sentence splitter → ordered PCM) is
-> engine-agnostic and must not change. Do not start B until the Maya repo is in hand
-> and the engine choice is settled; A, C, D, E and G are unaffected.
-
 - Woof singleton with explicit `load()` / `unload()`. Voice **Juno**, fixed. No picker.
 - Hook `DashboardChannel.send()` where `_progress` frames carry **accumulated** answer
   text; diff against what has already been emitted.
@@ -376,7 +369,6 @@ steps already `[x] done` unless their output was subsequently invalidated.
 - [ ] C. State machine, prep frames, chime, tab lock, idempotent teardown, reaper
 - [ ] D. AudioWorklet capture, Silero VAD, waveform, iOS audio session
 - [ ] E. Resident Shruti-Tamil, phrase commitment, `partial` frames
-- [ ] B is **blocked** pending the Maya-CPU TTS repo from Viswa
 - [ ] F. `voice:` sessions, transcript/original-text history, barge-in, fillers
 - [ ] G. Voice tab UI on BOTH SPAs
 - [ ] H. Tests green (`python3 -m unittest discover tests`, `npm test`)

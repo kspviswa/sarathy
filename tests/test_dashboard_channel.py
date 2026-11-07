@@ -863,6 +863,43 @@ async def test_media_get_without_any_auth_is_401(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_media_get_serves_audio_with_a_playable_content_type(
+    tmp_path, monkeypatch
+) -> None:
+    """Audio attachments must carry a real audio Content-Type.
+
+    aiohttp's FileResponse resolves Content-Type from its own MimeTypes table,
+    which has no `.ogg`/`.m4a` entry — those come back as
+    `application/octet-stream`. With `X-Content-Type-Options: nosniff` the
+    browser then refuses to decode the file, so every voice note mirrored to
+    the dashboard rendered as a player error. Pin the type per extension.
+    """
+    from sarathy.channels.dashboard import server as server_module
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    monkeypatch.setattr(server_module, "_MEDIA_DIR", media_dir)
+
+    expected = {
+        "note.ogg": "audio/ogg",
+        "note.opus": "audio/ogg",
+        "note.m4a": "audio/mp4",
+        "note.mp3": "audio/mpeg",
+        "note.wav": "audio/wav",
+    }
+    for name in expected:
+        (media_dir / name).write_bytes(b"\x00" * 8)
+
+    client, _ = await _authed_client(tmp_path)
+    async with client:
+        await _pair(client)
+        for name, ctype in expected.items():
+            resp = await client.get("/api/media", params={"path": str(media_dir / name)})
+            assert resp.status == 200, name
+            assert resp.headers["Content-Type"].startswith(ctype), name
+
+
+@pytest.mark.asyncio
 async def test_media_cookie_does_not_authorize_state_changing_requests(tmp_path) -> None:
     """The cookie is scoped to GET /api/media — it must not authenticate POSTs."""
     client, _ = await _authed_client(tmp_path)

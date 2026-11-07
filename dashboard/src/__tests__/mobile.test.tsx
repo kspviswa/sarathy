@@ -110,7 +110,7 @@ describe("Mobile app — bottom tab bar", () => {
     vi.clearAllMocks();
   });
 
-  it("renders with a bottom tab bar carrying all 6 tabs", async () => {
+  it("renders with a bottom tab bar carrying all 7 tabs", async () => {
     render(<MobileApp />);
     const tabbar = await screen.findByTestId("mobile-tabbar");
     expect(tabbar).toBeInTheDocument();
@@ -119,11 +119,12 @@ describe("Mobile app — bottom tab bar", () => {
     // outside it, so the tabs are counted inside the strip.
     const strip = await screen.findByTestId("mobile-tabbar-scroll");
     const buttons = within(strip).getAllByRole("button");
-    expect(buttons).toHaveLength(6);
+    expect(buttons).toHaveLength(7);
 
     expect(screen.getByLabelText("Chat")).toBeInTheDocument();
     // Ask sits right after Chat (spec 145 §D).
     expect(screen.getByLabelText("Ask")).toBeInTheDocument();
+    expect(screen.getByLabelText("Voice")).toBeInTheDocument();
     expect(screen.getByLabelText("Jobs")).toBeInTheDocument();
     // Config and Status merged into Settings (spec 146 §A/§B).
     expect(screen.getByLabelText("Settings")).toBeInTheDocument();

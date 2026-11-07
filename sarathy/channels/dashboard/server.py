@@ -46,6 +46,7 @@ from sarathy.channels.dashboard.media_proxy import (
 )
 from sarathy.config.schema import DashboardConfig
 from sarathy.session.manager import channel_for_key
+from sarathy.voice.coordinator import VoiceCoordinator
 
 DASHBOARD_SESSION_KEY = "dashboard:console"
 MAX_FILE_BYTES = 2 * 1024 * 1024  # Workspace file read/write cap
@@ -107,7 +108,9 @@ _ASK_BAD_GROUP = "\x00bad-group"
 _CSP = "; ".join(
     (
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline'",
+        # Voice tab: cactus-needle Whistle runs WASM in a module worker (spec 173).
+        "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+        "worker-src 'self' blob:",
         "style-src 'self' 'unsafe-inline'",
         # Ask's media rail draws images and video thumbnails that live on the
         # open web (SearXNG image results, YouTube thumbnails). Same-origin
@@ -133,6 +136,25 @@ _MOBILE_UA_RE = re.compile(
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 _AUDIO_EXTS = {".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"}
+
+# aiohttp's FileResponse guesses Content-Type from a MimeTypes instance that is
+# NOT built from /etc/mime.types — it only carries aiohttp's own table, which
+# has no entry for `.ogg` or `.m4a`. Those fall back to
+# `application/octet-stream` and, because we send
+# `X-Content-Type-Options: nosniff`, the browser refuses to decode them as
+# audio — every voice note mirrored to the dashboard showed as a player error
+# while the same file played fine on Telegram. Pin the type for the extensions
+# we actually hand out.
+_MEDIA_CONTENT_TYPES = {
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".flac": "audio/flac",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+}
 
 # Archived transcripts are named `session-YYYY-MM-DDTHH-MM.jsonl` by
 # `Session.archive_session`. `/api/session/archive` takes one of those names
@@ -564,6 +586,7 @@ class DashboardChannel(BaseChannel):
         # The Ask thread store (job 150 §A). Created on first use: a gateway
         # that never gets an Ask must not litter the state directory.
         self._ask_store: AskStore | None = None
+        self._voice = VoiceCoordinator(self)
         self._load_outbox()
 
     # ------------------------------------------------------------------ outbox
@@ -733,6 +756,8 @@ class DashboardChannel(BaseChannel):
                 pass
         self._site = None
         self._runner = None
+        if getattr(self, "_voice", None):
+            await self._voice.shutdown()
         logger.info("Dashboard channel stopped")
 
     async def send(self, msg: OutboundMessage) -> None:
@@ -750,6 +775,9 @@ class DashboardChannel(BaseChannel):
         when offline, matching the pre-existing behavior.
         """
         metadata = msg.metadata or {}
+        voice = getattr(self, "_voice", None)
+        if voice is not None and voice.is_live_for(msg):
+            await voice.handle_outbound(msg)
 
         # Server-owned turn frames (spec 127 §A.2). The end frame also flushes
         # any media buffered during the turn into the transcript.
@@ -1077,7 +1105,10 @@ class DashboardChannel(BaseChannel):
         proxy_read = path == "/api/media/proxy" and request.method == "GET"
         used_token: str | None = None
         header_token: str | None = None
-        if (path.startswith("/api/") or path == "/ws") and not public and not proxy_read:
+        if (
+            path.startswith("/api/")
+            or path in ("/ws", "/ws/voice")
+        ) and not public and not proxy_read:
             token = self._extract_token(request)
             device_id = self._registry.validate(token) if token else None
             header_token = token if device_id else None
@@ -1239,6 +1270,23 @@ class DashboardChannel(BaseChannel):
         app.router.add_delete("/api/devices/{id}", self._api_devices_remove)
 
         app.router.add_get("/ws", self._ws_handler)
+        app.router.add_get("/ws/voice", self._ws_voice_handler)
+        app.router.add_get(
+            "/api/voice/model/shruti-tamil.cact", self._api_voice_model_shruti
+        )
+
+    async def _ws_voice_handler(self, request: web.Request) -> web.WebSocketResponse:
+        return await self._voice._ws_voice_handler(request)
+
+    async def _api_voice_model_shruti(self, request: web.Request) -> web.StreamResponse:
+        """Stream the Shruti model blob for client-side WASM STT (spec 173)."""
+        path = Path.home() / ".sarathy" / "models" / "shruti" / "shruti-tamil.cact"
+        if not path.is_file():
+            return web.json_response({"error": "model not found"}, status=404)
+        resp = web.FileResponse(path)
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        resp.headers["Content-Length"] = str(path.stat().st_size)
+        return resp
 
     def _device_kind(self, request: web.Request) -> str:
         """Return ``"mobile"`` for phone UAs, else ``"desktop"``.
@@ -2241,6 +2289,9 @@ class DashboardChannel(BaseChannel):
         if not resolved.is_file():
             return web.json_response({"error": "not found"}, status=404)
 
+        content_type = _MEDIA_CONTENT_TYPES.get(resolved.suffix.lower())
+        if content_type:
+            return web.FileResponse(resolved, headers={"Content-Type": content_type})
         return web.FileResponse(resolved)
 
     # ------------------------------------------------------------- media proxy api

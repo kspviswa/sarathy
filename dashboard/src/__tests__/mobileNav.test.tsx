@@ -184,7 +184,7 @@ describe("Mobile nav — six scrollable tabs, nothing dropped", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders six tabs, in the order Chat, Ask, Jobs, Settings, Sessions, Files", async () => {
+  it("renders seven tabs, in the order Chat, Ask, Voice, Jobs, Settings, Sessions, Files", async () => {
     render(<MobileApp />);
     const strip = await screen.findByTestId("mobile-tabbar-scroll");
 
@@ -195,6 +195,7 @@ describe("Mobile nav — six scrollable tabs, nothing dropped", () => {
     expect(labels).toEqual([
       "Chat",
       "Ask",
+      "Voice",
       "Jobs",
       "Settings",
       "Sessions",
@@ -339,6 +340,7 @@ describe("Mobile nav — six scrollable tabs, nothing dropped", () => {
     expect(toSection("config")?.settingsSegment).toBe("form");
 
     // Sessions and Files are TABS again (spec §A, Run 2).
+    expect(toSection("voice")?.section).toBe("voice");
     expect(toSection("sessions")?.section).toBe("sessions");
     expect(toSection("files")?.section).toBe("files");
 

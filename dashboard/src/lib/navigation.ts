@@ -16,6 +16,7 @@ export type SettingsSegment = "form" | "json" | "devices" | "status" | "usage";
 export type NavSection =
   | "chat"
   | "ask"
+  | "voice"
   | "sessions"
   | "files"
   | "jobs"
@@ -47,6 +48,8 @@ export function toSection(tab: string | undefined | null): NavTarget | null {
       return { section: "chat" };
     case "ask":
       return { section: "ask" };
+    case "voice":
+      return { section: "voice" };
     case "jobs":
       return { section: "jobs" };
     case "sessions":

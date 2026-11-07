@@ -599,6 +599,23 @@
    Deliberately NOT `.thinking-shimmer`: that clips a gradient to the glyphs,
    which drains the emoji of their colour. Under prefers-reduced-motion the
    label just swaps, which is all the information the fade carries. */
+@keyframes nav-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-5px);
+  }
+  75% {
+    transform: translateX(5px);
+  }
+}
+
+.nav-shake {
+  animation: nav-shake 0.35s ease-in-out;
+}
+
 @keyframes hint-in {
   from {
     opacity: 0;

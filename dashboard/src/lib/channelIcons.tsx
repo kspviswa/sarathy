@@ -1,5 +1,6 @@
 import {
   LayoutDashboard,
+  Mic,
   Mail,
   MessageSquare,
   MessagesSquare,
@@ -18,6 +19,7 @@ const CHANNEL_ICONS: Record<string, LucideIcon> = {
   discord: MessagesSquare,
   email: Mail,
   dashboard: LayoutDashboard,
+  voice: Mic,
   cli: Terminal,
   backend: Server,
 };

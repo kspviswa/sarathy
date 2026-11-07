@@ -7,6 +7,7 @@ import {
   History,
   LogOut,
   MessageSquareText,
+  Mic,
   Search,
   Settings,
   Sparkles,
@@ -47,6 +48,7 @@ import { useNotificationPref } from "@/lib/useNotificationPref";
 import { useNotifications } from "@/lib/useNotifications";
 import type { AppNotification } from "@/lib/useNotifications";
 import { cn } from "@/lib/utils";
+import { attemptVoiceAwareNav, type VoiceNavPhase } from "@/lib/voice/tabLock";
 import { DashboardSocket } from "@/lib/ws";
 import { AskView } from "@/views/AskView";
 import { ChatView, type ChatMessage } from "@/views/ChatView";
@@ -55,6 +57,7 @@ import { JobsView } from "@/views/JobsView";
 import { PairView } from "@/views/PairView";
 import { SessionsView } from "@/views/SessionsView";
 import { SettingsView, type SettingsSegment } from "@/views/SettingsView";
+import { VoiceView } from "@/views/VoiceView";
 
 export type { ChatMessage } from "@/views/ChatView";
 
@@ -67,6 +70,7 @@ export type Section = NavSection;
 const SECTIONS: { id: Section; label: string; icon: typeof Gauge; mobile?: boolean }[] = [
   { id: "chat", label: "Chat", icon: MessageSquareText, mobile: true },
   { id: "ask", label: "Ask", icon: Sparkles, mobile: true },
+  { id: "voice", label: "Voice", icon: Mic, mobile: true },
   { id: "sessions", label: "Sessions", icon: History, mobile: true },
   { id: "files", label: "Files", icon: FileCode2, mobile: true },
   { id: "jobs", label: "Jobs", icon: Briefcase, mobile: true },
@@ -94,6 +98,8 @@ function AppInner() {
   const [reaction, setReaction] = useState<ReactionState>("done");
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [unread, setUnread] = useState<Partial<Record<Section, number>>>({});
+  const [voiceNavPhase, setVoiceNavPhase] = useState<VoiceNavPhase>("idle");
+  const [navShake, setNavShake] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
@@ -157,11 +163,25 @@ function AppInner() {
     setRailOpen(false);
   }, []);
 
+  const requestSection = useCallback(
+    (next: Section) => {
+      if (!attemptVoiceAwareNav(voiceNavPhase, next)) {
+        toast.message("End the voice session first");
+        setNavShake(true);
+        window.setTimeout(() => setNavShake(false), 400);
+        return;
+      }
+      setTranscriptKey(null);
+      selectSection(next);
+    },
+    [voiceNavPhase, selectSection],
+  );
+
   // The Ask canvas's history button asks for the Sessions surface (job 150
   // §C): the Ask history lives there, behind its `Chats / Asks` switch.
   useEffect(
-    () => subscribeAskHistoryRequest(() => selectSection("sessions")),
-    [selectSection],
+    () => subscribeAskHistoryRequest(() => requestSection("sessions")),
+    [requestSection],
   );
 
   /**
@@ -178,9 +198,9 @@ function AppInner() {
       if (target.section === "settings") {
         setSettingsSegment(target.settingsSegment ?? "form");
       }
-      selectSection(target.section);
+      requestSection(target.section);
     },
-    [selectSection],
+    [requestSection],
   );
 
   const { notifications, unreadIds, markAllRead, markRead } = useNotifications(socket, {
@@ -367,9 +387,9 @@ function AppInner() {
         text: [n.title, n.body].filter(Boolean).join("\n"),
         nonce: Date.now(),
       });
-      selectSection("chat");
+      requestSection("chat");
     },
-    [selectSection],
+    [requestSection],
   );
 
   /** The seed is one-shot: ChatView reports it applied so it can't re-inject. */
@@ -387,9 +407,9 @@ function AppInner() {
     (text: string) => {
       if (!text.trim()) return;
       setFollowUpSeed({ text, nonce: Date.now() });
-      selectSection("chat");
+      requestSection("chat");
     },
-    [selectSection],
+    [requestSection],
   );
 
   /**
@@ -402,9 +422,9 @@ function AppInner() {
   const handleOpenAskThread = useCallback(
     (threadId: string) => {
       setActiveAskThreadId(threadId);
-      selectSection("ask");
+      requestSection("ask");
     },
-    [selectSection],
+    [requestSection],
   );
 
   const handleStop = useCallback(async () => {
@@ -416,9 +436,9 @@ function AppInner() {
   const handleOpenFile = useCallback(
     (path: string) => {
       setOpenFile(path);
-      selectSection("files");
+      requestSection("files");
     },
-    [selectSection],
+    [requestSection],
   );
 
   const handleRegenerate = useCallback(async () => {
@@ -433,10 +453,10 @@ function AppInner() {
   // A command picked in the palette is sent as a normal slash message.
   const runCommand = useCallback(
     (command: string) => {
-      selectSection("chat");
+      requestSection("chat");
       void handleSend(command);
     },
-    [handleSend, selectSection],
+    [handleSend, requestSection],
   );
 
   const recentTopics = useMemo(
@@ -503,10 +523,7 @@ function AppInner() {
               key={id}
               variant={section === id ? "secondary" : "ghost"}
               size="sm"
-              onClick={() => {
-                setTranscriptKey(null);
-                selectSection(id);
-              }}
+              onClick={() => requestSection(id)}
               aria-current={section === id ? "page" : undefined}
               data-testid={`nav-${id}`}
               /* Job 132 §E: the pill eases between states and the active marker
@@ -677,6 +694,10 @@ function AppInner() {
             </div>
           )}
 
+          {section === "voice" && (
+            <VoiceView onNavPhaseChange={setVoiceNavPhase} />
+          )}
+
           {section === "sessions" && (
             <SessionsView
               initialKey={transcriptKey}
@@ -710,18 +731,18 @@ function AppInner() {
 
       {/* bottom nav on mobile */}
       <nav
-        className="safe-bottom order-3 flex shrink-0 items-center justify-around border-t bg-background px-2 py-1 md:hidden"
         data-testid="mobile-section-nav"
+        className={cn(
+          "safe-bottom order-3 flex shrink-0 items-center justify-around border-t bg-background px-2 py-1 md:hidden",
+          navShake && "nav-shake motion-reduce:animate-none",
+        )}
       >
         {SECTIONS.filter((s) => s.mobile).map(({ id, label, icon: Icon }) => (
           <Button
             key={id}
             variant="ghost"
             size="sm"
-            onClick={() => {
-              setTranscriptKey(null);
-              selectSection(id);
-            }}
+            onClick={() => requestSection(id)}
             aria-current={section === id ? "page" : undefined}
             /* Job 132 §E — the active pill eases in, reduced-motion aware. */
             className={cn(

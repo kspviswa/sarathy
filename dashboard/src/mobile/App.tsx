@@ -7,6 +7,7 @@ import {
   FileCode2,
   History,
   MessageSquareText,
+  Mic,
   Settings,
   Sparkles,
   X,
@@ -22,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { api, AuthError, clearToken, getToken } from "@/lib/api";
 import { setActiveAskThreadId, subscribeAskHistoryRequest } from "@/lib/ask";
 import { toSection } from "@/lib/navigation";
+import { attemptVoiceAwareNav, type VoiceNavPhase } from "@/lib/voice/tabLock";
 import type { Quote } from "@/lib/quotes";
 import type { SlashCommand } from "@/lib/palette";
 import { ThemeProvider } from "@/lib/theme";
@@ -46,6 +48,7 @@ import { ChatView } from "./ChatView";
 import { FilesView } from "./FilesView";
 import { JobsView } from "./JobsView";
 import { SessionsView } from "./SessionsView";
+import { VoiceView } from "./VoiceView";
 
 /**
  * The mobile shell carries SIX tabs (spec §A, Viswa's correction):
@@ -58,11 +61,12 @@ import { SessionsView } from "./SessionsView";
  * Config and Status merged into ONE Settings tab (spec §B) — Status is a
  * segment of the Settings surface, not a tab of its own.
  */
-type Tab = "chat" | "ask" | "jobs" | "settings" | "sessions" | "files";
+type Tab = "chat" | "ask" | "voice" | "jobs" | "settings" | "sessions" | "files";
 
 const TABS: { id: Tab; label: string; icon: typeof MessageSquareText }[] = [
   { id: "chat", label: "Chat", icon: MessageSquareText },
   { id: "ask", label: "Ask", icon: Sparkles },
+  { id: "voice", label: "Voice", icon: Mic },
   { id: "jobs", label: "Jobs", icon: Briefcase },
   { id: "settings", label: "Settings", icon: Settings },
   { id: "sessions", label: "Sessions", icon: History },
@@ -84,6 +88,8 @@ function MobileAppInner() {
   // the shared module, so a missed terminal frame no longer strands the UI.
   const { streaming } = useTurn();
   const [openFile, setOpenFile] = useState<string | null>(null);
+  const [voiceNavPhase, setVoiceNavPhase] = useState<VoiceNavPhase>("idle");
+  const [navShake, setNavShake] = useState(false);
   const [unread, setUnread] = useState<Partial<Record<Tab, number>>>({});
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [followUpSeed, setFollowUpSeed] = useState<{ text: string; nonce: number } | null>(null);
@@ -197,6 +203,20 @@ function MobileAppInner() {
     setMessages,
   );
 
+  const setTabAllowed = useCallback(
+    (next: Tab) => {
+      if (!attemptVoiceAwareNav(voiceNavPhase, next)) {
+        toast.message("End the voice session first");
+        setNavShake(true);
+        window.setTimeout(() => setNavShake(false), 400);
+        return;
+      }
+      setTab(next);
+      setUnread((prev) => ({ ...prev, [next]: 0 }));
+    },
+    [voiceNavPhase],
+  );
+
   /**
    * Where a notification frame (or an old link) wants to go.
    *
@@ -214,12 +234,13 @@ function MobileAppInner() {
       setTab("settings");
       return;
     }
-    if (target.section === "chat") setTab("chat");
-    else if (target.section === "ask") setTab("ask");
-    else if (target.section === "jobs") setTab("jobs");
-    else if (target.section === "sessions") setTab("sessions");
-    else if (target.section === "files") setTab("files");
-  }, []);
+    if (target.section === "chat") setTabAllowed("chat");
+    else if (target.section === "ask") setTabAllowed("ask");
+    else if (target.section === "voice") setTabAllowed("voice");
+    else if (target.section === "jobs") setTabAllowed("jobs");
+    else if (target.section === "sessions") setTabAllowed("sessions");
+    else if (target.section === "files") setTabAllowed("files");
+  }, [setTabAllowed]);
 
   const { notifications, unreadIds, markAllRead, markRead, remove, clearAll } =
     useNotifications(socket, {
@@ -565,6 +586,7 @@ function MobileAppInner() {
           </>
         )}
         {tab === "ask" && <AskView />}
+        {tab === "voice" && <VoiceView onNavPhaseChange={setVoiceNavPhase} />}
         {tab === "jobs" && <JobsView />}
         {tab === "sessions" && (
           <div className="h-full overflow-hidden">
@@ -655,7 +677,10 @@ function MobileAppInner() {
           Six tabs do not fit a phone, so the bar scrolls instead of dropping
           anything; the `>` affordance on the right edge reveals the rest. */}
       <nav
-        className="safe-bottom relative flex shrink-0 items-stretch border-t bg-background px-1 pb-2"
+        className={cn(
+          "safe-bottom relative flex shrink-0 items-stretch border-t bg-background px-1 pb-2",
+          navShake && "nav-shake motion-reduce:animate-none",
+        )}
         data-testid="mobile-tabbar"
       >
         <div
@@ -671,10 +696,7 @@ function MobileAppInner() {
               }}
               aria-label={label}
               aria-current={tab === id ? "page" : undefined}
-              onClick={() => {
-                setTab(id);
-                setUnread((prev) => ({ ...prev, [id]: 0 }));
-              }}
+              onClick={() => setTabAllowed(id)}
               /* Job 132 §E: the selected tab eases into place (the icon
                scales, the label fades up); reduced-motion aware.
                The min-width keeps a label from being squeezed — and it is

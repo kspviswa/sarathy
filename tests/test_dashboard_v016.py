@@ -585,8 +585,10 @@ class TestDashboardNewApis(AioHTTPTestCase):
         assert "default-src 'self'" in csp
         assert "connect-src 'self' ws: wss:" in csp
         assert "object-src 'none'" in csp
-        # Must not weaken to eval.
-        assert "unsafe-eval" not in csp
+        # Must not weaken to bare eval; voice tab needs wasm-only (spec 173).
+        assert "'unsafe-eval'" not in csp
+        assert "'wasm-unsafe-eval'" in csp
+        assert "worker-src 'self' blob:" in csp
         assert resp.headers.get("X-Content-Type-Options") == "nosniff"
 
     @unittest_run_loop

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -25,6 +26,10 @@ if TYPE_CHECKING:
 
 _FILLER = "One moment, sir."
 _AUDIO_QUEUE_MAX = 32
+# 25 s of 16 kHz mono int16 — Shruti accepts 30 s per call, so leave headroom.
+_MAX_UTTERANCE_BYTES = 16_000 * 2 * 25
+# How often the live partial is refreshed while the user is still speaking.
+_PARTIAL_INTERVAL_S = 0.7
 
 
 class VoiceCoordinator:
@@ -45,6 +50,8 @@ class VoiceCoordinator:
         self._audio_worker: asyncio.Task | None = None
         self._turn_accumulated = ""
         self._server_stt_buffer = ""
+        self._server_stt_pcm = bytearray()
+        self._last_partial_ts = 0.0
 
     def is_live_for(self, msg: OutboundMessage) -> bool:
         if not self.session.is_live or not self.session.session_id:
@@ -198,12 +205,20 @@ class VoiceCoordinator:
             return
         if ftype == "speech_start":
             await self._cancel_tts()
+            self._server_stt_pcm = bytearray()
+            self._server_stt_buffer = ""
+            self._last_partial_ts = 0.0
             await send_json(ws, "state", state="listening")
             return
         if ftype == "speech_end":
             if self.session.stt_mode == SttMode.SERVER_STT:
-                text = self._server_stt_buffer.strip()
+                # Transcribe the whole utterance once. Per-chunk transcription
+                # both loses context and overwrites the buffer, so the final
+                # text ended up being only the last 0.5 s of speech.
+                text = await self._transcribe_server_buffer()
+                self._server_stt_pcm = bytearray()
                 self._server_stt_buffer = ""
+                self._last_partial_ts = 0.0
                 if text:
                     await send_json(ws, "partial", text=text, is_final=True)
                     await self._submit_utterance(text)
@@ -281,14 +296,35 @@ class VoiceCoordinator:
             return
         if not self.shruti.loaded:
             return
+        # Accumulate the utterance; Shruti takes up to 30 s per call, so cap at
+        # 25 s (16 kHz mono int16 = 32 000 bytes/s) and drop the oldest audio.
+        self._server_stt_pcm.extend(pcm)
+        cap = _MAX_UTTERANCE_BYTES
+        if len(self._server_stt_pcm) > cap:
+            del self._server_stt_pcm[: len(self._server_stt_pcm) - cap]
+
+        # Live partial for the UI, throttled — transcribing every 0.5 s chunk
+        # throws away context and costs a forward pass per chunk.
+        now = time.monotonic()
+        if now - self._last_partial_ts < _PARTIAL_INTERVAL_S:
+            return
+        self._last_partial_ts = now
+        text = await self._transcribe_server_buffer()
+        if text:
+            self._server_stt_buffer = text
+            await send_json(ws, "partial", text=text, is_final=False)
+
+    async def _transcribe_server_buffer(self) -> str:
+        """Transcribe the accumulated utterance PCM (may be empty)."""
+        if not self._server_stt_pcm:
+            return ""
+        pcm = bytes(self._server_stt_pcm)
         try:
             text = await asyncio.to_thread(self.shruti.transcribe_pcm16_16k, pcm)
         except Exception as e:
             logger.debug("shruti transcribe failed: {}", e)
-            return
-        if text.strip():
-            self._server_stt_buffer = text.strip()
-            await send_json(ws, "partial", text=text.strip(), is_final=False)
+            return ""
+        return (text or "").strip()
 
     async def _submit_utterance(self, text: str) -> None:
         if not self.session.is_live or not self._device_id:

@@ -91,6 +91,16 @@ class ChannelManager:
                     agent=self.agent,
                 )
                 logger.info("Dashboard channel enabled")
+
+                # Voice (spec 173): the dashboard's /ws/voice publishes turns as
+                # channel="voice". Register the adapter so the outbound dispatcher
+                # routes the agent's answer back to the live socket instead of
+                # logging "Unknown channel: voice" and dropping it.
+                from sarathy.voice.channel import VoiceChannel
+
+                self.channels["voice"] = VoiceChannel(
+                    self.bus, self.channels["dashboard"]._voice
+                )
             except ImportError as e:
                 logger.warning("Dashboard channel not available: {}", e)
 

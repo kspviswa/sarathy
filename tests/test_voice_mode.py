@@ -12,7 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from sarathy.bus.events import OutboundMessage
 from sarathy.bus.queue import MessageBus
-from sarathy.channels.dashboard.server import DashboardChannel, _CSP
+from sarathy.channels.dashboard.server import _CSP, DashboardChannel
 from sarathy.config.loader import save_config
 from sarathy.config.schema import Config
 from sarathy.session.manager import SessionManager
@@ -428,3 +428,155 @@ async def test_teardown_idempotent() -> None:
     await session.teardown(unload)
     assert n["u"] == 2
     assert session.state == VoiceState.IDLE
+
+
+# ---------------------------------------------------------------------------
+# Outbound routing (regression: "Unknown channel: voice" dropped the answer)
+# ---------------------------------------------------------------------------
+
+
+def test_voice_channel_routes_to_coordinator() -> None:
+    """A ``voice`` outbound message must reach the coordinator, not be dropped.
+
+    Without the VoiceChannel adapter the dispatcher logged
+    ``Unknown channel: voice`` and the agent's answer never reached the socket.
+    """
+    from sarathy.voice.channel import VoiceChannel
+
+    coordinator = MagicMock()
+    coordinator.handle_outbound = AsyncMock()
+    ch = VoiceChannel(MessageBus(), coordinator)
+    msg = OutboundMessage(channel="voice", chat_id="s-1", content="hello")
+    asyncio.run(ch.send(msg))
+    coordinator.handle_outbound.assert_awaited_once_with(msg)
+
+
+def test_voice_channel_registered_in_manager() -> None:
+    """The manager must expose a ``voice`` channel whenever dashboard is on."""
+    import inspect
+
+    from sarathy.channels import manager as manager_mod
+
+    src = inspect.getsource(manager_mod.ChannelManager._init_channels)
+    assert 'self.channels["voice"]' in src
+    assert "VoiceChannel" in src
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_delivers_voice_outbound_to_socket(tmp_path: Path, monkeypatch) -> None:
+    """End-to-end: bus outbound for ``voice`` reaches the socket, not the log.
+
+    Regression for ``Unknown channel: voice`` — the agent produced an answer but
+    the dispatcher dropped it because no ``voice`` channel was registered, so the
+    WebSocket saw ``thinking`` and then silence.
+    """
+    from sarathy.channels.manager import ChannelManager
+
+    client, channel = await _authed_client(tmp_path)
+    voice = channel._voice
+    voice.session.session_id = "sess-1"
+    voice.session.state = VoiceState.LIVE
+    voice.woof._tts = object()
+    monkeypatch.setattr(voice.woof, "synthesize_sentence_pcm", lambda s: b"\x00\x00" * 50)
+    monkeypatch.setattr(
+        voice.woof, "sentences_from_answer", lambda t: [t] if t.strip() else []
+    )
+    ws = MagicMock()
+    ws.closed = False
+    ws.send_str = AsyncMock()
+    ws.send_bytes = AsyncMock()
+    voice._ws = ws
+    # The audio pump is normally started by the /ws/voice handler.
+    voice._audio_worker = asyncio.create_task(voice._audio_sender())
+
+    cfg = Config()
+    cfg.channels.dashboard.enabled = True
+    mgr = ChannelManager(cfg, bus=channel.bus)
+    # _init_channels builds its own DashboardChannel; point the voice adapter at
+    # the coordinator we just armed with a fake socket.
+    mgr.channels["voice"].coordinator = voice
+    dispatcher = asyncio.create_task(mgr._dispatch_outbound())
+    try:
+        await channel.bus.publish_outbound(
+            OutboundMessage(
+                channel="voice", chat_id="sess-1", content="All systems nominal.",
+                metadata={"_progress": True},
+            )
+        )
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            if ws.send_bytes.await_count:
+                break
+    finally:
+        dispatcher.cancel()
+        if voice._audio_worker is not None:
+            voice._audio_worker.cancel()
+        try:
+            await dispatcher
+        except asyncio.CancelledError:
+            pass
+
+    assert ws.send_bytes.await_count >= 1, "no audio reached the socket"
+    frames = [json.loads(c.args[0]) for c in ws.send_str.await_args_list]
+    assert any(f.get("type") == "text" for f in frames), frames
+
+
+# ---------------------------------------------------------------------------
+# Server STT accumulation (regression: buffer was replaced, not appended)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_server_stt_accumulates_whole_utterance(tmp_path: Path, monkeypatch) -> None:
+    """Each audio chunk must extend the buffer; the final text covers all of it.
+
+    The first implementation assigned ``buffer = text`` per 0.5 s chunk, so a
+    three-part utterance submitted only its last fragment ("y").
+    """
+    client, channel = await _authed_client(tmp_path)
+    voice = channel._voice
+    woof = voice.woof
+
+    def _load():
+        woof._tts = _FakeWoof()
+        woof._split_text = lambda t: [t] if t.strip() else []
+
+    monkeypatch.setattr(woof, "load", _load)
+    seen: list[int] = []
+
+    def _transcribe(pcm: bytes) -> str:
+        seen.append(len(pcm))
+        return f"part{len(seen)}"
+
+    monkeypatch.setattr(voice.shruti, "load", lambda: setattr(voice.shruti, "_engine", object()))
+    monkeypatch.setattr(voice.shruti, "transcribe_pcm16_16k", _transcribe)
+    monkeypatch.setattr(voice, "_submit_utterance", AsyncMock())
+
+    async with client:
+        token = await _pair(client)
+        async with client.ws_connect(f"/ws/voice?token={token}") as ws:
+            await ws.send_str(json.dumps({"type": "start", "mode": "server_stt"}))
+            while True:
+                data = json.loads((await asyncio.wait_for(ws.receive(), timeout=5)).data)
+                if data.get("type") == "ready":
+                    break
+
+            await ws.send_str(json.dumps({"type": "speech_start", "ts": 0}))
+            chunk = b"\x00\x01" * 16000  # 1 s of 16 kHz mono int16
+            for _ in range(3):
+                await ws.send_bytes(chunk)
+                # Skip the throttled live partial so only speech_end transcribes.
+                voice._last_partial_ts = 1e9
+            await ws.send_str(json.dumps({"type": "speech_end", "ts": 3}))
+
+            for _ in range(10):
+                data = json.loads((await asyncio.wait_for(ws.receive(), timeout=5)).data)
+                if data.get("type") == "partial" and data.get("is_final"):
+                    break
+
+            # The final transcribe saw all three chunks, not just the last one.
+            assert seen, "transcribe was never called"
+            assert seen[-1] == 3 * len(chunk)
+            voice._submit_utterance.assert_awaited_once()
+            assert voice._submit_utterance.await_args.args[0] == f"part{len(seen)}"
+            assert voice._server_stt_pcm == bytearray()

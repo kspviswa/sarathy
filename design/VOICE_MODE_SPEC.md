@@ -5,9 +5,9 @@
 > rerun the SAME job — do not fork a new spec._
 >
 > _Register with jobctl FIRST, then fill in the id:_
-> `jobctl create --kind sdd --backend opencode --title "Voice mode: duplex voice tab in dashboard" --repo /home/kspviswa/ws/sarathy --model big-pickle --spec jobs/specs/<id>.md --source-session "telegram:5878545507"`
+> `jobctl create --kind sdd --backend opencode --title "Voice mode: duplex voice tab in dashboard" --repo /home/kspviswa/ws/sarathy --model big-pickle --spec jobs/specs/173.md --source-session "telegram:5878545507"`
 >
-> **Status:** awaiting approval · **Date:** 2026-11-07 · **Author:** Sarathy
+> **Status:** planned (registered as job 173, not launched) · spec rev 2 (2026-11-07: ASR = Shruti-Tamil) · **Date:** 2026-11-07 · **Author:** Sarathy
 > **Not launched.**
 
 ---
@@ -40,7 +40,7 @@ the existing calendar history.
 | Text streaming to client (`_progress` frames) | `DashboardChannel.send()` in `sarathy/channels/dashboard/server.py` |
 | Turn control (`/stop`, `/steer`) | `sarathy/agent/loop.py` |
 | Local TTS (Woof, numpy) | `~/ws/woof-sample/underdog-woof` |
-| Local STT (faster-whisper int8 CPU) | `~/.sarathy/workspace/voice/stt.py` |
+| Local STT (Shruti-Tamil, Cactus engine) | `~/.sarathy/models/shruti/shruti-tamil.cact` |
 | Markdown → speakable stripping | `~/portals/shravana/stripper.py` |
 | Session index + calendar | `sarathy/session/manager.py`, `dashboard/src/views/SessionsView.tsx` |
 
@@ -51,11 +51,21 @@ the existing calendar history.
 | Woof model load | 0.119 s |
 | Woof time-to-first-audio (first sentence) | 0.193 s |
 | Woof steady-state RTF | 0.115 (8.7× realtime) |
-| faster-whisper `base` int8, 3 s utterance | 0.47 s |
-| faster-whisper `small` int8, 3 s utterance | 1.25 s |
+| Shruti-Tamil model load (warm) | 0.10 s |
+| Shruti-Tamil, 10.16 s Tamil utterance | 0.19 s — RTF 0.019 (52× realtime) |
+| Shruti-Tamil, 5.59 s English utterance | 0.045 s — RTF 0.008 (125× realtime) |
+| Shruti-Tamil peak RSS | 105 MB |
+| _for comparison_ faster-whisper `base` int8, same 10.16 s Tamil clip | 11.24 s — RTF 1.106 (0.9×, slower than realtime) |
+| _for comparison_ faster-whisper `base` int8 peak RSS | 509 MB |
 
-`base` matched `small` on accuracy for the test clip and is 2.7× faster — **voice
-mode uses `base`**. `small` stays the model for long Telegram voice notes.
+**Voice mode uses Shruti-Tamil, not Whisper.** On the same Tamil clip Whisper was
+slower than realtime and produced mangled text (`கடந்தனிதையாண்டில் வங்கியின
+மத்தலாபம்…`); Shruti was 59× faster and near-verbatim. On mixed Tamil+English,
+Whisper detected `en` and silently dropped the entire Tamil portion; Shruti
+transcribed both. Shruti also uses 5× less memory — which matters, because Woof and
+the STT model are resident together for the whole session.
+`faster-whisper small` stays the model for long Telegram voice notes, where
+throughput does not matter and punctuation does.
 
 Woof's RTF is load-bearing: synthesis outruns playback 8.7×, so a sentence-per-sentence
 queue drains faster than it fills. Long answers are safe.
@@ -75,8 +85,10 @@ it cannot be the foundation:
    recognition is widely reported broken.
 5. `lang` only — no vocabulary hints for names or part numbers.
 
-**Use local faster-whisper.** One model, one transcript, every device, audio never
-leaves the box.
+**Use local Shruti-Tamil.** One model, one transcript, every device, audio never
+leaves the box. It is 29.7 MB (a single `.cact` file), Apache-2.0, and covers the
+Tamil + English + code-mixed speech this household actually produces — Whisper does
+not.
 
 ### 2.4 Known traps to handle
 
@@ -85,8 +97,22 @@ leaves the box.
   not Baseline). Reset to `"auto"` on exit.
 - **Echo:** speaker output re-enters the mic and the VAD reads it as speech. Requires
   AEC + a sustained-energy threshold for barge-in.
-- **Residency:** `stt.py` constructs `WhisperModel` per invocation (~1-3 s wasted per
-  turn). Voice mode must hold one instance for the session lifetime.
+- **Residency:** constructing the STT engine per invocation wastes 0.1-1.6 s per turn.
+  Voice mode must hold one instance for the session lifetime, and release it on End
+  Session.
+- **Shruti packaging trap:** the model card says `pip install cactus-needle`, but that
+  package is stale — it fetches native engine wheels from
+  `Cactus-Compute/needle3/python/*.whl`, which 404 on **every** platform (verified
+  aarch64, x86_64, macOS arm64). The working package is **`cactus-compute` 4.0.1**
+  from PyPI, imported as `from cactus import Whistle`. Pin it; do not follow the card.
+- **Shruti output shape:** returns a dict — `{text, language, ttft_ms, decode_tps}`.
+  `text` has **no punctuation** and spells numbers as words ("twelve percent", not
+  "12%"). This is documented behaviour, not a bug. Do not "fix" it by post-processing;
+  the LLM reads it fine. Tamil comes back in Tamil script, English words in lowercase
+  Latin, code-mixed in one string.
+- **Shruti audio contract:** 16 kHz mono, 16-bit PCM in. The browser captures at
+  48 kHz — the server must resample before calling `transcribe()`. `transcribe()`
+  accepts a WAV path or a float32 numpy array.
 
 ---
 
@@ -110,7 +136,7 @@ Client → server frames:
 | Frame | Payload | Meaning |
 |---|---|---|
 | `hello` | `{token}` | handshake (or `?token=`) |
-| `start` | `{voice: "juno", stt: "base"}` | begin activation; triggers warm-up |
+| `start` | `{voice: "juno", stt: "shruti-tamil"}` | begin activation; triggers warm-up |
 | `cancel` | `{reason}` | abort activation **or** end a live session |
 | `speech_start` | `{ts}` | VAD onset — barge-in signal |
 | `speech_end` | `{ts}` | VAD end; utterance complete |
@@ -134,6 +160,13 @@ Server → client frames:
 | `error` | `{code, message, recoverable}` | surfaced in the UI |
 
 ### B. Synthesis — streaming TTS
+
+> **⚠ TTS ENGINE UNDER REVISION (2026-11-07).** This section is written against Woof,
+> which is measured and working. Viswa has ported **Maya-2-Native to CPU** and will
+> supply the repo. When that lands, swap the engine behind the same interface — the
+> streaming contract below (stripper → sentence splitter → ordered PCM) is
+> engine-agnostic and must not change. Do not start B until the Maya repo is in hand
+> and the engine choice is settled; A, C, D, E and G are unaffected.
 
 - Woof singleton with explicit `load()` / `unload()`. Voice **Juno**, fixed. No picker.
 - Hook `DashboardChannel.send()` where `_progress` frames carry **accumulated** answer
@@ -160,8 +193,10 @@ Server → client frames:
   loading).
 - **Load on Activate, unload on End Session.** Never resident at gateway boot.
 - Prep screen driven by real `prep` frames — no fake progress. Warm path is ~1-3 s; a
-  first-ever run may download Whisper `base` (~150 MB) and must show a byte count, not
-  a hang.
+  first-ever run may download the Shruti model (~30 MB) and the `cactus-compute`
+  engine, and must show a byte count, not a hang. Model lives at
+  `~/.sarathy/models/shruti/shruti-tamil.cact`; if absent, fetch it from
+  `udgamlabs/shruti-tamil` and report progress.
 - Rising two-note chime on `ready`, synthesized with WebAudio oscillators in-page — no
   asset files. Mic opens automatically after the chime; no second tap.
 - **Tab lock:** while `preparing` or `live`, navigation away is blocked. Clicking any
@@ -189,7 +224,9 @@ Server → client frames:
 
 ### E. Recognition — live transcript
 
-- Resident faster-whisper `base` (int8, CPU), loaded and released through C's lifecycle.
+- Resident Shruti-Tamil (`cactus-compute` engine, CPU), loaded and released through
+  C's lifecycle. Model path `~/.sarathy/models/shruti/shruti-tamil.cact`, overridable
+  by env var `SHRUTI_MODEL`.
 - Phrase commitment: VAD splits speech at short pauses (~350 ms); each completed phrase
   is transcribed immediately and appended, pushed as `partial` frames.
 - Final utterance = committed phrases + one transcription of the trailing fragment.
@@ -274,7 +311,8 @@ Server → client frames:
 - Do **not** make the voice hook fire for non-voice turns. It must be inert by default.
 - Do **not** add ffmpeg, WAV, or OGG to the voice path. Raw PCM only.
 - Do **not** use cloud STT or cloud TTS. Everything local.
-- Do **not** load Woof or Whisper at gateway boot. Load on Activate, unload on End Session.
+- Do **not** load Woof or Shruti at gateway boot. Load on Activate, unload on End Session.
+- Do **not** use `cactus-needle` — it is stale and its engine wheels 404. Use `cactus-compute`.
 - Do **not** use `MediaRecorder` for capture. `AudioWorklet` only.
 - Do **not** retain audio in session history. Text only.
 - Do **not** invent progress. Every prep step must report real completion.
@@ -299,7 +337,7 @@ Server → client frames:
   with no gaps or clicks between chunks.
 - Barge-in stops playback mid-sentence after 250 ms of sustained speech, and a cough
   does not.
-- End Session releases Woof and Whisper; RSS returns to baseline. Verified by
+- End Session releases Woof and Shruti; RSS returns to baseline. Verified by
   measurement, not by reading code.
 - Navigation away is blocked while preparing or live; End Session is always reachable.
 - A voice conversation appears in the calendar under a `voice:` session, showing the
@@ -337,7 +375,8 @@ steps already `[x] done` unless their output was subsequently invalidated.
 - [ ] B. Woof singleton + stripper + sentence splitter + ordered PCM output
 - [ ] C. State machine, prep frames, chime, tab lock, idempotent teardown, reaper
 - [ ] D. AudioWorklet capture, Silero VAD, waveform, iOS audio session
-- [ ] E. Resident Whisper, phrase commitment, `partial` frames
+- [ ] E. Resident Shruti-Tamil, phrase commitment, `partial` frames
+- [ ] B is **blocked** pending the Maya-CPU TTS repo from Viswa
 - [ ] F. `voice:` sessions, transcript/original-text history, barge-in, fillers
 - [ ] G. Voice tab UI on BOTH SPAs
 - [ ] H. Tests green (`python3 -m unittest discover tests`, `npm test`)

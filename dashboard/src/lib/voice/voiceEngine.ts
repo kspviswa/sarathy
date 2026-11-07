@@ -88,7 +88,12 @@ export class VoiceEngine {
           return;
         }
         if (t === "ready") {
-          void this.onReady();
+          void this.onReady().catch((e) => {
+            // Without this the rejection vanished (onReady was fire-and-forget)
+            // and the UI sat on "Preparing voice session…" indefinitely.
+            this.callbacks.onError?.(e instanceof Error ? e.message : String(e));
+            void this.teardown();
+          });
           return;
         }
         if (t === "partial") {

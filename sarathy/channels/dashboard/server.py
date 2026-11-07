@@ -1181,6 +1181,12 @@ class DashboardChannel(BaseChannel):
         app.router.add_get("/push-sw.js", self._static_file)
         app.router.add_get("/favicon.ico", self._static_file)
         app.router.add_get("/favicon.svg", self._static_file)
+        # AudioWorklet module for the Voice tab. Must be served from the page's
+        # own origin/path: capture.ts resolves it relative to window.location,
+        # and audioWorklet.addModule() rejects a cross-origin script. Without
+        # this route the browser gets a 404, capture.start() throws, and the UI
+        # hangs on "Preparing voice session…" forever.
+        app.router.add_get("/voice-capture-processor.js", self._static_file)
         # workbox runtime — filename contains a content hash that changes per build
         app.router.add_get("/workbox-{name:[a-z0-9]+}.js", self._static_file)
         assets = self._static_dir / "assets"

@@ -415,6 +415,24 @@ def test_dashboard_csp_allows_wasm_workers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_voice_capture_worklet_is_served(tmp_path: Path) -> None:
+    """``/voice-capture-processor.js`` must be served, not 404.
+
+    capture.ts resolves the AudioWorklet module relative to window.location and
+    passes it to audioWorklet.addModule(). A 404 there rejects inside
+    capture.start(), which used to be swallowed — the UI hung on
+    "Preparing voice session…" with no error.
+    """
+    client, _ = await _authed_client(tmp_path)
+    async with client:
+        resp = await client.get("/voice-capture-processor.js")
+        assert resp.status == 200, resp.status
+        body = await resp.text()
+        assert "registerProcessor" in body
+        assert "voice-capture-processor" in body
+
+
+@pytest.mark.asyncio
 async def test_teardown_idempotent() -> None:
     session = VoiceSession()
     session.state = VoiceState.LIVE

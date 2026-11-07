@@ -1,6 +1,6 @@
 [project]
 name = "sarathy"
-version = "0.20.0"
+version = "0.20.1"
 description = "Sarathy : My Personal _claw style_ Assistant"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,6 +43,12 @@ dependencies = [
     "aiohttp>=3.9.0,<4.0.0",
     "pywebpush>=2.0.0,<3.0.0",
     "pillow>=12.3.0",
+    # Voice mode (spec 173). numpy is required by the Woof TTS engine and by the
+    # Shruti PCM conversion; cactus-compute is the Shruti-Tamil STT runtime.
+    # Both are import-time requirements of sarathy.voice — without them the
+    # dashboard Voice tab fails prep with "No module named 'numpy'".
+    "numpy>=2.0.0,<3.0.0",
+    "cactus-compute>=4.1.0,<5.0.0",
 ]
 
 [project.optional-dependencies]

@@ -106,6 +106,30 @@ def test_stripper_openui_fence() -> None:
     assert "Tail" in out
 
 
+def test_stripper_drops_inline_markdown_markers() -> None:
+    """Emphasis/heading/list markers must never reach the synthesizer.
+
+    Woof's splitter passes them through verbatim, so a leaked ``**`` is spoken
+    as "asterisk asterisk".
+    """
+    raw = (
+        "## Status\n\n"
+        "The version is **v0.20.0**.\n\n"
+        "- bullet one\n"
+        "- bullet two\n\n"
+        "This is *emphasis* and ~~struck~~.\n\n"
+        "See [the docs](https://example.com/x)."
+    )
+    out = strip_for_speech(raw)
+    for marker in ("**", "__", "##", "~~", "](", "https://"):
+        assert marker not in out, f"marker {marker!r} leaked into {out!r}"
+    assert "v0.20.0" in out
+    assert "Status" in out
+    assert "bullet one" in out
+    assert "emphasis" in out
+    assert "the docs" in out
+
+
 # ---------------------------------------------------------------------------
 # Session keys
 # ---------------------------------------------------------------------------

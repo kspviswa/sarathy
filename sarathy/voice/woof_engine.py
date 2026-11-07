@@ -55,9 +55,17 @@ class WoofEngine:
     def load(self) -> None:
         if self._tts is not None:
             return
-        root = str(self.woof_root.resolve())
-        if root not in sys.path:
-            sys.path.insert(0, root)
+        root = self.woof_root.resolve()
+        if not (root / "underdog_woof" / "__init__.py").is_file():
+            raise RuntimeError(
+                f"Woof checkout not found at {root} (expected underdog_woof/__init__.py). "
+                "Set WOOF_PATH to the underdog-woof directory."
+            )
+        if not (root / "woof_int8.npz").is_file():
+            raise RuntimeError(f"Woof weights missing: {root / 'woof_int8.npz'}")
+        root_s = str(root)
+        if root_s not in sys.path:
+            sys.path.insert(0, root_s)
         from underdog_woof import Woof  # type: ignore[import-not-found]
         from underdog_woof.textsplit import split_text  # type: ignore[import-not-found]
 

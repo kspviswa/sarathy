@@ -1,4 +1,6 @@
 import { getToken } from "@/lib/api";
+import { VOICE_DEFAULT_STT } from "@/lib/voice/constants";
+import { sttModelAssetName } from "@/lib/voice/sttModels";
 
 /** Same-origin API root for model fetch (no trailing slash). */
 export function voiceApiBase(origin?: string): string {
@@ -7,8 +9,9 @@ export function voiceApiBase(origin?: string): string {
   return "http://127.0.0.1";
 }
 
-export function shrutiModelUrl(base?: string): string {
-  return `${voiceApiBase(base)}/api/voice/model/shruti-tamil.cact`;
+export function shrutiModelUrl(base?: string, sttModel: string = VOICE_DEFAULT_STT): string {
+  const name = sttModelAssetName(sttModel);
+  return `${voiceApiBase(base)}/api/voice/model/${name}`;
 }
 
 export type VoiceWsUrlParts = {

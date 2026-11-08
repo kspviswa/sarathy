@@ -134,6 +134,13 @@ _MOBILE_UA_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Safe top-level static filenames (single path segment, no traversal). New
+# dashboard bundle files at the static root are served without another
+# one-off route entry.
+_ROOT_STATIC_FILE_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:js|ico|svg|webmanifest)$"
+)
+
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 _AUDIO_EXTS = {".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"}
 
@@ -1174,21 +1181,11 @@ class DashboardChannel(BaseChannel):
         app.router.add_get("/index.html", self._index)
         app.router.add_get("/mobile", self._mobile_index)
         app.router.add_get("/mobile.html", self._mobile_index)
-        app.router.add_get("/manifest.webmanifest", self._static_file)
-        app.router.add_get("/sw.js", self._static_file)
-        app.router.add_get("/registerSW.js", self._static_file)
-        # Web Push handler injected into the generated service worker.
-        app.router.add_get("/push-sw.js", self._static_file)
-        app.router.add_get("/favicon.ico", self._static_file)
-        app.router.add_get("/favicon.svg", self._static_file)
-        # AudioWorklet module for the Voice tab. Must be served from the page's
-        # own origin/path: capture.ts resolves it relative to window.location,
-        # and audioWorklet.addModule() rejects a cross-origin script. Without
-        # this route the browser gets a 404, capture.start() throws, and the UI
-        # hangs on "Preparing voice session…" forever.
-        app.router.add_get("/voice-capture-processor.js", self._static_file)
-        # workbox runtime — filename contains a content hash that changes per build
-        app.router.add_get("/workbox-{name:[a-z0-9]+}.js", self._static_file)
+        # Top-level static bundle files (sw.js, worklet, workbox, icons, …).
+        app.router.add_get(
+            r"/{filename:[A-Za-z0-9][A-Za-z0-9._-]*\.(?:js|ico|svg|webmanifest)}",
+            self._root_static_file,
+        )
         assets = self._static_dir / "assets"
         icons = self._static_dir / "icons"
         if assets.is_dir():
@@ -1277,16 +1274,28 @@ class DashboardChannel(BaseChannel):
 
         app.router.add_get("/ws", self._ws_handler)
         app.router.add_get("/ws/voice", self._ws_voice_handler)
-        app.router.add_get(
-            "/api/voice/model/shruti-tamil.cact", self._api_voice_model_shruti
-        )
+        app.router.add_get("/api/voice/model/{name}", self._api_voice_model)
 
     async def _ws_voice_handler(self, request: web.Request) -> web.WebSocketResponse:
         return await self._voice._ws_voice_handler(request)
 
-    async def _api_voice_model_shruti(self, request: web.Request) -> web.StreamResponse:
-        """Stream the Shruti model blob for client-side WASM STT (spec 173)."""
-        path = Path.home() / ".sarathy" / "models" / "shruti" / "shruti-tamil.cact"
+    async def _api_voice_model(self, request: web.Request) -> web.StreamResponse:
+        """Stream a Shruti model blob for client-side WASM STT (spec 173 / 174)."""
+        from sarathy.voice.stt_config import (
+            is_safe_model_asset,
+            model_asset_name,
+            resolve_stt_path,
+        )
+
+        name = request.match_info.get("name", "")
+        if not is_safe_model_asset(name):
+            return web.json_response({"error": "invalid model name"}, status=400)
+        for mid in ("shruti-en", "shruti-tamil"):
+            if model_asset_name(mid) == name:
+                path, _ = resolve_stt_path(mid)
+                break
+        else:
+            path = Path.home() / ".sarathy" / "models" / "shruti" / name
         if not path.is_file():
             return web.json_response({"error": "model not found"}, status=404)
         resp = web.FileResponse(path)
@@ -1353,17 +1362,27 @@ class DashboardChannel(BaseChannel):
 
     async def _static_file(self, request: web.Request) -> web.Response:
         name = request.path.lstrip("/")
-        path = self._static_dir / name
-        if path.is_file():
-            resp = web.FileResponse(path)
-            # The service worker + manifest must revalidate on every visit so
-            # new precache revisions (new bundle hashes) propagate to installed
-            # PWAs immediately instead of after the browser's SW freshness
-            # window (which left users stuck on old bundles for days).
-            if name in {"sw.js", "registerSW.js", "manifest.webmanifest"} or name.startswith("workbox-"):
-                resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            return resp
-        return web.json_response({"error": "not found"}, status=404)
+        return self._file_response_for_static(name)
+
+    async def _root_static_file(self, request: web.Request) -> web.Response:
+        name = request.match_info["filename"]
+        if not _ROOT_STATIC_FILE_RE.match(name):
+            raise web.HTTPNotFound()
+        return self._file_response_for_static(name)
+
+    def _file_response_for_static(self, name: str) -> web.Response:
+        path = (self._static_dir / name).resolve()
+        root = self._static_dir.resolve()
+        if path.parent != root or not path.is_file():
+            return web.json_response({"error": "not found"}, status=404)
+        resp = web.FileResponse(path)
+        # The service worker + manifest must revalidate on every visit so
+        # new precache revisions (new bundle hashes) propagate to installed
+        # PWAs immediately instead of after the browser's SW freshness
+        # window (which left users stuck on old bundles for days).
+        if name in {"sw.js", "registerSW.js", "manifest.webmanifest"} or name.startswith("workbox-"):
+            resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return resp
 
     # ------------------------------------------------------------------ auth api
 

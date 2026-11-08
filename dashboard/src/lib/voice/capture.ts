@@ -63,7 +63,11 @@ export class VoiceCapture {
     source.connect(analyser);
     this.analyser = analyser;
 
-    const workletUrl = new URL("voice-capture-processor.js", window.location.href).href;
+    const pageBase = new URL(window.location.href);
+    if (!pageBase.pathname.endsWith("/")) {
+      pageBase.pathname = `${pageBase.pathname}/`;
+    }
+    const workletUrl = new URL("voice-capture-processor.js", pageBase).href;
     await ctx.audioWorklet.addModule(workletUrl);
     const node = new AudioWorkletNode(ctx, "voice-capture-processor");
     source.connect(node);

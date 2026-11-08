@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Awaitable, Callable
 
+from sarathy.voice.stt_config import DEFAULT_STT_MODEL_ID
+
 REAPER_GRACE_S = 30.0
 
 PREP_STEPS = ("tts", "stt", "vad", "audio")
@@ -46,7 +48,7 @@ class VoiceSession:
 
     stt_mode: SttMode = SttMode.SERVER_STT
     voice: str = "juno"
-    stt_model: str = "shruti-tamil"
+    stt_model: str = DEFAULT_STT_MODEL_ID
     state: VoiceState = VoiceState.IDLE
     session_id: str = ""
     prep_started_ms: float = 0.0

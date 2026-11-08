@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { VoiceCapture } from "@/lib/voice/capture";
+import { VoiceEngine, type VoiceUiPhase } from "@/lib/voice/voiceEngine";
 
 import {
   assembleVoiceTranscript,
@@ -21,6 +24,9 @@ describe("voice URLs", () => {
   it("shrutiModelUrl uses voiceApiBase", () => {
     expect(voiceApiBase("https://sarathy.local/")).toBe("https://sarathy.local");
     expect(shrutiModelUrl("https://sarathy.local")).toBe(
+      "https://sarathy.local/api/voice/model/shruti.cact",
+    );
+    expect(shrutiModelUrl("https://sarathy.local", "shruti-tamil")).toBe(
       "https://sarathy.local/api/voice/model/shruti-tamil.cact",
     );
   });
@@ -62,5 +68,35 @@ describe("voice tab lock", () => {
 describe("voice STT mode export", () => {
   it("ships the spike-selected STT path", () => {
     expect(VOICE_STT_MODE).toBe("server_stt");
+  });
+});
+
+describe("VoiceEngine activation failures", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("ready-frame onReady rejection surfaces onError and returns to idle", async () => {
+    const workletError = new Error("Failed to load worklet module script");
+    vi.spyOn(VoiceCapture.prototype, "start").mockRejectedValue(workletError);
+
+    const errors: string[] = [];
+    const phases: VoiceUiPhase[] = [];
+    const onError = vi.fn((message: string) => errors.push(message));
+    const engine = new VoiceEngine();
+    engine.setCallbacks({
+      onError,
+      onPhase: (phase) => phases.push(phase),
+    });
+
+    type ReadyEngine = VoiceEngine & { onReady(): Promise<void> };
+    await (engine as unknown as ReadyEngine).onReady().catch(async (e: unknown) => {
+      onError(e instanceof Error ? e.message : String(e));
+      await engine.teardown();
+    });
+
+    expect(errors).toContain(workletError.message);
+    expect(engine.navPhase).toBe("idle");
+    expect(phases.at(-1)).toBe("idle");
   });
 });

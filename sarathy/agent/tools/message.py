@@ -106,6 +106,12 @@ class MessageTool(Tool):
                 "there automatically. Do NOT use this tool to send your answer to another "
                 "channel unless the user explicitly asks you to."
             )
+        if self._default_channel == "voice":
+            desc += (
+                " You are in dashboard Voice mode — the spoken reply is streamed to the "
+                "browser automatically via woof. Do NOT use this tool, do NOT invoke "
+                "voice-reply-telegram, and do NOT synthesize file-based voice notes."
+            )
         return desc
 
     @property
@@ -163,6 +169,19 @@ class MessageTool(Tool):
 
         if not channel or not chat_id:
             return "Error: No target channel/chat specified"
+
+        if self._default_channel == "voice" and channel != "voice":
+            return (
+                "Error: Dashboard voice turns must not message other channels "
+                f"(attempted {channel}:{chat_id})"
+            )
+
+        if (
+            self._default_channel == "voice"
+            and media
+            and channel == "voice"
+        ):
+            return "Error: Voice mode uses streaming TTS — do not attach audio files"
 
         if not self._send_callback:
             return "Error: Message sending not configured"

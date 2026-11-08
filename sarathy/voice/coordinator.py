@@ -12,6 +12,8 @@ from loguru import logger
 
 from sarathy.bus.events import InboundMessage, OutboundMessage
 from sarathy.voice.shruti_engine import ShrutiEngine
+from sarathy.voice.stt_config import DEFAULT_STT_MODEL_ID, normalize_stt_model_id
+from sarathy.voice.utterance_gate import utterance_passes_gate
 from sarathy.voice.voice_session import (
     SttMode,
     VoiceSession,
@@ -52,6 +54,7 @@ class VoiceCoordinator:
         self._server_stt_buffer = ""
         self._server_stt_pcm = bytearray()
         self._last_partial_ts = 0.0
+        self._user_speaking = False
 
     def is_live_for(self, msg: OutboundMessage) -> bool:
         if not self.session.is_live or not self.session.session_id:
@@ -89,8 +92,22 @@ class VoiceCoordinator:
             await send_json(self._ws, "state", state="listening")
             self._reset_turn_tts_state()
 
+    async def _ensure_woof(self, where: str) -> bool:
+        if self.woof.loaded:
+            return True
+        if self._ws is None or self._ws.closed:
+            return False
+        await send_json(
+            self._ws,
+            "error",
+            code="tts_unavailable",
+            message=f"Speech engine is not loaded ({where})",
+            recoverable=True,
+        )
+        return False
+
     async def _speak_progress(self, accumulated: str) -> None:
-        if not self.woof.loaded:
+        if not await self._ensure_woof("speak_progress"):
             return
         speakable = self.woof.sentences_from_answer(accumulated)
         prior = (
@@ -107,7 +124,7 @@ class VoiceCoordinator:
         self._spoken_chars = len(accumulated)
 
     async def _speak_text(self, text: str, *, is_filler: bool = False) -> None:
-        if not self.woof.loaded:
+        if not await self._ensure_woof("speak_text"):
             return
         base = self._spoken_sentence_seq
         for idx, sentence in enumerate(self.woof.sentences_from_answer(text), start=1):
@@ -124,11 +141,8 @@ class VoiceCoordinator:
                 self._audio_queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
-            await send_json(
-                self._ws,
-                "state",
-                state="speaking",
-            )
+        if self._ws is not None and not self._ws.closed:
+            await send_json(self._ws, "state", state="speaking")
         await self._audio_queue.put((seq, pcm))
 
     async def _audio_sender(self) -> None:
@@ -205,23 +219,31 @@ class VoiceCoordinator:
             return
         if ftype == "speech_start":
             await self._cancel_tts()
+            self._user_speaking = True
             self._server_stt_pcm = bytearray()
             self._server_stt_buffer = ""
             self._last_partial_ts = 0.0
             await send_json(ws, "state", state="listening")
             return
         if ftype == "speech_end":
+            self._user_speaking = False
             if self.session.stt_mode == SttMode.SERVER_STT:
                 # Transcribe the whole utterance once. Per-chunk transcription
                 # both loses context and overwrites the buffer, so the final
                 # text ended up being only the last 0.5 s of speech.
-                text = await self._transcribe_server_buffer()
+                pcm = bytes(self._server_stt_pcm)
                 self._server_stt_pcm = bytearray()
                 self._server_stt_buffer = ""
                 self._last_partial_ts = 0.0
+                if not utterance_passes_gate(pcm):
+                    await send_json(ws, "state", state="listening")
+                    return
+                text = await self._transcribe_pcm(pcm)
                 if text:
                     await send_json(ws, "partial", text=text, is_final=True)
                     await self._submit_utterance(text)
+                else:
+                    await send_json(ws, "state", state="listening")
             return
         if ftype == "stop_turn":
             await self._cancel_tts()
@@ -251,7 +273,9 @@ class VoiceCoordinator:
         except ValueError:
             self.session.stt_mode = SttMode.SERVER_STT
         self.session.voice = str(payload.get("voice") or "juno")
-        self.session.stt_model = str(payload.get("stt") or "shruti-tamil")
+        stt = normalize_stt_model_id(str(payload.get("stt") or DEFAULT_STT_MODEL_ID))
+        self.session.stt_model = stt
+        self.shruti.configure(stt)
         self.session.make_session_id()
 
         async def emit_prep(step: str, status: str, ms: int | None) -> None:
@@ -294,6 +318,8 @@ class VoiceCoordinator:
     async def _on_audio(self, ws: web.WebSocketResponse, pcm: bytes) -> None:
         if not self.session.is_live or self.session.stt_mode != SttMode.SERVER_STT:
             return
+        if not self._user_speaking:
+            return
         if not self.shruti.loaded:
             return
         # Accumulate the utterance; Shruti takes up to 30 s per call, so cap at
@@ -309,16 +335,17 @@ class VoiceCoordinator:
         if now - self._last_partial_ts < _PARTIAL_INTERVAL_S:
             return
         self._last_partial_ts = now
-        text = await self._transcribe_server_buffer()
+        pcm = bytes(self._server_stt_pcm)
+        if not utterance_passes_gate(pcm):
+            return
+        text = await self._transcribe_pcm(pcm)
         if text:
             self._server_stt_buffer = text
             await send_json(ws, "partial", text=text, is_final=False)
 
-    async def _transcribe_server_buffer(self) -> str:
-        """Transcribe the accumulated utterance PCM (may be empty)."""
-        if not self._server_stt_pcm:
+    async def _transcribe_pcm(self, pcm: bytes) -> str:
+        if not pcm:
             return ""
-        pcm = bytes(self._server_stt_pcm)
         try:
             text = await asyncio.to_thread(self.shruti.transcribe_pcm16_16k, pcm)
         except Exception as e:
@@ -326,11 +353,19 @@ class VoiceCoordinator:
             return ""
         return (text or "").strip()
 
+    async def _transcribe_server_buffer(self) -> str:
+        """Transcribe the accumulated utterance PCM (may be empty)."""
+        return await self._transcribe_pcm(bytes(self._server_stt_pcm))
+
     async def _submit_utterance(self, text: str) -> None:
         if not self.session.is_live or not self._device_id:
             return
         await send_json(self._ws, "state", state="thinking")
-        meta = {"voice_session": True, "device_id": self._device_id}
+        meta = {
+            "voice_session": True,
+            "device_id": self._device_id,
+            "voice_mode": "dashboard",
+        }
         inbound = InboundMessage(
             channel="voice",
             sender_id=f"dashboard:{self._device_id}",

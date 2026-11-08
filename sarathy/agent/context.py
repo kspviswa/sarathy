@@ -145,6 +145,16 @@ To use a skill, read its SKILL.md via read_file: {self.workspace}/skills/{{skill
         if wants_ui_blocks(channel):
             parts.append(ui_block_prompt())
 
+        if channel == "voice":
+            parts.append(
+                """# Dashboard Voice mode
+
+You are answering a live dashboard Voice session. Reply in plain text only — the
+gateway streams woof TTS audio back to the browser. Do NOT use the message tool,
+do NOT read or follow voice-reply-telegram, and do NOT generate file-based voice
+notes for Telegram."""
+            )
+
         return "\n\n---\n\n".join(parts)
 
     @staticmethod

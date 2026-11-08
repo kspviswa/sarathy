@@ -18,6 +18,8 @@ from sarathy.config.schema import Config
 from sarathy.session.manager import SessionManager
 from sarathy.voice.stripper import strip_for_speech
 from sarathy.voice.voice_session import SttMode, VoiceSession, VoiceState, session_key
+from sarathy.voice.stt_config import DEFAULT_STT_MODEL_ID
+from sarathy.voice.utterance_gate import MIN_UTTERANCE_SAMPLES, utterance_passes_gate
 from sarathy.voice.woof_engine import WoofEngine
 
 
@@ -167,6 +169,22 @@ async def test_voice_model_404_when_missing(tmp_path: Path, monkeypatch) -> None
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status == 404
+
+
+def test_utterance_gate_rejects_silence() -> None:
+    import struct
+
+    silence = b"\x00\x00" * MIN_UTTERANCE_SAMPLES
+    assert not utterance_passes_gate(silence)
+    tone = struct.pack("<" + "h" * MIN_UTTERANCE_SAMPLES, *([12000] * MIN_UTTERANCE_SAMPLES))
+    assert utterance_passes_gate(tone)
+
+
+def test_default_stt_is_english() -> None:
+    from sarathy.voice.voice_session import VoiceSession
+
+    assert VoiceSession().stt_model == DEFAULT_STT_MODEL_ID
+    assert DEFAULT_STT_MODEL_ID == "shruti-en"
 
 
 @pytest.mark.asyncio
@@ -545,6 +563,39 @@ async def test_dispatcher_delivers_voice_outbound_to_socket(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
+async def test_speech_end_skips_silent_utterance(tmp_path: Path, monkeypatch) -> None:
+    client, channel = await _authed_client(tmp_path)
+    voice = channel._voice
+    woof = voice.woof
+
+    def _load():
+        woof._tts = _FakeWoof()
+        woof._split_text = lambda t: [t] if t.strip() else []
+
+    monkeypatch.setattr(woof, "load", _load)
+    monkeypatch.setattr(voice.shruti, "load", lambda: setattr(voice.shruti, "_engine", object()))
+    voice.shruti.transcribe_pcm16_16k = lambda pcm: "hallucination"
+    voice._submit_utterance = AsyncMock()
+
+    async with client:
+        token = await _pair(client)
+        async with client.ws_connect(f"/ws/voice?token={token}") as ws:
+            await ws.send_str(json.dumps({"type": "start", "mode": "server_stt"}))
+            while True:
+                data = json.loads((await asyncio.wait_for(ws.receive(), timeout=5)).data)
+                if data.get("type") == "ready":
+                    break
+            await ws.send_str(json.dumps({"type": "speech_start", "ts": 0}))
+            await ws.send_bytes(b"\x00\x00" * 800)
+            await ws.send_str(json.dumps({"type": "speech_end", "ts": 1}))
+            for _ in range(8):
+                data = json.loads((await asyncio.wait_for(ws.receive(), timeout=5)).data)
+                if data.get("type") == "state" and data.get("state") == "listening":
+                    break
+            voice._submit_utterance.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_server_stt_accumulates_whole_utterance(tmp_path: Path, monkeypatch) -> None:
     """Each audio chunk must extend the buffer; the final text covers all of it.
 
@@ -580,7 +631,9 @@ async def test_server_stt_accumulates_whole_utterance(tmp_path: Path, monkeypatc
                     break
 
             await ws.send_str(json.dumps({"type": "speech_start", "ts": 0}))
-            chunk = b"\x00\x01" * 16000  # 1 s of 16 kHz mono int16
+            import struct
+
+            chunk = struct.pack("<" + "h" * 16000, *([12000] * 16000))
             for _ in range(3):
                 await ws.send_bytes(chunk)
                 # Skip the throttled live partial so only speech_end transcribes.

@@ -33,6 +33,8 @@ export function VoiceSession({ variant, onNavPhaseChange }: VoiceSessionProps) {
   const [transcript, setTranscript] = useState("");
   const [answer, setAnswer] = useState("");
   const [sessionState, setSessionState] = useState("idle");
+  const [toolHint, setToolHint] = useState("");
+  const [spokenSeq, setSpokenSeq] = useState(0);
   const [busy, setBusy] = useState(false);
 
   const isMobile = variant === "mobile";
@@ -51,7 +53,23 @@ export function VoiceSession({ variant, onNavPhaseChange }: VoiceSessionProps) {
       },
       onTranscript: setTranscript,
       onAnswer: (delta) => setAnswer((a) => a + delta),
-      onSessionState: setSessionState,
+      onSessionState: (state) => {
+        setSessionState(state);
+        if (state === "listening") setToolHint("");
+      },
+      onTool: (name, hint) => {
+        setSessionState("thinking");
+        setToolHint(hint ? `${name}: ${hint}` : name);
+      },
+      onSpeakingLine: (seq) => {
+        setSpokenSeq(seq);
+        setSessionState("speaking");
+        setToolHint("");
+      },
+      onTurnDone: () => {
+        setSessionState("listening");
+        setToolHint("");
+      },
       onError: (msg) => toast.error(msg),
     });
     return () => {
@@ -117,12 +135,15 @@ export function VoiceSession({ variant, onNavPhaseChange }: VoiceSessionProps) {
     return () => cancelAnimationFrame(raf);
   }, [phase]);
 
-  const thinkingLabel = useMemo(() => {
+  const activityLabel = useMemo(() => {
+    if (toolHint) return toolHint;
     if (sessionState === "thinking") return "Thinking…";
-    if (sessionState === "speaking") return "Speaking…";
+    if (sessionState === "speaking") {
+      return spokenSeq > 0 ? `Speaking… (sentence ${spokenSeq})` : "Speaking…";
+    }
     if (sessionState === "listening") return "Listening…";
     return "";
-  }, [sessionState]);
+  }, [sessionState, toolHint, spokenSeq]);
 
   const activateControl = (
     <Button
@@ -237,9 +258,9 @@ export function VoiceSession({ variant, onNavPhaseChange }: VoiceSessionProps) {
             data-testid="voice-waveform"
             aria-hidden
           />
-          {thinkingLabel ? (
-            <p className="text-sm text-muted-foreground" data-testid="voice-thinking">
-              {thinkingLabel}
+          {activityLabel ? (
+            <p className="text-sm text-muted-foreground" data-testid="voice-activity">
+              {activityLabel}
             </p>
           ) : null}
           <div

@@ -1,7 +1,10 @@
 import {
+  VOICE_CAPTURE_TIMEOUT_MS,
+  VOICE_CLIENT_STT_TIMEOUT_MS,
   VOICE_DEFAULT_STT,
   VOICE_DEFAULT_VOICE,
   VOICE_STT_MODE,
+  VOICE_WS_OPEN_TIMEOUT_MS,
   type VoiceSttMode,
 } from "@/lib/voice/constants";
 import { playVoiceReadyChime } from "@/lib/voice/chime";
@@ -22,6 +25,9 @@ export type VoiceEngineCallbacks = {
   onTranscript?: (text: string) => void;
   onAnswer?: (delta: string) => void;
   onSessionState?: (state: string) => void;
+  onTool?: (name: string, hint: string) => void;
+  onSpeakingLine?: (seq: number) => void;
+  onTurnDone?: () => void;
   onError?: (message: string) => void;
   onReady?: () => void;
 };
@@ -35,6 +41,25 @@ function resolveSttMode(): VoiceSttMode {
   if (env === "server_stt") return "server_stt";
   if (env === "client_stt") return "client_stt";
   return VOICE_STT_MODE;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 /**
@@ -115,8 +140,27 @@ export class VoiceEngine {
           this.callbacks.onSessionState?.(String(frame.state ?? ""));
           return;
         }
+        if (t === "tool") {
+          this.callbacks.onTool?.(
+            String(frame.name ?? "tool"),
+            String(frame.hint ?? ""),
+          );
+          return;
+        }
+        if (t === "sentence_end") {
+          const seq = typeof frame.seq === "number" ? frame.seq : 0;
+          this.callbacks.onSpeakingLine?.(seq);
+          return;
+        }
+        if (t === "done") {
+          this.callbacks.onTurnDone?.();
+          return;
+        }
         if (t === "error") {
           this.callbacks.onError?.(String(frame.message ?? "Voice error"));
+          if (this.phase === "preparing") {
+            void this.teardown();
+          }
         }
         if (t === "ended") {
           void this.teardown();
@@ -144,8 +188,27 @@ export class VoiceEngine {
     });
   }
 
+  private waitForSocketOpen(timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const off = this.socket.onOpen(() => {
+        if (timer !== undefined) clearTimeout(timer);
+        off();
+        resolve();
+      });
+      timer = setTimeout(() => {
+        off();
+        reject(new Error(`WebSocket open timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+  }
+
   private async onReady(): Promise<void> {
-    const ctx = await this.capture.start();
+    const ctx = await withTimeout(
+      this.capture.start(),
+      VOICE_CAPTURE_TIMEOUT_MS,
+      "Microphone setup",
+    );
     this.playback = new PcmPlaybackScheduler(ctx);
     this.callbacks.onReady?.();
     await playVoiceReadyChime(ctx);
@@ -232,22 +295,27 @@ export class VoiceEngine {
     this.wireSocket();
     this.socket.connect();
 
-    await new Promise<void>((resolve) => {
-      const off = this.socket.onOpen(() => {
-        off();
-        resolve();
+    try {
+      await this.waitForSocketOpen(VOICE_WS_OPEN_TIMEOUT_MS);
+      await withTimeout(
+        this.loadClientStt(),
+        VOICE_CLIENT_STT_TIMEOUT_MS,
+        "Speech model",
+      );
+
+      this.socket.sendJson({
+        type: "start",
+        voice: VOICE_DEFAULT_VOICE,
+        stt: VOICE_DEFAULT_STT,
+        mode: this.sttMode,
+        stt_mode: this.sttMode,
       });
-    });
-
-    await this.loadClientStt();
-
-    this.socket.sendJson({
-      type: "start",
-      voice: VOICE_DEFAULT_VOICE,
-      stt: VOICE_DEFAULT_STT,
-      mode: this.sttMode,
-      stt_mode: this.sttMode,
-    });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.callbacks.onError?.(msg);
+      await this.teardown();
+      throw e;
+    }
   }
 
   async cancel(): Promise<void> {

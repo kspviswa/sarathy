@@ -174,10 +174,14 @@ async def test_no_success_phase_when_the_vision_call_fails():
             "content": [{"type": "image_url", "image_url": {"url": _png_data_url()}}],
         }
     ]
-    await loop._describe_images_with_image_provider(
-        messages, _BrokenProvider(), on_progress=on_progress
-    )
+    from sarathy.agent.loop import ImageDescriptionError
 
+    with pytest.raises(ImageDescriptionError):
+        await loop._describe_images_with_image_provider(
+            messages, _BrokenProvider(), on_progress=on_progress
+        )
+
+    # The failure must never claim a description was received.
     assert events == ["🔍 Sending image to VLM…"]
 
 
@@ -206,8 +210,9 @@ async def test_text_preserved_alongside_multiple_images():
 
 
 @pytest.mark.asyncio
-async def test_one_image_failing_does_not_kill_the_others():
-    """A provider error on one image yields a placeholder; others still describe."""
+async def test_one_image_failing_aborts_the_turn():
+    """A provider that fails on an image (both attempts) aborts the turn — no
+    placeholder, no substitute model (skill image-model-routing, HARD RULE)."""
 
     class FlakyProvider:
         def __init__(self):
@@ -215,16 +220,12 @@ async def test_one_image_failing_does_not_kill_the_others():
 
         async def chat(self, messages, tools, model, temperature, max_tokens, stream):
             self.n += 1
-            if self.n == 1:
-                raise RuntimeError("boom")
-
-            class Response:
-                content = "second ok"
-
-            return Response()
+            raise RuntimeError("boom")
 
         def get_default_model(self):
             return "vision-model"
+
+    from sarathy.agent.loop import ImageDescriptionError
 
     loop = _loop()
     messages = [
@@ -236,10 +237,10 @@ async def test_one_image_failing_does_not_kill_the_others():
             ],
         }
     ]
-    result = await loop._describe_images_with_image_provider(messages, FlakyProvider())
-    hint = result[-1]["content"][-1]["text"]
-    assert "[image 1 description: Image description unavailable]" in hint
-    assert "[image 2 description: second ok]" in hint
+    with pytest.raises(ImageDescriptionError) as exc:
+        await loop._describe_images_with_image_provider(messages, FlakyProvider())
+    assert "boom" in str(exc.value)
+    assert "vision-model" in str(exc.value)
 
 
 class TestContextBuilderDownscales:

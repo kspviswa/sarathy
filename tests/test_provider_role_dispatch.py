@@ -251,8 +251,9 @@ async def test_plain_text_turn_skips_image_description(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_no_image_provider_falls_back_to_raw_images(tmp_path):
-    """When no image provider is configured, messages with images pass through unchanged."""
+async def test_no_image_provider_aborts_the_turn(tmp_path):
+    """When modalities.image is unset the turn aborts with a clear message —
+    raw pixels are never handed to the main model as a fallback."""
     runtime = FakeRuntime(local_provider=None, image_provider=None)
     main = FakeProvider("main")
     loop, bus = _make_loop(tmp_path, main, runtime)
@@ -280,5 +281,7 @@ async def test_no_image_provider_falls_back_to_raw_images(tmp_path):
 
     # Image provider should be looked up but return None
     assert "image" in runtime.lookups
-    # Main provider should handle the turn with raw images
-    assert main.calls, "main provider should handle the turn with raw images"
+    # The main provider must NOT be asked to read raw pixels
+    assert not main.calls, "main provider must not receive raw images"
+    assert "cannot read this image" in (out.content or "").lower()
+    assert "no image provider" in (out.content or "").lower()

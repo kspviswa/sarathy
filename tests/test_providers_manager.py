@@ -914,3 +914,39 @@ def test_modality_overrides_legacy_role_tag(tmp_path):
     # legacy: localprov carries role='local'; rebind via modalities.
     runtime.set_modality("local", "adhoc", "m1")
     assert runtime.provider_for("local").api_base == "http://adhoc/v1"
+
+
+# ---------------------------------------------------------------------------
+# max_tokens=None → omit the key (reasoning models bill reasoning tokens
+# against the cap; a fixed budget truncates the visible answer)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_omits_max_tokens_when_none():
+    provider = CustomProvider(api_key="k", api_base="https://example.com/v1", default_model="m")
+    captured = {}
+
+    async def _fake_create(**kwargs):
+        captured.update(kwargs)
+
+        class Msg:
+            content = "ok"
+            tool_calls = None
+
+        class Choice:
+            message = Msg()
+            finish_reason = "stop"
+
+        class Resp:
+            choices = [Choice()]
+            usage = None
+
+        return Resp()
+
+    provider._client.chat.completions.create = _fake_create
+    await provider.chat(messages=[{"role": "user", "content": "hi"}], max_tokens=None)
+    assert "max_tokens" not in captured
+
+    await provider.chat(messages=[{"role": "user", "content": "hi"}], max_tokens=256)
+    assert captured["max_tokens"] == 256

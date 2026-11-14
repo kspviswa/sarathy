@@ -66,9 +66,17 @@ TOPIC_MARKER_RE = re.compile(
 TOPIC_MAX_WORDS = 8
 
 # Upper bound on the vision-provider describe call. A cold local model can take
-# a while to load, but the turn must never hang indefinitely — on timeout the
-# image is replaced by a "(timed out)" hint and the turn proceeds.
+# a while to load, but the turn must never hang indefinitely.
 IMAGE_DESCRIBE_TIMEOUT_S = 120.0
+
+
+class ImageDescriptionError(RuntimeError):
+    """The image provider could not produce a usable description.
+
+    Raised instead of injecting a placeholder hint. The turn ABORTS and the user
+    is told plainly which provider/model failed and why — the pipeline never
+    substitutes a different model on its own (skill ``image-model-routing``).
+    """
 
 # --------------------------------------------------------------------------- #
 # /diary — the Charitham biographer side turn (spec 138)
@@ -554,6 +562,31 @@ class AgentLoop:
             p = self.workspace / "media" / path
         return prepare_image_data_url(p)
 
+    def _image_url_to_part(self, url: str) -> dict | None:
+        """Turn a marker/part URL into an OpenAI ``image_url`` part.
+
+        http(s) and data URLs pass through; ``file://`` URLs and bare local
+        paths are read, downscaled and base64-encoded. Returns ``None`` when a
+        local path is unreadable or is not an image.
+        """
+        url = (url or "").strip()
+        if not url:
+            return None
+        if url.startswith(("http://", "https://", "data:")):
+            return {"type": "image_url", "image_url": {"url": url}}
+        path = url[7:] if url.startswith("file://") else url
+        data_url = self._local_image_to_data_url(path)
+        if data_url is None:
+            return None
+        return {"type": "image_url", "image_url": {"url": data_url}}
+
+    def _normalize_image_part(self, part: dict) -> dict | None:
+        """Normalize an existing ``image_url`` part (handles ``file://``)."""
+        url = (part.get("image_url") or {}).get("url", "")
+        if not url.startswith("file://"):
+            return part
+        return self._image_url_to_part(url)
+
     async def _describe_images_with_image_provider(
         self,
         messages: list[dict],
@@ -588,7 +621,9 @@ class AgentLoop:
         if isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "image_url":
-                    image_parts.append(part)
+                    part = self._normalize_image_part(part)
+                    if part is not None:
+                        image_parts.append(part)
                 else:
                     text_parts.append(part)
         elif isinstance(content, str):
@@ -597,16 +632,10 @@ class AgentLoop:
             parts = re.split(r"(\[image: [^\]]+\])", content)
             for part in parts:
                 if part.startswith("[image:") and part.endswith("]"):
-                    url = part[7:-1].strip()
-                    # http(s) URLs pass through unchanged
-                    if url.startswith("http://") or url.startswith("https://"):
-                        image_parts.append({"type": "image_url", "image_url": {"url": url}})
-                    else:
-                        # Local path: resolve and base64-encode
-                        data_url = self._local_image_to_data_url(url)
-                        if data_url is not None:
-                            image_parts.append({"type": "image_url", "image_url": {"url": data_url}})
-                        # Missing file or non-image -> skip (drop marker)
+                    image_part = self._image_url_to_part(part[7:-1])
+                    if image_part is not None:
+                        image_parts.append(image_part)
+                    # Missing file or non-image -> skip (drop marker)
                 elif part.strip():
                     text_parts.append({"type": "text", "text": part})
 
@@ -665,38 +694,90 @@ class AgentLoop:
                 },
             ]
 
-            try:
-                response = await asyncio.wait_for(
-                    image_provider.chat(
-                        messages=description_messages,
-                        tools=[],
-                        model=image_provider.get_default_model(),
-                        temperature=0.1,
-                        max_tokens=1024,
-                        stream=False,
-                    ),
-                    timeout=IMAGE_DESCRIBE_TIMEOUT_S,
-                )
-                descriptions.append(response.content or "Image description unavailable")
-            except asyncio.TimeoutError:
+            description = None
+            failure_reason = "no description returned"
+            for attempt in (1, 2):
+                try:
+                    response = await asyncio.wait_for(
+                        image_provider.chat(
+                            messages=description_messages,
+                            tools=[],
+                            model=image_provider.get_default_model(),
+                            temperature=0.1,
+                            # Omitted deliberately: reasoning tokens are billed
+                            # against max_tokens, so a fixed cap truncates the
+                            # answer to content=null with finish_reason="length"
+                            # (the 2026-11-14 image-describe RC).
+                            max_tokens=None,
+                            stream=False,
+                        ),
+                        timeout=IMAGE_DESCRIBE_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    failure_reason = f"timed out after {IMAGE_DESCRIBE_TIMEOUT_S:g}s"
+                    logger.warning(
+                        "Image provider description timed out after {}s "
+                        "(image {}/{}, attempt {})",
+                        IMAGE_DESCRIBE_TIMEOUT_S,
+                        idx,
+                        total,
+                        attempt,
+                    )
+                    continue
+                except Exception as e:
+                    failure_reason = f"{type(e).__name__}: {e}"
+                    logger.warning(
+                        "Image provider description failed (image {}/{}, attempt {}): {}",
+                        idx,
+                        total,
+                        attempt,
+                        e,
+                    )
+                    continue
+
+                text = strip_think(response.content)
+                finish = getattr(response, "finish_reason", None)
+                if finish == "error":
+                    # Providers swallow transport/API failures into content with
+                    # finish_reason="error". Never let that pass as a description.
+                    failure_reason = (
+                        f"an error response ({(response.content or '').strip()[:300]})"
+                    )
+                elif text and finish != "length":
+                    description = text
+                    break
+                else:
+                    failure_reason = (
+                        "a truncated response (finish_reason=length)"
+                        if finish == "length"
+                        else "an empty response"
+                    )
                 logger.warning(
-                    "Image provider description timed out after {}s (image {}/{})",
-                    IMAGE_DESCRIBE_TIMEOUT_S,
+                    "Image provider returned no usable description "
+                    "(image {}/{}, attempt {}): {}",
                     idx,
                     total,
+                    attempt,
+                    failure_reason,
                 )
-                descriptions.append("Image description unavailable (timed out)")
-            except Exception as e:
-                logger.warning("Image provider description failed (image {}/{}): {}", idx, total, e)
-                descriptions.append("Image description unavailable")
-            else:
-                # The vision round-trip for this image is done: name the phase so
-                # the live status stops claiming we are still sending the image.
-                await _phase(
-                    f"✅ Image description received {idx}/{total}"
-                    if total > 1
-                    else "✅ Image description received"
+
+            if description is None:
+                # No placeholder hint, no substitute model: abort the turn and
+                # tell the user which provider/model failed and why. The
+                # pipeline never improvises a fallback (skill image-model-routing).
+                raise ImageDescriptionError(
+                    f"the image provider ({image_provider.get_default_model()}) "
+                    f"returned {failure_reason}"
                 )
+            descriptions.append(description)
+
+            # The vision round-trip for this image is done: name the phase so the
+            # live status stops claiming we are still sending the image.
+            await _phase(
+                f"✅ Image description received {idx}/{total}"
+                if total > 1
+                else "✅ Image description received"
+            )
 
         # Rewrite the user message: replace image parts with description hints.
         if total == 1:
@@ -841,16 +922,36 @@ class AgentLoop:
             if self.runtime is not None and self._has_image_content(messages):
                 image_provider = self.runtime.provider_for("image")
                 if image_provider is not None:
-                    messages = await self._describe_images_with_image_provider(
-                        messages,
-                        image_provider,
-                        on_progress=on_progress,
-                        on_thinking=on_thinking,
-                        channel=channel,
-                        session_key=session_key,
-                    )
+                    try:
+                        messages = await self._describe_images_with_image_provider(
+                            messages,
+                            image_provider,
+                            on_progress=on_progress,
+                            on_thinking=on_thinking,
+                            channel=channel,
+                            session_key=session_key,
+                        )
+                    except ImageDescriptionError as e:
+                        # End the turn. No substitute model, no placeholder hint
+                        # — the user is told plainly what failed (skill
+                        # image-model-routing, HARD RULE).
+                        logger.warning("Aborting turn: cannot read image — {}", e)
+                        if self.reviewer:
+                            self.reviewer.mark_idle()
+                        final_content = f"I cannot read this image — {e}."
+                        break
                 else:
-                    logger.warning("Image content detected but no image provider configured; passing raw images to main model")
+                    # No binding in modalities.image → the turn cannot proceed.
+                    # Never pass raw pixels to the main model as a fallback.
+                    logger.warning("Aborting turn: image content but modalities.image is unset")
+                    if self.reviewer:
+                        self.reviewer.mark_idle()
+                    final_content = (
+                        "I cannot read this image — no image provider is bound. "
+                        "Set one in Settings → providers → Image model "
+                        "(or `/provider role image <name> [model]`)."
+                    )
+                    break
 
             try:
                 response = await self.provider.chat(

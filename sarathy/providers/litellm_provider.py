@@ -176,7 +176,7 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         stream: bool = False,
@@ -205,14 +205,16 @@ class LiteLLMProvider(LLMProvider):
         if self._supports_cache_control(original_model):
             messages, tools = self._apply_cache_control(messages, tools)
 
-        max_tokens = max(1, max_tokens)
-
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages)),
-            "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        # ``max_tokens=None`` means "let the provider decide" — reasoning tokens
+        # are billed against the cap, so a fixed budget can truncate the visible
+        # answer to content=null with finish_reason="length".
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max(1, max_tokens)
 
         # Only pass reasoning_effort for non-OpenAI-compatible endpoints
         # Some providers like Ollama's /v1 don't support the think parameter

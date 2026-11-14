@@ -28,7 +28,7 @@ class CustomProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         stream: bool = False,
@@ -39,9 +39,14 @@ class CustomProvider(LLMProvider):
         kwargs: dict[str, Any] = {
             "model": model or self.default_model,
             "messages": self._sanitize_empty_content(messages),
-            "max_tokens": max(1, max_tokens),
             "temperature": temperature,
         }
+        # ``max_tokens=None`` means "let the provider decide". This matters for
+        # reasoning models: reasoning tokens are billed against the cap, so a
+        # fixed budget truncates the visible answer to content=null with
+        # finish_reason="length" (the 2026-11-14 image-describe RC).
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max(1, max_tokens)
         # Only pass reasoning_effort for non-OpenAI-compatible endpoints
         # Some providers like Ollama's /v1 don't support the think parameter
         if reasoning_effort:

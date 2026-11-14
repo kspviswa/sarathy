@@ -1,6 +1,7 @@
 import { Sparkles } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import { useChatFontScale } from "@/components/ChatFontScaleControl";
 import { AskComposer } from "@/components/ask/AskComposer";
 import { AskHeader } from "@/components/ask/AskHeader";
 import { AskTurnCard } from "@/components/ask/AskTurnCard";
@@ -149,6 +150,9 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
   }, [query, state.streaming, quoteChips, turns, mode, sources, run]);
 
   const isMobile = variant === "mobile";
+  // Honour the same uncapped reading scale as Chat (spec 176 §A) — control
+  // stays in the chat sub-header; Ask only applies the persisted value.
+  const { style: chatFontStyle } = useChatFontScale();
 
   /**
    * The open thread's title — shown in the header beside the buttons.
@@ -175,7 +179,12 @@ export function AskSurface({ variant = "desktop" }: { variant?: "desktop" | "mob
   }, [reset]);
 
   return (
-    <div className="flex h-full min-h-0" data-testid={isMobile ? "ask-mobile" : "ask-surface"}>
+    <div
+      className="flex h-full min-h-0"
+      data-testid={isMobile ? "ask-mobile" : "ask-surface"}
+      data-chat-scale=""
+      style={chatFontStyle}
+    >
       <div className="flex min-w-0 flex-1 flex-col">
         <AskHeader
           title={threadTitle}

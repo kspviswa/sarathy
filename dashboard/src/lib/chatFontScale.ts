@@ -1,53 +1,63 @@
 /**
- * App-level chat font scale (spec 175 §F).
+ * Uncapped reading font scale for conversation bubbles (spec 176 §A).
  *
- * Scales the transcript and composer only — not browser zoom and not the
- * chrome. Persisted so both shells share one preference.
+ * Scales user/assistant bubble text only — not app chrome, not the composer.
+ * No step ladder and no maximum; A+ multiplies by FONT_SCALE_FACTOR forever.
+ * The only guard is FONT_SCALE_FLOOR (~0.5) so A− cannot drive size to zero.
  */
 
 import type { CSSProperties } from "react";
 
 export const CHAT_FONT_SCALE_KEY = "sarathy_chat_font_scale";
 
-/** Allowed steps, in ascending order. */
-export const CHAT_FONT_SCALE_STEPS = [0.9, 1.0, 1.125, 1.25, 1.4] as const;
+/** Multiply/divide factor for each A+ / A− press. */
+export const FONT_SCALE_FACTOR = 1.1;
 
-export type ChatFontScale = (typeof CHAT_FONT_SCALE_STEPS)[number];
+/**
+ * Floor applied when stepping down. Keeps the value positive and finite —
+ * not a UX "minimum readable size", just a guard against zero/negative.
+ */
+export const FONT_SCALE_FLOOR = 0.5;
 
-export const CHAT_FONT_SCALE_DEFAULT: ChatFontScale = 1.0;
+export const CHAT_FONT_SCALE_DEFAULT = 1.0;
 
-const STEP_SET = new Set<number>(CHAT_FONT_SCALE_STEPS);
+/** @deprecated Kept as a number alias; the 175 step-union is gone. */
+export type ChatFontScale = number;
 
-export function isChatFontScale(value: unknown): value is ChatFontScale {
-  return typeof value === "number" && STEP_SET.has(value);
+/** True when `value` is a finite positive number (any magnitude). */
+export function isValidFontScale(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-export function clampChatFontScale(value: number): ChatFontScale {
-  if (isChatFontScale(value)) return value;
-  // Snap to the nearest allowed step.
-  let best: ChatFontScale = CHAT_FONT_SCALE_DEFAULT;
-  let bestDist = Infinity;
-  for (const step of CHAT_FONT_SCALE_STEPS) {
-    const dist = Math.abs(step - value);
-    if (dist < bestDist) {
-      best = step;
-      bestDist = dist;
-    }
-  }
-  return best;
+/**
+ * Step the scale up (`dir = 1`) or down (`dir = -1`).
+ * Up: no ceiling. Down: clamps to FONT_SCALE_FLOOR.
+ */
+export function nextChatFontScale(current: number, dir: 1 | -1): number {
+  const base = isValidFontScale(current) ? current : CHAT_FONT_SCALE_DEFAULT;
+  const raw = dir === 1 ? base * FONT_SCALE_FACTOR : base / FONT_SCALE_FACTOR;
+  if (!Number.isFinite(raw) || raw <= 0) return FONT_SCALE_FLOOR;
+  return dir === 1 ? raw : Math.max(FONT_SCALE_FLOOR, raw);
 }
 
-export function readChatFontScale(): ChatFontScale {
+/**
+ * Read the persisted scale. Returns the stored number unchanged when it is a
+ * finite positive number — no snapping to a ladder, no maximum.
+ */
+export function readChatFontScale(): number {
   try {
     const raw = localStorage.getItem(CHAT_FONT_SCALE_KEY);
     if (raw == null) return CHAT_FONT_SCALE_DEFAULT;
-    return clampChatFontScale(Number(raw));
+    const n = Number(raw);
+    if (!isValidFontScale(n)) return CHAT_FONT_SCALE_DEFAULT;
+    return n;
   } catch {
     return CHAT_FONT_SCALE_DEFAULT;
   }
 }
 
-export function writeChatFontScale(scale: ChatFontScale): void {
+export function writeChatFontScale(scale: number): void {
+  if (!isValidFontScale(scale)) return;
   try {
     localStorage.setItem(CHAT_FONT_SCALE_KEY, String(scale));
   } catch {
@@ -55,16 +65,7 @@ export function writeChatFontScale(scale: ChatFontScale): void {
   }
 }
 
-export function nextChatFontScale(current: ChatFontScale, dir: 1 | -1): ChatFontScale {
-  const idx = CHAT_FONT_SCALE_STEPS.indexOf(current);
-  const next = Math.min(
-    CHAT_FONT_SCALE_STEPS.length - 1,
-    Math.max(0, idx + dir),
-  );
-  return CHAT_FONT_SCALE_STEPS[next];
-}
-
 /** Inline style that sets `--chat-font-scale` on a wrapper. */
-export function chatFontScaleStyle(scale: ChatFontScale): CSSProperties {
+export function chatFontScaleStyle(scale: number): CSSProperties {
   return { ["--chat-font-scale" as string]: String(scale) } as CSSProperties;
 }

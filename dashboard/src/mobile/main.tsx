@@ -5,11 +5,17 @@ import App from "./App";
 import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  applyAppearanceFonts,
+  readAppFont,
+  readComposedFont,
+} from "@/lib/appearanceFonts";
 import { installPreloadErrorReload } from "@/lib/chunkReload";
 import { LightboxProvider } from "@/lib/lightbox";
 import "../index.css";
 
 installPreloadErrorReload();
+applyAppearanceFonts(readAppFont(), readComposedFont());
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

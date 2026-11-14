@@ -10,7 +10,13 @@
  */
 
 /** The segments of the Settings surface. */
-export type SettingsSegment = "form" | "json" | "devices" | "status" | "usage";
+export type SettingsSegment =
+  | "form"
+  | "appearance"
+  | "json"
+  | "devices"
+  | "status"
+  | "usage";
 
 /** A destination of the shell. */
 export type NavSection =

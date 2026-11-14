@@ -142,6 +142,7 @@ export function AskTurnCard({
           <h2
             className="min-w-0 flex-1 break-words text-xl font-medium sm:text-2xl"
             data-testid="ask-turn-query"
+            data-chat-body=""
           >
             {displayQuery}
           </h2>
@@ -208,12 +209,14 @@ export function AskTurnCard({
             <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               Answer
             </h3>
-            <AskAnswer
-              answer={turn.answer}
-              sources={turn.sourcesList}
-              isStreaming={streaming}
-              onSend={onSend}
-            />
+            <div data-chat-body="">
+              <AskAnswer
+                answer={turn.answer}
+                sources={turn.sourcesList}
+                isStreaming={streaming}
+                onSend={onSend}
+              />
+            </div>
           </div>
         )}
 

@@ -29,6 +29,19 @@
           el.dataset.theme = t;
           var meta = document.querySelector('meta[name="theme-color"]');
           if (meta) meta.setAttribute("content", SWATCH[t] || (mode === "dark" ? "#09090b" : "#fafafa"));
+          // Appearance fonts (spec 176 §C) — before first paint.
+          var appFont = localStorage.getItem("sarathy_app_font");
+          var chatFont = localStorage.getItem("sarathy_composed_font");
+          var quote = function (f) {
+            if (!f) return "";
+            return /^[a-zA-Z0-9-]+$/.test(f) ? f : '"' + f.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+          };
+          if (appFont) el.style.setProperty("--app-font-family", quote(appFont));
+          if (chatFont) el.style.setProperty("--chat-font-family", quote(chatFont));
+          var composerScale = localStorage.getItem("sarathy_composer_font_scale");
+          if (composerScale && isFinite(+composerScale) && +composerScale > 0) {
+            el.style.setProperty("--composer-font-scale", String(+composerScale));
+          }
         } catch (e) {}
       })();
     </script>
@@ -60,9 +73,9 @@
         } catch (e) {}
       })();
     </script>
-    <script type="module" crossorigin src="./assets/main-CiEvwh8r.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/index-BS-_JAUc.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-EVfr5uME.css">
+    <script type="module" crossorigin src="./assets/main-B5a7aebt.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/index-CRLNN_FC.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-CoRIvWEO.css">
   <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
   <body>
     <div id="root"></div>

@@ -9,6 +9,10 @@ import {
 } from "lucide-react";
 import { useCallback, type RefObject } from "react";
 
+import {
+  ChatFontScaleControl,
+  useComposerFontScale,
+} from "@/components/ChatFontScaleControl";
 import { MarkdownBubble } from "@/components/MarkdownBubble";
 import {
   applyFormatAction,
@@ -24,6 +28,9 @@ import { cn } from "@/lib/utils";
  *
  * Uses native `title`/`aria-label` (not Radix Tooltip) so the shared module
  * does not require a TooltipProvider in every shell/test harness.
+ *
+ * Spec 176 §B: A−/A+ sits next to the preview toggle and scales only composer
+ * text (own persisted value).
  */
 export function ComposerFormatToolbar({
   value,
@@ -40,6 +47,12 @@ export function ComposerFormatToolbar({
   onPreviewChange: (next: boolean) => void;
   className?: string;
 }) {
+  const {
+    scale: composerScale,
+    increase: increaseComposer,
+    decrease: decreaseComposer,
+    reset: resetComposer,
+  } = useComposerFontScale();
   const apply = useCallback(
     (action: FormatAction) => {
       const el = textareaRef.current;
@@ -119,6 +132,19 @@ export function ComposerFormatToolbar({
         )}
         {preview ? "Edit" : "Preview"}
       </button>
+
+      <div className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true" />
+
+      <ChatFontScaleControl
+        scale={composerScale}
+        onIncrease={increaseComposer}
+        onDecrease={decreaseComposer}
+        onReset={resetComposer}
+        compact
+        testIdPrefix="composer-font"
+        ariaLabel="Composer text size"
+        className="shrink-0"
+      />
     </div>
   );
 }

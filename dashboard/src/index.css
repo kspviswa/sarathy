@@ -23,6 +23,11 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.541 0.231 293.031);
+  /* Appearance fonts (spec 176 §C) — overridden via inline style on <html>. */
+  --app-font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji";
+  --chat-font-family: var(--app-font-family);
+  --composer-font-scale: 1;
 }
 
 .dark {
@@ -153,6 +158,7 @@
   }
   html {
     -webkit-tap-highlight-color: transparent;
+    font-family: var(--app-font-family);
     /* Long unbreakable tokens — model ids, SHAs, repo paths, host:port — wrap
        instead of running past the edge of their box (spec 142 §A).
        Viswa: "could you also word wrap happens globally? I still find places
@@ -173,6 +179,7 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+    font-family: var(--app-font-family);
     overscroll-behavior-y: none;
     -webkit-font-smoothing: antialiased;
   }
@@ -232,18 +239,32 @@
   );
 }
 
-/* Chat font scale (spec 175 §F) — transcript + composer only. */
+/* Reading scale (spec 176 §A) — conversation bubbles only (chat + ask). */
 [data-chat-scale] {
   --chat-font-scale: 1;
 }
-[data-chat-scale] [data-chat-body],
-[data-chat-scale] [data-chat-composer] {
+[data-chat-scale] [data-chat-body] {
   font-size: calc(15px * var(--chat-font-scale, 1));
+  font-family: var(--chat-font-family);
 }
-[data-chat-scale] [data-chat-body] .md,
-[data-chat-scale] [data-chat-composer] .md {
+[data-chat-scale] [data-chat-body] .md {
   font-size: inherit;
   line-height: 1.625;
+}
+
+/* Composer scale (spec 176 §B) — textarea + preview only; independent var. */
+[data-chat-composer] {
+  font-size: calc(15px * var(--composer-font-scale, 1));
+  font-family: var(--chat-font-family);
+}
+[data-chat-composer] .md {
+  font-size: inherit;
+  line-height: 1.625;
+}
+
+/* Composed / generated face also covers the Ask query field (spec 176 §C). */
+[data-testid="ask-query"] {
+  font-family: var(--chat-font-family);
 }
 
 /* Markdown chat rendering */

@@ -29,8 +29,7 @@ import { AskTurnCard } from "@/components/ask/AskTurnCard";
 import { LightboxProvider } from "@/lib/lightbox";
 import {
   CHAT_FONT_SCALE_KEY,
-  CHAT_FONT_SCALE_STEPS,
-  clampChatFontScale,
+  FONT_SCALE_FACTOR,
   nextChatFontScale,
   readChatFontScale,
 } from "@/lib/chatFontScale";
@@ -162,21 +161,14 @@ describe("spec 175 §E — image thumbnails", () => {
   });
 });
 
-describe("spec 175 §F — font scale", () => {
+describe("spec 175 §F — font scale (superseded uncapped by 176)", () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
-  it("clamps to the allowed steps", () => {
-    expect(clampChatFontScale(0.5)).toBe(0.9);
-    expect(clampChatFontScale(1.4)).toBe(1.4);
-    expect(clampChatFontScale(9)).toBe(1.4);
-  });
-
-  it("steps up and down without leaving the range", () => {
-    expect(nextChatFontScale(0.9, -1)).toBe(0.9);
-    expect(nextChatFontScale(1.4, 1)).toBe(1.4);
-    expect(nextChatFontScale(1.0, 1)).toBe(1.125);
+  it("steps by FONT_SCALE_FACTOR with no ceiling", () => {
+    expect(nextChatFontScale(1.0, 1)).toBeCloseTo(FONT_SCALE_FACTOR, 10);
+    expect(nextChatFontScale(1.4, 1)).toBeGreaterThan(1.4);
   });
 
   it("persists and updates the control value", () => {
@@ -201,22 +193,25 @@ describe("spec 175 §F — font scale", () => {
     act(() => {
       fireEvent.click(screen.getByTestId("chat-font-increase"));
     });
-    expect(wrap.style.getPropertyValue("--chat-font-scale")).toBe("1.125");
-    expect(localStorage.getItem(CHAT_FONT_SCALE_KEY)).toBe("1.125");
-    expect(readChatFontScale()).toBe(1.125);
+    expect(Number(wrap.style.getPropertyValue("--chat-font-scale"))).toBeCloseTo(
+      FONT_SCALE_FACTOR,
+      10,
+    );
+    expect(readChatFontScale()).toBeCloseTo(FONT_SCALE_FACTOR, 10);
+    expect(localStorage.getItem(CHAT_FONT_SCALE_KEY)).toBe(String(FONT_SCALE_FACTOR));
 
     act(() => {
       fireEvent.click(screen.getByTestId("chat-font-reset"));
     });
     expect(wrap.style.getPropertyValue("--chat-font-scale")).toBe("1");
 
-    // Drive to max then refuse to go further.
-    for (let i = 0; i < CHAT_FONT_SCALE_STEPS.length + 2; i++) {
+    // Uncapped — keeps growing past the old 140% ladder.
+    for (let i = 0; i < 10; i++) {
       act(() => {
         fireEvent.click(screen.getByTestId("chat-font-increase"));
       });
     }
-    expect(wrap.style.getPropertyValue("--chat-font-scale")).toBe("1.4");
+    expect(Number(wrap.style.getPropertyValue("--chat-font-scale"))).toBeGreaterThan(1.4);
   });
 });
 

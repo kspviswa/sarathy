@@ -1,0 +1,189 @@
+{
+  "note": "Captured against real index.html / mobile.html from the built static bundle.",
+  "at100": {
+    "user": {
+      "fontSize": "15px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 15
+    },
+    "assistant": {
+      "fontSize": "15px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 15
+    },
+    "nav": {
+      "fontSize": "12px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 12
+    }
+  },
+  "after9plus": {
+    "user": {
+      "fontSize": "35.3692px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 35.3692
+    },
+    "assistant": {
+      "fontSize": "35.3692px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 35.3692
+    },
+    "nav": {
+      "fontSize": "12px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 12
+    },
+    "readout": "236%"
+  },
+  "after14plus": {
+    "user": {
+      "fontSize": "56.9625px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 56.9625
+    },
+    "assistant": {
+      "fontSize": "56.9625px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 56.9625
+    },
+    "nav": {
+      "fontSize": "12px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 12
+    },
+    "readout": "380%"
+  },
+  "scaleRoundTrip": {
+    "at1": {
+      "user": {
+        "fontSize": "15px",
+        "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+        "fontSizePx": 15
+      },
+      "assistant": {
+        "fontSize": "15px",
+        "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+        "fontSizePx": 15
+      },
+      "nav": {
+        "fontSize": "12px",
+        "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+        "fontSizePx": 12
+      }
+    },
+    "after8plus": {
+      "user": {
+        "fontSize": "32.1538px",
+        "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+        "fontSizePx": 32.1538
+      },
+      "assistant": {
+        "fontSize": "32.1538px",
+        "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+        "fontSizePx": 32.1538
+      },
+      "nav": {
+        "fontSize": "12px",
+        "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+        "fontSizePx": 12
+      }
+    },
+    "after8minus": {
+      "user": {
+        "fontSize": "15px",
+        "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+        "fontSizePx": 15
+      },
+      "assistant": {
+        "fontSize": "15px",
+        "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+        "fontSizePx": 15
+      },
+      "nav": {
+        "fontSize": "12px",
+        "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+        "fontSizePx": 12
+      }
+    }
+  },
+  "navUnchanged": true,
+  "composerSmall": {
+    "textarea": {
+      "fontSize": "10.2452px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 10.2452
+    },
+    "bubble": {
+      "fontSize": "15px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 15
+    }
+  },
+  "composerLarge": {
+    "textarea": {
+      "fontSize": "38.9061px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 38.9061
+    },
+    "bubble": {
+      "fontSize": "15px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 15
+    }
+  },
+  "composerDoesNotAffectBubbles": true,
+  "queryLocalFonts": {
+    "available": true,
+    "count": 0,
+    "note": "Headless Chromium exposes queryLocalFonts() but returned 0 families (permission/empty in this environment). UI correctly showed the documented web-safe fallback with an explanatory note — not claimed as system fonts."
+  },
+  "queryLocalFontsError": null,
+  "appearanceSource": "fallback",
+  "appFontNav": {
+    "fontSize": "12px",
+    "fontFamily": "Arial",
+    "fontSizePx": 12
+  },
+  "askScaled": {
+    "query": {
+      "fontSize": "32.1538px",
+      "fontFamily": "Georgia",
+      "fontSizePx": 32.1538
+    },
+    "answer": {
+      "fontSize": "32.1538px",
+      "fontFamily": "Georgia",
+      "fontSizePx": 32.1538
+    },
+    "nav": {
+      "fontSize": "12px",
+      "fontFamily": "Arial",
+      "fontSizePx": 12
+    }
+  },
+  "composedFontBubble": {
+    "fontSize": "32.1538px",
+    "fontFamily": "Georgia",
+    "fontSizePx": 32.1538
+  },
+  "mobileScaled": {
+    "user": {
+      "fontSize": "32.1538px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 32.1538
+    },
+    "nav": {
+      "fontSize": "16px",
+      "fontFamily": "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\"",
+      "fontSizePx": 16
+    }
+  },
+  "mobile320": {
+    "appearanceVisible": true,
+    "loadFontsHeight": {
+      "width": 254,
+      "height": 40
+    }
+  },
+  "fallbackProven": true
+}

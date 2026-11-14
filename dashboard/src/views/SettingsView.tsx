@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { DevicesPanel } from "@/components/DevicesPanel";
 import { StatusPanel } from "@/components/StatusPanel";
 import { UsageCard } from "@/components/UsageCard";
@@ -66,11 +67,18 @@ import { cn } from "@/lib/utils";
  * the two shells cannot drift (HARD LESSON 22).
  */
 
-export type SettingsSegment = "form" | "json" | "devices" | "status" | "usage";
+export type SettingsSegment =
+  | "form"
+  | "appearance"
+  | "json"
+  | "devices"
+  | "status"
+  | "usage";
 
 /** The segments, in the order they are shown. */
 export const SETTINGS_SEGMENTS: { id: SettingsSegment; label: string }[] = [
   { id: "form", label: "Form" },
+  { id: "appearance", label: "Appearance" },
   { id: "json", label: "JSON" },
   { id: "devices", label: "Devices" },
   { id: "status", label: "Status" },
@@ -458,12 +466,17 @@ export function SettingsView({
         )}
         data-testid="settings-content"
       >
-        {loading ? (
+        {/* Appearance is local-only — no gateway round-trip (spec 176 §C). */}
+        {segment === "appearance" && <AppearanceSettings />}
+
+        {segment !== "appearance" && loading ? (
           <div className="flex items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             Loading settings…
           </div>
-        ) : (
+        ) : null}
+
+        {segment !== "appearance" && !loading ? (
           <>
             {restartRequired && (
               <Card className="mb-4 border-primary/40 bg-primary/5">
@@ -597,7 +610,7 @@ export function SettingsView({
               </div>
             )}
           </>
-        )}
+        ) : null}
       </div>
     </div>
   );

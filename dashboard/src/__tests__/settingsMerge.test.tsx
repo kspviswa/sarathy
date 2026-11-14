@@ -76,12 +76,12 @@ describe("Settings — one surface, segmented", () => {
     vi.unstubAllGlobals();
   });
 
-  it("offers Form, JSON, Devices, Status and Usage", async () => {
+  it("offers Form, Appearance, JSON, Devices, Status and Usage", async () => {
     render(<SettingsView onLoggedOut={vi.fn()} />);
 
     await waitForSegments();
 
-    for (const id of ["form", "json", "devices", "status", "usage"]) {
+    for (const id of ["form", "appearance", "json", "devices", "status", "usage"]) {
       expect(screen.getByTestId(`settings-segment-${id}`)).toBeInTheDocument();
     }
   });

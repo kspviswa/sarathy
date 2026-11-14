@@ -30,3 +30,6 @@ tests/
 # /api/voice/model/shruti-tamil.cact — a repo copy is a 30 MB duplicate.
 *.cact
 *.f32
+
+# Local scratch experiments (not part of the package)
+experiments/

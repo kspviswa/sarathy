@@ -18,13 +18,9 @@ import { cn } from "@/lib/utils";
  * The Research Progress panel — Uttaram's `AssistantSteps.tsx`, mapped onto
  * the dashboard's theme tokens.
  *
- * Uttaram draws a vertical timeline: a rounded icon chip on a connector
- * line, a bold title and a detail line, with the last step pulsing while the
- * answer is still being written. The panel is open while the turn streams
- * and folds itself away when the turn is done.
- *
- * The structure is copied; the palette is translated (`bg-card`,
- * `text-muted-foreground`, `border`, `bg-primary/10`, `text-primary`).
+ * Spec 175 §H: when expanded the step list scrolls inside a bounded panel
+ * (`max-h-[60vh]`), the toggle header stays sticky, and a collapse control at
+ * the bottom means a reader who scrolled to the end never has to scroll back.
  */
 
 /** The icon of one step. */
@@ -146,20 +142,38 @@ export function AskResearchProgress({
   streaming: boolean;
 }) {
   // Collapsed by default, and the reader decides when to open it.
-  //
-  // This used to auto-expand while the newest turn streamed, which pushed the
-  // answer itself down the page — on a phone the progress list filled the
-  // screen and every answer began with a long scroll. The step count in the
-  // header is enough of a live signal; the detail is there on request.
-  //
-  // Deliberately no effect on `streaming`: once the reader opens or closes the
-  // panel, it stays where they put it. Auto-collapsing a panel someone just
-  // opened is its own small betrayal.
   const [expanded, setExpanded] = useState(false);
 
   if (steps.length === 0) return null;
 
   const label = `Research Progress (${steps.length} ${steps.length === 1 ? "step" : "steps"})`;
+  const collapse = () => setExpanded(false);
+
+  const toggleButton = (
+    <button
+      type="button"
+      onClick={() => setExpanded((value) => !value)}
+      aria-expanded={expanded}
+      aria-label={label}
+      data-testid="ask-steps-toggle"
+      className={cn(
+        "sticky top-0 z-10 flex w-full items-center justify-between gap-2 bg-card px-3 py-2 text-left transition-colors hover:bg-accent/50",
+        expanded && "border-b border-border",
+      )}
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        <Brain className="size-4 shrink-0" />
+        <span className="truncate text-sm font-medium" data-testid="ask-steps-label">
+          {label}
+        </span>
+      </span>
+      {expanded ? (
+        <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+      ) : (
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+      )}
+    </button>
+  );
 
   return (
     <div
@@ -167,29 +181,13 @@ export function AskResearchProgress({
       data-testid="ask-steps"
       data-expanded={expanded ? "true" : "false"}
     >
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        aria-expanded={expanded}
-        aria-label={label}
-        data-testid="ask-steps-toggle"
-        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition-colors hover:bg-accent/50"
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <Brain className="size-4 shrink-0" />
-          <span className="truncate text-sm font-medium" data-testid="ask-steps-label">
-            {label}
-          </span>
-        </span>
-        {expanded ? (
-          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-        )}
-      </button>
+      {toggleButton}
 
       {expanded && (
-        <div className="space-y-2 border-t p-3" data-testid="ask-step-list">
+        <div
+          className="max-h-[60vh] space-y-2 overflow-y-auto overscroll-contain p-3"
+          data-testid="ask-step-list"
+        >
           {steps.map((step, index) => {
             const isLastStep = index === steps.length - 1;
             const active = streaming && isLastStep;
@@ -217,6 +215,16 @@ export function AskResearchProgress({
               </div>
             );
           })}
+
+          <button
+            type="button"
+            onClick={collapse}
+            data-testid="ask-steps-collapse-bottom"
+            className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ChevronRight className="size-3.5 rotate-[-90deg]" />
+            Collapse
+          </button>
         </div>
       )}
     </div>

@@ -69,7 +69,7 @@ export function GreetingState({
   );
 }
 
-/** Default chips. Recent topics get merged in by the shell. */
+/** Curated greeting chips (spec 175 §A — never seed from session preview). */
 export const DEFAULT_SUGGESTIONS: Suggestion[] = [
   { label: "Say hello", prompt: "Say hello to me." },
   { label: "What can you do?", prompt: "What can you do? List your main capabilities." },

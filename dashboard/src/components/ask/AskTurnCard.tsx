@@ -129,8 +129,14 @@ export function AskTurnCard({
   );
 
   return (
-    <article className="flex flex-col gap-4 lg:flex-row lg:gap-6 lg:justify-center" data-testid="ask-turn">
-      <div className="flex min-w-0 w-full flex-col gap-4 lg:max-w-3xl">
+    <article
+      className="flex flex-col gap-4 lg:flex-row lg:gap-6 lg:justify-center"
+      data-testid="ask-turn"
+    >
+      <div
+        className="flex min-w-0 w-full flex-col gap-4 lg:max-w-3xl"
+        data-testid="ask-turn-content"
+      >
         {/* --------------------------------------------------------- heading */}
         <div className="flex items-start gap-2">
           <h2
@@ -356,9 +362,15 @@ export function AskTurnCard({
         )}
       </div>
 
-      {hasAnswer && !isMobile && (
-        <div className="hidden lg:block">
-          <AskMediaView media={media} variant="rail" toolbar={mediaButtons} />
+      {/* Spec 175 §G: reserve the rail gutter for the whole life of the turn
+          on desktop — even with empty media — so content never re-centres. */}
+      {!isMobile && (
+        <div className="hidden w-full shrink-0 lg:block lg:w-72" data-testid="ask-media-rail-slot">
+          <AskMediaView
+            media={media}
+            variant="rail"
+            toolbar={hasAnswer ? mediaButtons : undefined}
+          />
         </div>
       )}
     </article>

@@ -1,14 +1,10 @@
 import {
-  Check,
-  Copy,
   FolderTree,
   History,
   Loader2,
   Mic,
   Paperclip,
   Plus,
-  Reply as ReplyIcon,
-  RotateCcw,
   Send,
   Square,
   X,
@@ -19,7 +15,17 @@ import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
 import { Logo } from "@/components/logo";
+import {
+  ChatFontScaleControl,
+  useChatFontScale,
+} from "@/components/ChatFontScaleControl";
+import { MediaAttachments } from "@/components/ChatMedia";
+import {
+  ComposerFormatToolbar,
+  ComposerMarkdownPreview,
+} from "@/components/ComposerFormatToolbar";
 import { MarkdownBubble } from "@/components/MarkdownBubble";
+import { MessageActions } from "@/components/MessageActions";
 import {
   QuoteActionBar,
   QuoteChips,
@@ -70,73 +76,6 @@ interface PendingMedia {
   preview?: string;
 }
 
-const IMAGE_EXTS = new Set([
-  ".jpg",
-  ".jpeg",
-  ".png",
-  ".gif",
-  ".webp",
-  ".bmp",
-  ".svg",
-]);
-const AUDIO_EXTS = new Set([".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"]);
-
-function getMediaKind(p: string): "image" | "audio" | "file" {
-  const ext = p.substring(p.lastIndexOf(".")).toLowerCase();
-  if (IMAGE_EXTS.has(ext)) return "image";
-  if (AUDIO_EXTS.has(ext)) return "audio";
-  return "file";
-}
-
-function getFileName(p: string): string {
-  return p.substring(p.lastIndexOf("/") + 1) || p;
-}
-
-function MediaAttachment({ path }: { path: string }) {
-  const kind = getMediaKind(path);
-  if (kind === "image") {
-    return (
-      <img
-        src={`/api/media?path=${encodeURIComponent(path)}`}
-        alt={getFileName(path)}
-        className="my-1 w-full rounded-lg object-cover"
-        loading="lazy"
-      />
-    );
-  }
-  if (kind === "audio") {
-    return (
-      <audio
-        controls
-        src={`/api/media?path=${encodeURIComponent(path)}`}
-        className="my-1 w-full"
-      />
-    );
-  }
-  return (
-    <a
-      href={`/api/media?path=${encodeURIComponent(path)}`}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="my-1 inline-flex w-full items-center gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2.5 text-sm text-foreground"
-    >
-      <Paperclip className="size-4 shrink-0" />
-      <span className="truncate">{getFileName(path)}</span>
-    </a>
-  );
-}
-
-function MobileMedia({ paths }: { paths: string[] }) {
-  if (!paths.length) return null;
-  return (
-    <div className="flex flex-col gap-1">
-      {paths.map((p, i) => (
-        <MediaAttachment key={i} path={p} />
-      ))}
-    </div>
-  );
-}
-
 export function ChatView({
   messages,
   streaming,
@@ -180,6 +119,14 @@ export function ChatView({
   onBrowseFiles?: () => void;
 }) {
   const [input, setInput] = useState("");
+  const [composerPreview, setComposerPreview] = useState(false);
+  const {
+    scale: chatFontScale,
+    increase: increaseFont,
+    decrease: decreaseFont,
+    reset: resetFont,
+    style: chatFontStyle,
+  } = useChatFontScale();
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
   const [quoteChips, setQuoteChips] = useState<QuoteChip[]>([]);
   // Reply-to-message (parity with the desktop ChatView's `replyToMsg`): the
@@ -442,7 +389,12 @@ export function ChatView({
   }
 
   return (
-    <div className="flex h-full flex-col" data-testid="mobile-chat">
+    <div
+      className="flex h-full flex-col"
+      data-testid="mobile-chat"
+      data-chat-scale=""
+      style={chatFontStyle}
+    >
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex min-w-0 items-center gap-1">
           {onOpenSessions && (
@@ -460,6 +412,13 @@ export function ChatView({
           <h1 className="truncate text-base font-semibold">Chat</h1>
         </div>
         <div className="flex items-center gap-1">
+          <ChatFontScaleControl
+            scale={chatFontScale}
+            onIncrease={increaseFont}
+            onDecrease={decreaseFont}
+            onReset={resetFont}
+            compact
+          />
           {streaming && (
             <Button
               variant="destructive"
@@ -633,49 +592,61 @@ export function ChatView({
               Desktop and iPad are untouched: they render ChatView from
               views/, never this component. */}
           <div className="flex flex-col gap-1.5">
-            <Textarea
-              ref={textareaRef}
+            <ComposerFormatToolbar
               value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                if (showSlashMenu) setSlashIndex(0);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault();
-                  void send();
-                  return;
-                }
-                if (showSlashMenu) {
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setSlashIndex((i) => i + 1);
-                    return;
-                  }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setSlashIndex((i) => Math.max(0, i - 1));
-                    return;
-                  }
-                  if (e.key === "Tab") {
-                    e.preventDefault();
-                    const match = commands.find(
-                      (c) => input.trim() === `/${c.name}`,
-                    );
-                    if (match) setInput(`/${match.name} `);
-                    return;
-                  }
-                }
-              }}
-              placeholder="Message Sarathy…"
-              /* Same accent + symmetric vertical padding as desktop (spec
-                 135 §B): the input and the send button light up together, and
-                 the first line starts where the controls do. */
-              className="w-full !min-h-16 max-h-[200px] resize-none overflow-y-auto rounded-lg px-3.5 py-3 text-base focus-visible:border-primary/40 focus-visible:ring-primary/40"
-              rows={1}
-              aria-label="Message input"
-              data-testid="mobile-composer-input"
+              onChange={setInput}
+              textareaRef={textareaRef}
+              preview={composerPreview}
+              onPreviewChange={setComposerPreview}
             />
+            {composerPreview ? (
+              <ComposerMarkdownPreview content={input} />
+            ) : (
+              <Textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  if (showSlashMenu) setSlashIndex(0);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    void send();
+                    return;
+                  }
+                  if (showSlashMenu) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setSlashIndex((i) => i + 1);
+                      return;
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setSlashIndex((i) => Math.max(0, i - 1));
+                      return;
+                    }
+                    if (e.key === "Tab") {
+                      e.preventDefault();
+                      const match = commands.find(
+                        (c) => input.trim() === `/${c.name}`,
+                      );
+                      if (match) setInput(`/${match.name} `);
+                      return;
+                    }
+                  }
+                }}
+                placeholder="Message Sarathy…"
+                /* Same accent + symmetric vertical padding as desktop (spec
+                   135 §B): the input and the send button light up together, and
+                   the first line starts where the controls do. */
+                className="w-full !min-h-16 max-h-[200px] resize-none overflow-y-auto rounded-lg px-3.5 py-3 text-base focus-visible:border-primary/40 focus-visible:ring-primary/40"
+                rows={1}
+                aria-label="Message input"
+                data-testid="mobile-composer-input"
+                data-chat-composer=""
+              />
+            )}
             {/* Controls: a tight ghost cluster on the left, send alone on the
                 right. Every control is the SAME square with the input's radius
                 — the send button used to be a circle among rounded squares,
@@ -809,13 +780,6 @@ function MobileMessage({
     [message.content],
   );
 
-  const [copied, setCopied] = useState(false);
-  const copyMessage = useCallback(() => {
-    void navigator.clipboard.writeText(cleanContent);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [cleanContent]);
-
   // Reads the RAW content: the machine lines holding these paths are exactly
   // what cleanRenderedContent strips.
   const displayMedia = useMemo(() => {
@@ -876,7 +840,7 @@ function MobileMessage({
     >
       <div
         className={cn(
-          "max-w-[88%] rounded-2xl px-4 py-2.5 text-base leading-relaxed",
+          "group max-w-[88%] rounded-2xl px-4 py-2.5 text-base leading-relaxed",
           hasUI && "w-full",
           isUser
             ? "bg-primary text-primary-foreground"
@@ -885,6 +849,7 @@ function MobileMessage({
               : "border border-border bg-card",
         )}
         data-testid={isNotice ? "command-notice" : undefined}
+        data-chat-body=""
       >
         {showThinking && (
           /* ONE header per turn, identical to desktop (spec 135 §A): the live
@@ -932,7 +897,7 @@ function MobileMessage({
         )}
         {displayMedia.length > 0 && (
           <div className={isUser ? "mb-1" : "mb-2"}>
-            <MobileMedia paths={displayMedia} />
+            <MediaAttachments paths={displayMedia} onPrimary={isUser} />
           </div>
         )}
         {isUser ? (
@@ -964,39 +929,17 @@ function MobileMessage({
             )}
           />
         )}
-        {!isNotice && hasContent && (
-          <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
-            <button
-              onClick={copyMessage}
-              className="inline-flex items-center gap-1.5 active:text-foreground"
-              title="Copy"
-            >
-              {copied ? (
-                <Check className="size-3.5" />
-              ) : (
-                <Copy className="size-3.5" />
-              )}
-              {copied ? "Copied" : "Copy"}
-            </button>
-            {!isUser && onRegenerate && (
-              <button
-                onClick={onRegenerate}
-                className="inline-flex items-center gap-1.5 active:text-foreground"
-                title="Regenerate"
-              >
-                <RotateCcw className="size-3.5" /> Regenerate
-              </button>
-            )}
-            {onReply && (
-              <button
-                onClick={onReply}
-                className="inline-flex items-center gap-1.5 active:text-foreground"
-                title="Reply"
-                data-testid="message-reply"
-              >
-                <ReplyIcon className="size-3.5" /> Reply
-              </button>
-            )}
+        {!isNotice && (hasContent || isUser) && cleanContent && (
+          <div
+            className={cn("mt-2", isUser && "flex justify-end")}
+            data-testid={isUser ? undefined : "message-reply-row"}
+          >
+            <MessageActions
+              content={cleanContent}
+              onRegenerate={!isUser ? onRegenerate : undefined}
+              onReply={onReply}
+              onPrimary={isUser}
+            />
           </div>
         )}
       </div>

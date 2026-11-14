@@ -22,6 +22,15 @@ export function QuoteActionBar({
 }) {
   if (!visible || !rect) return null;
 
+  // Keep the bar inside the viewport when the selection is near the right edge.
+  const BAR_APPROX_WIDTH = 160;
+  const left = Math.min(
+    Math.max(8, rect.left),
+    typeof window !== "undefined"
+      ? Math.max(8, window.innerWidth - BAR_APPROX_WIDTH - 8)
+      : rect.left,
+  );
+
   return (
     <button
       type="button"
@@ -32,8 +41,8 @@ export function QuoteActionBar({
       }}
       onClick={onAdd}
       data-testid="quote-action-bar"
-      className="fixed z-50 inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground shadow-lg"
-      style={{ top: Math.max(8, rect.top - 40), left: Math.max(8, rect.left) }}
+      className="fixed z-50 inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground shadow-lg ring-2 ring-primary/40"
+      style={{ top: Math.max(8, rect.top - 40), left }}
     >
       <Quote className="size-3.5" />
       Add to follow-up

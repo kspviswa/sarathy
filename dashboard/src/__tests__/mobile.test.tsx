@@ -732,4 +732,30 @@ describe("Mobile — reply-to-message (parity with desktop)", () => {
     expect(screen.queryByTestId("reply-preview")).toBeNull();
     expect(onSend).not.toHaveBeenCalled();
   });
+
+  it("shows the shared formatting toolbar and live Markdown preview (spec 175 §C)", async () => {
+    render(
+      <MobileChatView
+        streaming={false}
+        messages={[]}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        onNewChat={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("composer-format-toolbar")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-format-bold")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-font-scale")).toBeInTheDocument();
+
+    const input = screen.getByTestId("mobile-composer-input");
+    fireEvent.change(input, { target: { value: "**bold** draft" } });
+    fireEvent.click(screen.getByTestId("composer-preview-toggle"));
+
+    const preview = await screen.findByTestId("composer-markdown-preview");
+    expect(preview.querySelector("strong")).toHaveTextContent("bold");
+    // Draft survives the toggle.
+    fireEvent.click(screen.getByTestId("composer-preview-toggle"));
+    expect(screen.getByTestId("mobile-composer-input")).toHaveValue("**bold** draft");
+  });
 });

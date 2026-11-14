@@ -1,0 +1,65 @@
+{
+  "chipLabels": [
+    "Say hello",
+    "What can you do?",
+    "Check my jobs",
+    "Recall context",
+    "Say hello",
+    "What can you do?",
+    "Check my jobs",
+    "Recall context"
+  ],
+  "chipBadMatches": [],
+  "quoteBar": {
+    "fgCss": "oklch(0.969 0.016 293.756)",
+    "bgCss": "oklch(0.606 0.25 292.717)",
+    "fgRgb": [
+      245,
+      243,
+      255
+    ],
+    "bgRgb": [
+      142,
+      81,
+      255
+    ],
+    "ratio": 4.013040625095552
+  },
+  "composerStrongCount": 1,
+  "userActionContrast": {
+    "fgCss": "oklch(0.969 0.016 293.756)",
+    "bgCss": "oklch(0.606 0.25 292.717)",
+    "fgRgb": [
+      245,
+      243,
+      255
+    ],
+    "bgRgb": [
+      142,
+      81,
+      255
+    ],
+    "ratio": 4.013040625095552
+  },
+  "thumbSize": {
+    "x": 1046.078125,
+    "y": 64,
+    "width": 80,
+    "height": 80
+  },
+  "fontSizes": {
+    "small": "13.5px",
+    "large": "21px"
+  },
+  "askContentX": {
+    "before": 229,
+    "after": 229,
+    "delta": 0
+  },
+  "progress": {
+    "maxHeight": "540px",
+    "overflowY": "auto",
+    "sticky": "sticky",
+    "bottomExists": true
+  }
+}

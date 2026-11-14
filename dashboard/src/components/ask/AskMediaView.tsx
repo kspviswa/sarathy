@@ -197,10 +197,9 @@ export function AskMediaView({
   };
 
   if (variant === "rail") {
-    // The rail exists only when there is media to draw or a toolbar to show —
-    // never an empty aside, never a reserved gutter.
-    if (!hasMedia && !toolbar) return null;
-
+    // Spec 175 §G: always reserve the desktop gutter so the content column
+    // never re-centres when media arrives. An empty rail is fine — an absent
+    // one caused a horizontal jump.
     const visibleImages =
       images.length > RAIL_MORE_THRESHOLD ? images.slice(0, RAIL_THUMB_COUNT) : images;
     const showMore = images.length > RAIL_MORE_THRESHOLD;

@@ -1,12 +1,9 @@
 import {
   Check,
-  Copy,
-  Download,
   Loader2,
   Mic,
   Paperclip,
   Plus,
-  RotateCcw,
   Send,
   Square,
   X,
@@ -25,12 +22,22 @@ import { toast } from "sonner";
 
 import { CodeBlock } from "@/components/CodeBlock";
 import {
+  ChatFontScaleControl,
+  useChatFontScale,
+} from "@/components/ChatFontScaleControl";
+import { MediaAttachments } from "@/components/ChatMedia";
+import {
+  ComposerFormatToolbar,
+  ComposerMarkdownPreview,
+} from "@/components/ComposerFormatToolbar";
+import {
   GreetingState,
   DEFAULT_SUGGESTIONS,
   type Suggestion,
 } from "@/components/GreetingState";
 import { LiveStatus } from "@/components/LiveStatus";
 import { MarkdownBubble } from "@/components/MarkdownBubble";
+import { MessageActions } from "@/components/MessageActions";
 import { PresenceIndicator } from "@/components/Presence";
 import { cleanRenderedContent, extractMediaPaths } from "@/lib/messageText";
 import { MD_COMPONENTS, SAFE_REHYPE_PLUGINS } from "@/lib/markdown";
@@ -141,17 +148,6 @@ interface PendingMedia {
   preview?: string;
 }
 
-const IMAGE_EXTS = new Set([
-  ".jpg",
-  ".jpeg",
-  ".png",
-  ".gif",
-  ".webp",
-  ".bmp",
-  ".svg",
-]);
-const AUDIO_EXTS = new Set([".ogg", ".mp3", ".m4a", ".wav", ".opus", ".webm"]);
-
 /** Composer height bounds (px). Small enough to stay a composer, tall enough
  *  to paste a stack trace without scrolling (spec §E). */
 export const COMPOSER_MIN_HEIGHT = 56;
@@ -180,137 +176,6 @@ export function loadComposerHeight(): number {
     // localStorage blocked (private mode / sandboxed iframe) — use the default.
   }
   return COMPOSER_DEFAULT_HEIGHT;
-}
-
-function getMediaKind(p: string): "image" | "audio" | "file" {
-  const ext = p.substring(p.lastIndexOf(".")).toLowerCase();
-  if (IMAGE_EXTS.has(ext)) return "image";
-  if (AUDIO_EXTS.has(ext)) return "audio";
-  return "file";
-}
-
-function getFileName(p: string): string {
-  return p.substring(p.lastIndexOf("/") + 1) || p;
-}
-
-function MediaAttachment({ path }: { path: string }) {
-  const kind = getMediaKind(path);
-  if (kind === "image") {
-    return (
-      <img
-        src={`/api/media?path=${encodeURIComponent(path)}`}
-        alt={getFileName(path)}
-        className="max-h-56 rounded-lg my-1 cursor-pointer"
-        loading="lazy"
-      />
-    );
-  }
-  if (kind === "audio") {
-    return (
-      <audio
-        controls
-        src={`/api/media?path=${encodeURIComponent(path)}`}
-        className="my-1 w-full max-w-xs"
-      />
-    );
-  }
-  return (
-    <a
-      href={`/api/media?path=${encodeURIComponent(path)}`}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="my-1 inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm text-foreground hover:bg-muted"
-    >
-      <Download className="size-4" />
-      {getFileName(path)}
-    </a>
-  );
-}
-
-function MediaAttachments({ paths }: { paths: string[] }) {
-  if (!paths.length) return null;
-  return (
-    <div className="flex flex-col gap-1">
-      {paths.map((p, i) => (
-        <MediaAttachment key={i} path={p} />
-      ))}
-    </div>
-  );
-}
-
-interface MessageActionsProps {
-  content: string;
-  onRegenerate?: () => void;
-  onReply?: () => void;
-}
-
-function MessageActions({
-  content,
-  onRegenerate,
-  onReply,
-}: MessageActionsProps) {
-  const [copied, setCopied] = useState(false);
-
-  const copyMessage = useCallback(() => {
-    void navigator.clipboard.writeText(content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [content]);
-
-  return (
-    <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-      {onReply && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7 text-muted-foreground hover:text-foreground"
-              onClick={onReply}
-            >
-              <svg
-                className="size-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polyline points="9 14 4 9 9 4" />
-                <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
-              </svg>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Reply</TooltipContent>
-        </Tooltip>
-      )}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-7 text-muted-foreground hover:text-foreground"
-        onClick={copyMessage}
-        title="Copy"
-      >
-        {copied ? (
-          <Check className="size-3.5" />
-        ) : (
-          <Copy className="size-3.5" />
-        )}
-      </Button>
-      {onRegenerate && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground hover:text-foreground"
-          onClick={onRegenerate}
-          title="Regenerate"
-        >
-          <RotateCcw className="size-3.5" />
-        </Button>
-      )}
-    </div>
-  );
 }
 
 /**
@@ -455,6 +320,14 @@ export function ChatView({
   onFollowUpSeedConsumed?: () => void;
 }) {
   const [input, setInput] = useState("");
+  const [composerPreview, setComposerPreview] = useState(false);
+  const {
+    scale: chatFontScale,
+    increase: increaseFont,
+    decrease: decreaseFont,
+    reset: resetFont,
+    style: chatFontStyle,
+  } = useChatFontScale();
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
   const [replyToMsg, setReplyToMsg] = useState<ChatMessage | null>(null);
   const [quoteChips, setQuoteChips] = useState<QuoteChip[]>([]);
@@ -896,6 +769,15 @@ export function ChatView({
             }}
           />
 
+          {/* Spec 175 §C: formatting toolbar + live Markdown preview. */}
+          <ComposerFormatToolbar
+            value={input}
+            onChange={setInput}
+            textareaRef={textareaRef}
+            preview={composerPreview}
+            onPreviewChange={setComposerPreview}
+          />
+
           {/* Composer row (spec 135 §B). The three controls used to sit at
               three different sizes — attach/mic `size-9` (36px), send
               `Button size="icon"` = `size-10` (40px) — on an `items-end` row,
@@ -945,51 +827,56 @@ export function ChatView({
               </Tooltip>
             </div>
 
-            <Textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                if (showSlashMenu) setSlashIndex(0);
-              }}
-              onKeyDown={(e) => {
-                // Enter inserts a newline; Ctrl/Cmd+Enter sends (existing contract).
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault();
-                  void send();
-                  return;
-                }
-                if (showSlashMenu) {
-                  if (e.key === "ArrowDown") {
+            {composerPreview ? (
+              <ComposerMarkdownPreview content={input} className="flex-1" />
+            ) : (
+              <Textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  if (showSlashMenu) setSlashIndex(0);
+                }}
+                onKeyDown={(e) => {
+                  // Enter inserts a newline; Ctrl/Cmd+Enter sends (existing contract).
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
-                    setSlashIndex((i) => i + 1);
+                    void send();
                     return;
                   }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setSlashIndex((i) => Math.max(0, i - 1));
-                    return;
+                  if (showSlashMenu) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setSlashIndex((i) => i + 1);
+                      return;
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setSlashIndex((i) => Math.max(0, i - 1));
+                      return;
+                    }
+                    if (e.key === "Tab") {
+                      e.preventDefault();
+                      const match = commands.find(
+                        (c) => input.trim() === `/${c.name}`,
+                      );
+                      if (match) setInput(`/${match.name} `);
+                      return;
+                    }
                   }
-                  if (e.key === "Tab") {
-                    e.preventDefault();
-                    const match = commands.find(
-                      (c) => input.trim() === `/${c.name}`,
-                    );
-                    if (match) setInput(`/${match.name} `);
-                    return;
-                  }
-                }
-              }}
-              onPaste={handlePaste}
-              placeholder="Message Sarathy…  ·  Enter = newline, Ctrl+Enter = send"
-              style={{ height: composerHeight }}
-              /* Symmetric vertical padding: the first line starts where the
-                 36px controls start, whether the box holds one line or ten.
-                 The focus ring takes the send button's accent (primary), so the
-                 whole composer reads as one unit when it lights up. */
-              className="flex-1 resize-none overflow-y-auto rounded-lg px-3.5 py-3 focus-visible:border-primary/40 focus-visible:ring-primary/40"
-              rows={1}
-            />
+                }}
+                onPaste={handlePaste}
+                placeholder="Message Sarathy…  ·  Enter = newline, Ctrl+Enter = send"
+                style={{ height: composerHeight }}
+                data-chat-composer=""
+                /* Symmetric vertical padding: the first line starts where the
+                   36px controls start, whether the box holds one line or ten.
+                   The focus ring takes the send button's accent (primary), so the
+                   whole composer reads as one unit when it lights up. */
+                className="flex-1 resize-none overflow-y-auto rounded-lg px-3.5 py-3 focus-visible:border-primary/40 focus-visible:ring-primary/40"
+                rows={1}
+              />
+            )}
 
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1032,6 +919,8 @@ export function ChatView({
       }}
       onDragLeave={() => setDragOver(false)}
       data-testid="chat-view"
+      data-chat-scale=""
+      style={chatFontStyle}
     >
       <input
         id="attach-file-input"
@@ -1073,6 +962,12 @@ export function ChatView({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <ChatFontScaleControl
+            scale={chatFontScale}
+            onIncrease={increaseFont}
+            onDecrease={decreaseFont}
+            onReset={resetFont}
+          />
           {streaming && (
             <Button
               variant="destructive"
@@ -1277,6 +1172,7 @@ function MessageRow({
               : "border border-border bg-card text-card-foreground py-2.5",
         )}
         data-testid={isNotice ? "command-notice" : undefined}
+        data-chat-body=""
       >
         {message.quotes && message.quotes.length > 0 && (
           <div
@@ -1331,7 +1227,7 @@ function MessageRow({
 
         {displayMedia.length > 0 && (
           <div className={isUser ? "mb-1" : "mb-2"}>
-            <MediaAttachments paths={displayMedia} />
+            <MediaAttachments paths={displayMedia} onPrimary={isUser} />
           </div>
         )}
 
@@ -1378,8 +1274,12 @@ function MessageRow({
           </div>
         )}
         {isUser && (
-          <div className="mt-0.5 flex justify-end opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-            <MessageActions content={cleanContent} onReply={onReply} />
+          <div className="mt-0.5 flex justify-end">
+            <MessageActions
+              content={cleanContent}
+              onReply={onReply}
+              onPrimary
+            />
           </div>
         )}
       </div>

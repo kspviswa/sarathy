@@ -144,11 +144,32 @@ describe("AskTurnCard — mobile media collapsible (spec 153 §B)", () => {
 // ---------------------------------------------------------------------------
 
 describe("AskTurnCard — no media means no rail and no collapsible", () => {
-  it("renders neither the rail nor the collapsible", () => {
+  it("renders neither the rail content nor the collapsible when there is no answer", () => {
     renderTurn(makeTurn({ answer: "", media: [] }));
 
-    expect(screen.queryByTestId("ask-media-rail")).not.toBeInTheDocument();
+    // Spec 175 §G: the desktop rail SLOT is always reserved, but without an
+    // answer there is nothing to show inside it yet (no toolbar, no media).
+    expect(screen.getByTestId("ask-media-rail-slot")).toBeInTheDocument();
+    expect(screen.getByTestId("ask-media-rail")).toBeInTheDocument();
     expect(screen.queryByTestId("ask-media-collapsible-trigger")).not.toBeInTheDocument();
+  });
+
+  it("reserves the desktop rail column even when media is empty (spec 175 §G)", () => {
+    renderTurn(makeTurn({ media: [] }));
+
+    expect(screen.getByTestId("ask-media-rail-slot")).toBeInTheDocument();
+    expect(screen.getByTestId("ask-media-rail")).toBeInTheDocument();
+    expect(screen.getByTestId("ask-turn-content")).toBeInTheDocument();
+    // Content column classes must not depend on media presence.
+    expect(screen.getByTestId("ask-turn-content").className).toMatch(/lg:max-w-3xl/);
+    expect(screen.queryByTestId("ask-media-collapsible-trigger")).not.toBeInTheDocument();
+  });
+
+  it("mobile still omits the reserved gutter", () => {
+    renderTurn(makeTurn({ media: [] }), true);
+
+    expect(screen.queryByTestId("ask-media-rail-slot")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ask-media-rail")).not.toBeInTheDocument();
   });
 });
 

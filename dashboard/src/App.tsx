@@ -12,7 +12,7 @@ import {
   Settings,
   Sparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { CommandPalette } from "@/components/CommandPalette";
@@ -103,7 +103,9 @@ function AppInner() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  // Kept warm for SessionsView deep-links / socket refresh; greeting chips no
+  // longer read this list (spec 175 §A).
+  const [, setSessions] = useState<SessionInfo[]>([]);
   const [socket, setSocket] = useState<DashboardSocket | null>(null);
   const socketRef = useRef<DashboardSocket | null>(null);
   const lastUserMessageRef = useRef<string>("");
@@ -459,17 +461,9 @@ function AppInner() {
     [handleSend, requestSection],
   );
 
-  const recentTopics = useMemo(
-    () =>
-      sessions
-        .filter((s) => s.key !== DASHBOARD_SESSION_KEY && (s.topic || s.preview))
-        .slice(0, 8)
-        .map((s) => ({
-          label: (s.topic || s.preview || s.key).slice(0, 32),
-          prompt: `Tell me about "${s.topic || s.preview || ""}".`,
-        })),
-    [sessions],
-  );
+  // Spec 175 §A: never seed greeting chips from session `preview` (raw message
+  // text produced garbage labels like "[Runtime Context — metadata only").
+  // Desktop shows the curated DEFAULT_SUGGESTIONS, identical to mobile.
 
   if (authed === null) {
     return (
@@ -676,11 +670,7 @@ function AppInner() {
                 onRegenerate={handleRegenerate}
                 commands={commands}
                 sessionKey={DASHBOARD_SESSION_KEY}
-                suggestions={
-                  recentTopics.length > 0
-                    ? [...recentTopics, ...DEFAULT_SUGGESTIONS].slice(0, 6)
-                    : DEFAULT_SUGGESTIONS
-                }
+                suggestions={DEFAULT_SUGGESTIONS}
                 messagesRef={messagesRef}
                 followUpSeed={followUpSeed}
                 onFollowUpSeedConsumed={clearFollowUpSeed}

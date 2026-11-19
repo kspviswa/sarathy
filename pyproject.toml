@@ -1,6 +1,6 @@
 [project]
 name = "sarathy"
-version = "0.21.1"
+version = "0.21.2"
 description = "Sarathy : My Personal _claw style_ Assistant"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -53,6 +53,10 @@ dependencies = [
     # Kokoro speech in-process for voice pucks; without this the channel falls
     # back to a tone. Lazy-imported on first synthesis, so idle cost is zero.
     "kokoro-onnx>=0.6.1,<1.0.0",
+    # Satellites channel STT. The gateway transcribes puck audio in-process;
+    # without this every utterance fails and the device hears "I didn't catch
+    # that". Lazy-imported on first transcription, so idle cost is zero.
+    "faster-whisper>=1.2.0,<2.0.0",
 ]
 
 [project.optional-dependencies]

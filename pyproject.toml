@@ -49,6 +49,10 @@ dependencies = [
     # dashboard Voice tab fails prep with "No module named 'numpy'".
     "numpy>=2.0.0,<3.0.0",
     "cactus-compute>=4.1.0,<5.0.0",
+    # Satellites channel TTS (spec 178/179). The gateway process synthesises
+    # Kokoro speech in-process for voice pucks; without this the channel falls
+    # back to a tone. Lazy-imported on first synthesis, so idle cost is zero.
+    "kokoro-onnx>=0.6.1,<1.0.0",
 ]
 
 [project.optional-dependencies]

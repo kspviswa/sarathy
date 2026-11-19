@@ -75,6 +75,7 @@ def _make_channel(
     allow_cidrs: list[str] | None = None,
     max_utterance_s: int = 30,
     filler_after_s: float = 60.0,
+    streaming: bool = True,
 ) -> tuple[SatellitesChannel, MessageBus, SessionManager]:
     cfg = SatellitesConfig(
         enabled=True,
@@ -83,6 +84,7 @@ def _make_channel(
         filler_after_s=filler_after_s,
         max_concurrent=4,
         rate_limit_per_min=100,
+        streaming=streaming,
     )
     bus = MessageBus()
     full = Config()
@@ -399,6 +401,338 @@ async def test_empty_transcript(tmp_path):
             assert sm._cache == {} or all(
                 not k.startswith("satellites:quiet1:") for k in sm._cache
             )
+    finally:
+        await client.close()
+        await channel.stop()
+
+
+# ---------------------------------------------------------------------------
+# Streaming sentence path (spec 179)
+# ---------------------------------------------------------------------------
+
+THREE_SENTENCE = (
+    "It is clear tonight. Bring a jacket. Roads may be icy."
+)
+
+# Accumulated prefixes the way LiteLLM/custom providers emit on_progress.
+THREE_SENTENCE_PREFIXES = [
+    "It is clear",
+    "It is clear tonight.",
+    "It is clear tonight. Bring a jacket.",
+    "It is clear tonight. Bring a jacket. Roads may be icy.",
+]
+
+
+async def _open_live_turn(
+    channel: SatellitesChannel,
+    bus: MessageBus,
+    client: TestClient,
+    *,
+    device_id: str = "stream1",
+):
+    """Hello + listen + stop → return (ws, chat_id) with a live turn waiting."""
+    ws = await client.ws_connect(f"/satellites/ws?device_id={device_id}")
+    await ws.send_json(
+        {
+            "type": "device.hello",
+            "device_id": device_id,
+            "fw_version": "0.1.0",
+            "capabilities": ["audio.in", "audio.out", "led.ring"],
+            "mic_sample_rate": 16000,
+        }
+    )
+    await asyncio.wait_for(ws.receive_json(), timeout=3)  # hello.ok
+
+    await ws.send_json({"type": "listen.start"})
+    await asyncio.wait_for(ws.receive_json(), timeout=3)  # listening
+
+    await ws.send_bytes(_pcm_tone(0.3))
+    await ws.send_json({"type": "listen.stop"})
+
+    # Drain until stt.final — turn is live and waiting for outbound.
+    while True:
+        msg = await asyncio.wait_for(ws.receive(), timeout=5)
+        if msg.type.name == "BINARY":
+            continue
+        if msg.type.name != "TEXT":
+            raise AssertionError(f"unexpected ws msg: {msg.type}")
+        ev = json.loads(msg.data)
+        if ev.get("type") == "stt.final":
+            break
+
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=5)
+    return ws, inbound.chat_id
+
+
+async def _collect_until_idle(ws, *, timeout: float = 8) -> list[dict]:
+    """Collect JSON frames (skip binary PCM) until state:idle."""
+    frames: list[dict] = []
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        msg = await asyncio.wait_for(ws.receive(), timeout=5)
+        if msg.type.name == "BINARY":
+            continue
+        if msg.type.name != "TEXT":
+            break
+        ev = json.loads(msg.data)
+        frames.append(ev)
+        if ev.get("type") == "state" and ev.get("state") == "idle":
+            break
+    return frames
+
+
+def _sentence_texts(frames: list[dict]) -> list[str]:
+    return [f["text"] for f in frames if f.get("type") == "tts.sentence"]
+
+
+def _out(chat_id: str, content: str, **flags: bool) -> OutboundMessage:
+    meta: dict = {"device_id": "x", "wake_id": "w", "satellite": True}
+    meta.update(flags)
+    return OutboundMessage(
+        channel="satellites",
+        chat_id=chat_id,
+        content=content,
+        metadata=meta,
+    )
+
+
+@pytest.mark.asyncio
+async def test_streamed_reply_speaks_once(tmp_path):
+    """§C.1 — accumulated prefixes + final → exactly 3 tts.sentence, no dupes."""
+    channel, bus, _sm = _make_channel(tmp_path)
+    client = await _start_client(channel)
+    try:
+        ws, chat_id = await _open_live_turn(channel, bus, client, device_id="s1")
+        try:
+            early: list[str] = []
+            for prefix in THREE_SENTENCE_PREFIXES:
+                await channel.send(_out(chat_id, prefix, _progress=True))
+                while True:
+                    try:
+                        msg = await asyncio.wait_for(ws.receive(), timeout=0.15)
+                    except asyncio.TimeoutError:
+                        break
+                    if msg.type.name == "BINARY":
+                        continue
+                    if msg.type.name != "TEXT":
+                        break
+                    ev = json.loads(msg.data)
+                    if ev.get("type") == "tts.sentence":
+                        early.append(ev["text"])
+
+            # First complete sentence must leave before `_final`.
+            assert early == [
+                "It is clear tonight.",
+                "Bring a jacket.",
+                "Roads may be icy.",
+            ]
+
+            await channel.send(_out(chat_id, THREE_SENTENCE, _final=True))
+            rest = await _collect_until_idle(ws)
+            all_texts = early + _sentence_texts(rest)
+            assert all_texts == [
+                "It is clear tonight.",
+                "Bring a jacket.",
+                "Roads may be icy.",
+            ]
+            assert any(f.get("type") == "tts.done" for f in rest)
+        finally:
+            await ws.close()
+    finally:
+        await client.close()
+        await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_final_only_reply_speaks_once(tmp_path):
+    """§C.2 — final-only three-sentence reply → exactly 3 frames."""
+    channel, bus, _sm = _make_channel(tmp_path)
+    client = await _start_client(channel)
+    try:
+        ws, chat_id = await _open_live_turn(channel, bus, client, device_id="s2")
+        try:
+            await channel.send(_out(chat_id, THREE_SENTENCE, _final=True))
+            frames = await _collect_until_idle(ws)
+            texts = _sentence_texts(frames)
+            assert texts == [
+                "It is clear tonight.",
+                "Bring a jacket.",
+                "Roads may be icy.",
+            ]
+            assert any(f.get("type") == "tts.done" for f in frames)
+        finally:
+            await ws.close()
+    finally:
+        await client.close()
+        await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_seal_then_final_speaks_each_once(tmp_path):
+    """§C.3 — seal prose once, then final once; seal text not repeated in final."""
+    channel, bus, _sm = _make_channel(tmp_path)
+    client = await _start_client(channel)
+    seal = "Noted — I will remember that."
+    final = "Anything else I can help with?"
+    try:
+        ws, chat_id = await _open_live_turn(channel, bus, client, device_id="s3")
+        try:
+            await channel.send(_out(chat_id, seal, _progress=True, _seal=True))
+            await channel.send(_out(chat_id, final, _final=True))
+            frames = await _collect_until_idle(ws)
+            texts = _sentence_texts(frames)
+            assert texts == [seal, final]
+            assert texts.count(seal) == 1
+        finally:
+            await ws.close()
+    finally:
+        await client.close()
+        await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_tool_hints_are_silent(tmp_path):
+    """§C.4 — interleaved _tool_hint frames never reach tts.sentence."""
+    channel, bus, _sm = _make_channel(tmp_path)
+    client = await _start_client(channel)
+    hint = "🎯 Steer injected"
+    try:
+        ws, chat_id = await _open_live_turn(channel, bus, client, device_id="s4")
+        try:
+            await channel.send(
+                _out(chat_id, "It is clear tonight.", _progress=True)
+            )
+            await channel.send(
+                _out(chat_id, hint, _progress=True, _tool_hint=True)
+            )
+            await channel.send(
+                _out(
+                    chat_id,
+                    "It is clear tonight. Bring a jacket.",
+                    _progress=True,
+                )
+            )
+            await channel.send(
+                _out(
+                    chat_id,
+                    "🖼️ Preparing image…",
+                    _progress=True,
+                    _tool_hint=True,
+                )
+            )
+            await channel.send(_out(chat_id, THREE_SENTENCE, _final=True))
+            frames = await _collect_until_idle(ws)
+            texts = _sentence_texts(frames)
+            assert texts == [
+                "It is clear tonight.",
+                "Bring a jacket.",
+                "Roads may be icy.",
+            ]
+            assert hint not in texts
+            assert not any("Preparing" in t for t in texts)
+            assert not any("Steer" in t for t in texts)
+        finally:
+            await ws.close()
+    finally:
+        await client.close()
+        await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_no_fragment_speech(tmp_path):
+    """§C.5 — incomplete last sentence is never spoken until final completes it."""
+    channel, bus, _sm = _make_channel(tmp_path)
+    client = await _start_client(channel)
+    try:
+        ws, chat_id = await _open_live_turn(channel, bus, client, device_id="s5")
+        try:
+            early: list[str] = []
+            for prefix in (
+                "The weather is",
+                "The weather is clear",
+                "The weather is clear tonight",
+            ):
+                await channel.send(_out(chat_id, prefix, _progress=True))
+                while True:
+                    try:
+                        msg = await asyncio.wait_for(ws.receive(), timeout=0.15)
+                    except asyncio.TimeoutError:
+                        break
+                    if msg.type.name == "BINARY":
+                        continue
+                    if msg.type.name != "TEXT":
+                        break
+                    ev = json.loads(msg.data)
+                    if ev.get("type") == "tts.sentence":
+                        early.append(ev["text"])
+
+            assert early == [], f"fragment spoken early: {early}"
+
+            await channel.send(
+                _out(chat_id, "The weather is clear tonight.", _final=True)
+            )
+            frames = await _collect_until_idle(ws)
+            texts = early + _sentence_texts(frames)
+            assert texts == ["The weather is clear tonight."]
+            assert "The weather is" not in texts
+            assert "The weather is clear" not in texts
+        finally:
+            await ws.close()
+    finally:
+        await client.close()
+        await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_streaming_config_false_still_speaks_final(tmp_path):
+    """§C.6 — SatellitesConfig(streaming=False) still speaks the final reply once."""
+    channel, bus, _sm = _make_channel(tmp_path, streaming=False)
+    assert channel.config.streaming is False
+    client = await _start_client(channel)
+    try:
+        ws, chat_id = await _open_live_turn(channel, bus, client, device_id="s6")
+        try:
+            await channel.send(_out(chat_id, THREE_SENTENCE, _final=True))
+            frames = await _collect_until_idle(ws)
+            texts = _sentence_texts(frames)
+            assert texts == [
+                "It is clear tonight.",
+                "Bring a jacket.",
+                "Roads may be icy.",
+            ]
+        finally:
+            await ws.close()
+    finally:
+        await client.close()
+        await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_seal_final_shared_prefix_no_double_speak(tmp_path):
+    """§D — seal + final sharing a prefix must not let seal's offset consume final."""
+    channel, bus, _sm = _make_channel(tmp_path)
+    client = await _start_client(channel)
+    seal = "Looking into that now."
+    # Final deliberately begins with the same words as the seal block.
+    final = "Looking into that now. The answer is forty-two."
+    try:
+        ws, chat_id = await _open_live_turn(channel, bus, client, device_id="s7")
+        try:
+            await channel.send(_out(chat_id, seal, _progress=True, _seal=True))
+            await channel.send(_out(chat_id, final, _final=True))
+            frames = await _collect_until_idle(ws)
+            texts = _sentence_texts(frames)
+            assert texts == [
+                "Looking into that now.",
+                "Looking into that now.",
+                "The answer is forty-two.",
+            ], texts
+            # Seal spoken once; final's matching first sentence spoken once too
+            # (separate offsets — not skipped because seal already said it).
+            assert texts.count("Looking into that now.") == 2
+            assert texts.count("The answer is forty-two.") == 1
+        finally:
+            await ws.close()
     finally:
         await client.close()
         await channel.stop()

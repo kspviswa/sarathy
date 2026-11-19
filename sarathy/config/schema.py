@@ -112,6 +112,7 @@ class SatellitesConfig(Base):
     filler_after_s: float = 1.2
     max_concurrent: int = 2
     rate_limit_per_min: int = 20
+    streaming: bool = True  # Stream sentence-level TTS as the reply grows
     allowed_tools: list[str] = Field(default_factory=_default_satellites_allowed_tools)
 
 

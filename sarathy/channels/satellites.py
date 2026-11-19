@@ -317,14 +317,24 @@ class SatellitesChannel(BaseChannel):
             await self._speak_sentence(turn, rest.strip())
 
     async def _speak_new_from_buf(self, turn: _LiveTurn, *, final: bool = False) -> None:
-        sentences, rest = pop_complete_sentences(turn.buf)
+        """Speak only the unspoken tail of the accumulated buffer.
+
+        Progress frames carry growing prefixes of the same reply, so
+        ``spoken_chars`` remembers how far we already spoke and we only
+        split/emit from the remainder. Incomplete trailing fragments wait
+        for the next frame (or for ``final=True``).
+        """
+        if turn.spoken_chars > len(turn.buf):
+            turn.spoken_chars = 0
+        unspoken = turn.buf[turn.spoken_chars :]
+        sentences, rest = pop_complete_sentences(unspoken)
         for s in sentences:
             await self._speak_sentence(turn, s)
+        # Advance past complete sentences only — leave the fragment pending.
+        turn.spoken_chars += len(unspoken) - len(rest)
         if final and rest.strip():
             await self._speak_sentence(turn, rest.strip())
-            turn.buf = ""
-        else:
-            turn.buf = rest
+            turn.spoken_chars = len(turn.buf)
 
     async def _finish_turn(self, turn: _LiveTurn) -> None:
         if turn.closed:
@@ -406,27 +416,29 @@ class SatellitesChannel(BaseChannel):
             if turn.closed:
                 return
             if meta.get("_final"):
-                # Prefer the final text as the authoritative reply.
+                # Full final answer — speak only what streaming has not already
+                # covered (spoken_chars offset into the accumulated prefix).
                 if content.strip():
-                    # If progress already spoke prefix, only speak the remainder
-                    # when final is a full snapshot starting with spoken text.
-                    if (
-                        turn.buf
-                        and content.startswith(turn.buf[: max(1, len(turn.buf) // 2)])
-                    ):
-                        turn.buf = content
-                    elif len(content) >= len(turn.buf):
-                        turn.buf = content
-                    else:
-                        turn.buf = (turn.buf + " " + content).strip()
+                    turn.buf = content
                     await self._speak_new_from_buf(turn, final=True)
                 elif turn.buf.strip():
                     await self._speak_new_from_buf(turn, final=True)
                 await self._finish_turn(turn)
                 return
 
-            if meta.get("_progress") or meta.get("_seal"):
-                # Progress frames are full-snapshot style (same as voice mode).
+            if meta.get("_seal"):
+                # One-shot prose bubble (emitted before a tool call). Speak the
+                # whole block once, then reset offsets so a later `_final` that
+                # happens to share a prefix cannot be consumed by seal's offset.
+                if content.strip():
+                    turn.buf = content
+                    await self._speak_new_from_buf(turn, final=True)
+                turn.buf = ""
+                turn.spoken_chars = 0
+                return
+
+            if meta.get("_progress"):
+                # Accumulated prefix of the growing reply.
                 turn.buf = content
                 await self._speak_new_from_buf(turn, final=False)
                 return

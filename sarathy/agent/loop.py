@@ -889,6 +889,8 @@ class AgentLoop:
                 streaming_enabled = self.channels_config.discord.streaming
             elif channel == "dashboard":
                 streaming_enabled = self.channels_config.dashboard.streaming
+            elif channel == "satellites":
+                streaming_enabled = self.channels_config.satellites.streaming
 
         # Resolve the current session epoch for this turn (non-advancing read)
         epoch = 0

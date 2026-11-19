@@ -84,6 +84,37 @@ class DashboardConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Optional IP allowlist (empty = allow all)
 
 
+def _default_satellites_allowed_tools() -> list[str]:
+    return [
+        "memory",
+        "kb",
+        "read_file",
+        "list_dir",
+        "web_fetch",
+        "mcp_uttaram_search",
+        "mcp_uttaram_crawl_as_md",
+        "mcp_uttaram_crawl_as_html",
+        "mcp_uttaram_crawl_batch",
+    ]
+
+
+class SatellitesConfig(Base):
+    """LAN-only voice satellites (ESP32 pucks). Auth is CIDR allowlist only — no token."""
+
+    enabled: bool = False
+    allow_cidrs: list[str] = Field(default_factory=lambda: ["192.168.0.0/16"])
+    max_utterance_s: int = 30
+    stt_model: str = "small"
+    tts_voice: str = "bm_lewis"
+    tts_lang: str = "en-gb"
+    tts_speed: float = 0.95
+    filler_phrase: str = "Let me look that up."
+    filler_after_s: float = 1.2
+    max_concurrent: int = 2
+    rate_limit_per_min: int = 20
+    allowed_tools: list[str] = Field(default_factory=_default_satellites_allowed_tools)
+
+
 class BackendConfig(Base):
     """Backend channel configuration (third trigger path for agents/jobs).
 
@@ -144,6 +175,7 @@ class ChannelsConfig(Base):
     discord: DiscordConfig = Field(default_factory=DiscordConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    satellites: SatellitesConfig = Field(default_factory=SatellitesConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
 
 

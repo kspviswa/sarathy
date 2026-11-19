@@ -104,6 +104,30 @@ class ChannelManager:
             except ImportError as e:
                 logger.warning("Dashboard channel not available: {}", e)
 
+        # Satellites channel (LAN voice pucks) — mounts on the dashboard app.
+        if self.config.channels.satellites.enabled:
+            try:
+                from sarathy.channels.satellites import SatellitesChannel
+
+                sat = SatellitesChannel(
+                    self.config.channels.satellites,
+                    self.bus,
+                    agent=self.agent,
+                    session_manager=self.session_manager,
+                )
+                self.channels["satellites"] = sat
+                dashboard = self.channels.get("dashboard")
+                if dashboard is not None and hasattr(dashboard, "add_mount"):
+                    dashboard.add_mount(sat.mount)
+                    logger.info("Satellites channel enabled (mounted on dashboard)")
+                else:
+                    logger.warning(
+                        "Satellites enabled but dashboard channel is off — "
+                        "no HTTP listener to mount /satellites/ on"
+                    )
+            except ImportError as e:
+                logger.warning("Satellites channel not available: {}", e)
+
         # Backend channel (third trigger path: HTTP endpoint + jobs.db tailer)
         if self.config.channels.backend.enabled:
             try:

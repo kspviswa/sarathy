@@ -4,6 +4,7 @@ import asyncio
 import json
 import shutil
 import sqlite3
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -138,8 +139,12 @@ class Session:
         archive_dir = Path(self._get_archive_dir())
         ensure_dir(archive_dir)
 
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M")
-        filename = f"session-{timestamp}.jsonl"
+        # Second precision + short unique suffix so rapid consecutive archives
+        # (e.g. satellites: one wake = one session) never overwrite each other.
+        # Legacy minute-only names remain readable by the dashboard.
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        suffix = uuid.uuid4().hex[:6]
+        filename = f"session-{timestamp}-{suffix}.jsonl"
         filepath = archive_dir / filename
 
         with open(filepath, "w", encoding="utf-8") as f:

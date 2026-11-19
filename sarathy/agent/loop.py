@@ -21,6 +21,7 @@ from sarathy.agent.context import ContextBuilder
 from sarathy.agent.subagent import SubagentManager
 from sarathy.agent.tools.cron import CronTool
 from sarathy.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from sarathy.agent.tools.kb import KBTool
 from sarathy.agent.tools.memory import MemoryTool
 from sarathy.agent.tools.message import MessageTool
 from sarathy.agent.tools.registry import ToolRegistry
@@ -45,6 +46,15 @@ STEER_PROMPT_TEMPLATE = (
     "If it conflicts with the current task, the steer takes priority. "
     "Weave it into your next step.]\n\n{steer}"
 )
+
+SATELLITE_PROMPT_ADDENDUM = """# Voice satellite
+
+You are answering a screenless speaker, not a screen. Reply in one to three
+short sentences of plain prose. No markdown, no bullet lists, no URLs, no code
+blocks. Lead with the answer; add detail only if asked. If the question is
+genuinely ambiguous, ask one short clarifying question instead of guessing.
+Never mention tools, files, or that you are an AI assistant.
+Do not emit a <topic> marker."""
 
 # Fraction of the model context reserved for conversation history (the rest is
 # system prompt + tool definitions). Used by the history trimmer on every turn.
@@ -456,6 +466,7 @@ class AgentLoop:
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
         self.tools.register(MemoryTool(memory_store=self.memory_store))
+        self.tools.register(KBTool())
         self.tools.register(SkillManageTool(workspace=self.workspace))
 
     async def _connect_mcp(self) -> None:
@@ -855,12 +866,16 @@ class AgentLoop:
         steer_queue: asyncio.Queue | None = None,
         session_key: str | None = None,
         tools_override: list[dict] | None = None,
+        allowed_tools: set[str] | None = None,
     ) -> tuple[str | None, list[str], list[dict], dict]:
         """Run the agent iteration loop. Returns (final_content, tools_used, messages, stats).
 
         ``tools_override`` narrows the advertised tool set for one turn (the
         `/diary` biographer gets `exec` only). ``None`` keeps the live registry
         lookup on every iteration, exactly as before.
+
+        ``allowed_tools`` is the hard execute-time allowlist (satellite turns).
+        Advertising alone is not enough — a hallucinated tool name must die here.
         """
         streaming_enabled = False
         session_streaming = session_metadata.get("streaming", False) if session_metadata else False
@@ -1018,7 +1033,9 @@ class AgentLoop:
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    result = await self.tools.execute(
+                        tool_call.name, tool_call.arguments, allowed=allowed_tools
+                    )
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -1073,7 +1090,9 @@ class AgentLoop:
                             func_name,
                             json.dumps(func_args)[:200],
                         )
-                        result = await self.tools.execute(func_name, func_args)
+                        result = await self.tools.execute(
+                            func_name, func_args, allowed=allowed_tools
+                        )
                         messages = self.context.add_tool_result(
                             messages, tc["id"], func_name, result
                         )
@@ -2032,6 +2051,33 @@ class AgentLoop:
             model=self.model,
         )
 
+        # Satellite turns: narrow advertised tools, hard-enforce at execute, and
+        # append a speaker-oriented prompt fragment. Other channels are untouched.
+        tools_override: list[dict] | None = None
+        allowed_tools: set[str] | None = None
+        if (msg.metadata or {}).get("satellite"):
+            names = set(
+                getattr(
+                    getattr(self.channels_config, "satellites", None),
+                    "allowed_tools",
+                    [],
+                )
+                or []
+            )
+            if names:
+                tools_override = [
+                    t
+                    for t in self.tools.get_definitions()
+                    if t.get("function", {}).get("name") in names
+                ]
+                allowed_tools = names
+            if initial_messages and initial_messages[0].get("role") == "system":
+                initial_messages[0]["content"] = (
+                    (initial_messages[0].get("content") or "")
+                    + "\n\n---\n\n"
+                    + SATELLITE_PROMPT_ADDENDUM
+                )
+
         async def _bus_thinking(content: str) -> None:
             # Thinking is a dashboard-only stream. Non-dashboard channels (e.g.
             # telegram) treat any outbound message without `_progress` as a
@@ -2086,6 +2132,8 @@ class AgentLoop:
                         session_metadata=session.metadata,
                         steer_queue=session.steer_queue,
                         session_key=key,
+                        tools_override=tools_override,
+                        allowed_tools=allowed_tools,
                     )
                 finally:
                     self.provider, self.model = _saved
@@ -2109,6 +2157,8 @@ class AgentLoop:
             session_metadata=session.metadata,
             steer_queue=session.steer_queue,
             session_key=key,
+            tools_override=tools_override,
+            allowed_tools=allowed_tools,
         )
 
         if final_content is None:

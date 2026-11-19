@@ -165,7 +165,7 @@ async def test_steer_injected_at_boundary(tmp_path):
     loop.context.build_messages.return_value = [{"role": "user", "content": "summarize this"}]
     session = sm.get_or_create("test:c1")
 
-    async def execute_with_steer(name: str, arguments: dict) -> str:
+    async def execute_with_steer(name: str, arguments: dict, **kwargs) -> str:
         # The steer arrives while the first tool call is still running.
         await session.steer_queue.put("please wrap in bullets")
         return "file contents"

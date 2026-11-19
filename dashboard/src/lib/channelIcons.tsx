@@ -4,6 +4,7 @@ import {
   Mail,
   MessageSquare,
   MessagesSquare,
+  Radio,
   Send,
   Server,
   Terminal,
@@ -20,6 +21,7 @@ const CHANNEL_ICONS: Record<string, LucideIcon> = {
   email: Mail,
   dashboard: LayoutDashboard,
   voice: Mic,
+  satellites: Radio,
   cli: Terminal,
   backend: Server,
 };

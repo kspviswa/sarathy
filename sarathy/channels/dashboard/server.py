@@ -168,7 +168,12 @@ _MEDIA_CONTENT_TYPES = {
 # verbatim, so the name is validated against this pattern BEFORE it is joined to
 # the archive directory — a `/`, a `..` or any other shape is a 400, never a
 # filesystem lookup. Guards the read-only archive directory against traversal.
-_ARCHIVE_NAME_RE = re.compile(r"^session-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2})\.jsonl$")
+# Accepts legacy minute-precision names (`session-2026-10-13T20-31.jsonl`) and
+# the unique second+suffix form written by archive_session since satellites
+# (`session-2026-11-19T02-12-24-a1b2c3.jsonl`).
+_ARCHIVE_NAME_RE = re.compile(
+    r"^session-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}(?:-\d{2})?)(?:-[0-9a-f]{6})?\.jsonl$"
+)
 
 # Preview length for the archive browser's list rows.
 _ARCHIVE_PREVIEW_CHARS = 280
@@ -594,7 +599,16 @@ class DashboardChannel(BaseChannel):
         # that never gets an Ask must not litter the state directory.
         self._ask_store: AskStore | None = None
         self._voice = VoiceCoordinator(self)
+        self._extra_mounts: list = []
         self._load_outbox()
+
+    def add_mount(self, mount) -> None:
+        """Register an extra route mounter called from ``_build_app`` after core routes.
+
+        Used by the satellites channel to attach ``/satellites/*`` onto the
+        dashboard's single aiohttp listener without opening a second port.
+        """
+        self._extra_mounts.append(mount)
 
     # ------------------------------------------------------------------ outbox
 
@@ -1102,7 +1116,9 @@ class DashboardChannel(BaseChannel):
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler: Callable):
         path = request.path
-        public = path == "/api/auth/pair"
+        # `/satellites/` is LAN-CIDR gated by the satellites channel itself —
+        # no dashboard device token. Pairing remains the only other public API.
+        public = path == "/api/auth/pair" or path.startswith("/satellites/")
         # The image proxy (spec 152 §A) is a PUBLIC read route: an <img>
         # request cannot carry a device token, and the dashboard draws the
         # source favicons and the media thumbnails through it. It changes
@@ -1174,6 +1190,8 @@ class DashboardChannel(BaseChannel):
             client_max_size=10 * 1024 * 1024, middlewares=[self._auth_middleware]
         )
         self._setup_routes(app)
+        for mount in self._extra_mounts:
+            mount(app)
         return app
 
     def _setup_routes(self, app: web.Application) -> None:
@@ -2852,18 +2870,20 @@ class DashboardChannel(BaseChannel):
     def _archive_timestamp(name: str) -> str | None:
         """ISO timestamp encoded in an archive file name, or None.
 
-        `Session.archive_session` stamps names with minute precision, so the
-        fallback is coarser than the metadata line's — it only matters when the
-        metadata line is missing or truncated.
+        `Session.archive_session` stamps names with second precision (plus a
+        unique suffix); legacy files are minute-only. The fallback only matters
+        when the metadata line is missing or truncated.
         """
         match = _ARCHIVE_NAME_RE.match(name)
         if not match:
             return None
-        try:
-            stamp = datetime.strptime(match.group(1), "%Y-%m-%dT%H-%M")
-        except ValueError:
-            return None
-        return stamp.isoformat()
+        raw = match.group(1)
+        for fmt in ("%Y-%m-%dT%H-%M-%S", "%Y-%m-%dT%H-%M"):
+            try:
+                return datetime.strptime(raw, fmt).isoformat()
+            except ValueError:
+                continue
+        return None
 
     @staticmethod
     def _archive_preview(entries: list[dict]) -> str | None:

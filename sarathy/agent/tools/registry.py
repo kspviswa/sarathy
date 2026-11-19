@@ -35,9 +35,25 @@ class ToolRegistry:
         """Get all tool definitions in OpenAI format."""
         return [tool.to_schema() for tool in self._tools.values()]
     
-    async def execute(self, name: str, params: dict[str, Any]) -> str:
-        """Execute a tool by name with given parameters."""
+    async def execute(
+        self,
+        name: str,
+        params: dict[str, Any],
+        *,
+        allowed: set[str] | None = None,
+    ) -> str:
+        """Execute a tool by name with given parameters.
+
+        When ``allowed`` is set, tool names outside that set are refused without
+        executing (satellite turn allowlist). ``None`` keeps the full registry.
+        """
         _HINT = "\n\n[Analyze the error above and try a different approach.]"
+
+        if allowed is not None and name not in allowed:
+            return (
+                f"Error: Tool '{name}' is not allowed in this context. "
+                f"Allowed: {', '.join(sorted(allowed))}"
+            )
 
         tool = self._tools.get(name)
         if not tool:

@@ -43,13 +43,30 @@ vi.mock("@/components/ui/badge", () => ({
   Badge: ({ children, className, variant, ...props }: any) => <span className={className} {...props}>{children}</span>,
 }));
 
-vi.mock("@/components/ui/select", () => ({
-  Select: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-  SelectTrigger: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-  SelectValue: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-  SelectContent: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-  SelectItem: ({ children, value, ...props }: any) => <div value={value} {...props}>{children}</div>,
-}));
+vi.mock("@/components/ui/select", async () => {
+  const ReactMod = await import("react");
+  const ChangeContext = ReactMod.createContext<((v: string) => void) | null>(null);
+  const Select = ({ children, onValueChange, ...props }: any) => (
+    <ChangeContext.Provider value={onValueChange}>
+      <div {...props}>{children}</div>
+    </ChangeContext.Provider>
+  );
+  const SelectItem = ({ children, value, ...props }: any) => {
+    const onChange = ReactMod.useContext(ChangeContext);
+    return (
+      <div data-value={value} onClick={() => onChange?.(String(value))} {...props}>
+        {children}
+      </div>
+    );
+  };
+  return {
+    Select,
+    SelectTrigger: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+    SelectValue: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+    SelectContent: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+    SelectItem,
+  };
+});
 
 vi.mock("@/components/ui/separator", () => ({
   Separator: ({ className, ...props }: any) => <hr className={className} {...props} />,
@@ -61,6 +78,9 @@ import { api } from "@/lib/api";
 const mockUsageSummary = {
   available: true,
   window_days: 7,
+  all_time: false,
+  earliest_ts: "2026-09-21T00:00:00Z",
+  span_days: 60,
   totals: {
     requests: 10,
     prompt_tokens: 50000,
@@ -101,6 +121,9 @@ const mockUsageSummary = {
 const mockEmptySummary = {
   available: false,
   window_days: 7,
+  all_time: false,
+  earliest_ts: null,
+  span_days: 0,
   totals: {
     requests: 0,
     prompt_tokens: 0,
@@ -231,8 +254,91 @@ describe("UsageCard — window selector", () => {
       await vi.runAllTimersAsync();
     });
 
-    // Check select value is displayed
-    expect(screen.getByText("Last 7 days")).toBeInTheDocument();
+    // Trigger label + the option itself both show the selected window.
+    expect(screen.getAllByText("Last 7 days").length).toBeGreaterThan(0);
+    expect(screen.getByText("Last 30 days")).toBeInTheDocument();
+  });
+});
+
+describe("UsageCard — windows follow the stored data span", () => {
+  async function renderWithSpan(spanDays: number) {
+    (api.usageSummary as any).mockResolvedValue({
+      ...mockUsageSummary,
+      span_days: spanDays,
+    });
+    render(<UsageCard />);
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+  }
+
+  it("offers only 7d / 30d / All time for a 60-day dataset", async () => {
+    await renderWithSpan(60);
+
+    expect(screen.getAllByText("Last 7 days").length).toBeGreaterThan(0);
+    expect(screen.getByText("Last 30 days")).toBeInTheDocument();
+    expect(screen.getByText("All time")).toBeInTheDocument();
+    expect(screen.queryByText("Last 3 months")).not.toBeInTheDocument();
+    expect(screen.queryByText("Last year")).not.toBeInTheDocument();
+    expect(screen.getByText("Window: Last 7 days · all models")).toBeInTheDocument();
+  });
+
+  it("offers every window when the data spans 2000 days", async () => {
+    await renderWithSpan(2000);
+
+    for (const label of [
+      "Last 7 days",
+      "Last 30 days",
+      "Last 3 months",
+      "Last 6 months",
+      "Last year",
+      "Last 3 years",
+      "Last 5 years",
+      "All time",
+    ]) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("refetches with days=90 when Last 3 months is selected", async () => {
+    await renderWithSpan(2000);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Last 3 months"));
+      await vi.runAllTimersAsync();
+    });
+
+    expect(api.usageSummary).toHaveBeenLastCalledWith(90, null);
+    expect(screen.getByText("Window: Last 3 months · all models")).toBeInTheDocument();
+  });
+
+  it("refetches with days=0 when All time is selected", async () => {
+    await renderWithSpan(2000);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("All time"));
+      await vi.runAllTimersAsync();
+    });
+
+    expect(api.usageSummary).toHaveBeenLastCalledWith(0, null);
+    expect(screen.getByText("Window: All time (2000 days) · all models")).toBeInTheDocument();
+  });
+
+  it("treats missing span metadata as no long windows (older gateways)", async () => {
+    (api.usageSummary as any).mockResolvedValue({
+      available: true,
+      window_days: 7,
+      totals: mockUsageSummary.totals,
+      by_model: mockUsageSummary.by_model,
+      timeseries: mockUsageSummary.timeseries,
+    });
+    render(<UsageCard />);
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(screen.queryByText("Last 3 months")).not.toBeInTheDocument();
+    expect(screen.getByText("All time")).toBeInTheDocument();
   });
 });
 

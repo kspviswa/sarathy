@@ -16,6 +16,19 @@ import type { UsageSummary } from "@/lib/types";
 
 const ALL_MODELS = "__all__";
 
+// Ordered as shown in the selector. Longer windows are offered only when the
+// stored data actually spans them (from the first response's span_days).
+const WINDOW_OPTIONS = [
+  { days: 7, label: "Last 7 days" },
+  { days: 30, label: "Last 30 days" },
+  { days: 90, label: "Last 3 months" },
+  { days: 180, label: "Last 6 months" },
+  { days: 365, label: "Last year" },
+  { days: 1095, label: "Last 3 years" },
+  { days: 1825, label: "Last 5 years" },
+  { days: 0, label: "All time" },
+] as const;
+
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
@@ -163,6 +176,12 @@ export function UsageCard() {
   }
 
   const { totals, by_model, timeseries } = summary;
+  const spanDays = Math.max(0, summary.span_days ?? 0);
+  const windowOptions = WINDOW_OPTIONS.filter(
+    (option) => option.days === 0 || option.days <= 30 || spanDays >= option.days,
+  );
+  const selectedLabel =
+    WINDOW_OPTIONS.find((option) => option.days === days)?.label ?? `Last ${days} days`;
 
   // Unique model ids for the filter dropdown (providers may repeat a model id).
   const modelOptions = Array.from(new Set(by_model.map((m) => m.model))).filter(
@@ -179,15 +198,15 @@ export function UsageCard() {
     <Card data-testid="usage-card">
       <CardHeader>
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="flex shrink-0 items-center gap-2 whitespace-nowrap">
             <BarChart3 className="size-4 text-primary" />
             Token Usage
           </CardTitle>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             {modelOptions.length > 0 && (
               <Select value={model} onValueChange={setModel}>
                 <SelectTrigger
-                  className="w-auto min-w-[150px]"
+                  className="w-auto min-w-[150px] text-base sm:text-sm"
                   aria-label="Filter by model"
                 >
                   <Filter className="size-4 opacity-50" />
@@ -209,21 +228,24 @@ export function UsageCard() {
               onValueChange={(v) => setDays(Number(v))}
             >
               <SelectTrigger
-                className="w-auto min-w-[140px]"
+                className="w-auto min-w-[140px] text-base sm:text-sm"
                 aria-label="Time window"
               >
-                <SelectValue placeholder="Window" />
+                <SelectValue placeholder="Window">{selectedLabel}</SelectValue>
                 <ChevronDown className="size-4 opacity-50" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="7">Last 7 days</SelectItem>
-                <SelectItem value="30">Last 30 days</SelectItem>
+                {windowOptions.map((option) => (
+                  <SelectItem key={option.days} value={String(option.days)}>
+                    {option.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
         </div>
         <div className="text-sm text-muted-foreground">
-          Window: {days} day{days > 1 ? "s" : ""}
+          Window: {days === 0 ? `All time (${spanDays} days)` : selectedLabel}
           {model !== ALL_MODELS
             ? ` · ${TruncateModelId(model, 40)}`
             : " · all models"}

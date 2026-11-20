@@ -215,6 +215,10 @@ export interface RuntimeSetResponse {
 export interface UsageSummary {
   available: boolean;
   window_days: number;
+  /** Optional on older gateways; missing means a finite window with no known span. */
+  all_time?: boolean;
+  earliest_ts?: string | null;
+  span_days?: number;
   /** Active per-model filter (null/absent => all models). */
   model?: string | null;
   totals: {

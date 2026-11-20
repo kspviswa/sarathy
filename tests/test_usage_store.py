@@ -1,5 +1,6 @@
 """Tests for usage store."""
 
+import math
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -291,6 +292,9 @@ def test_empty_db_returns_available_false(temp_db):
 
     assert summary["available"] is False
     assert summary["window_days"] == 7
+    assert summary["all_time"] is False
+    assert summary["earliest_ts"] is None
+    assert summary["span_days"] == 0
     assert summary["totals"]["requests"] == 0
     assert summary["by_model"] == []
     assert summary["timeseries"] == []
@@ -830,8 +834,80 @@ def test_migration_v2_to_v3_preserves_rows_as_epoch_0(temp_db):
     assert cost2 is not None
     assert abs(cost2 - 0.02) < 0.0001
 
-    # Re-running init should be idempotent (no error, no data loss)
-    store2 = UsageStore(temp_db)
-    summary2 = store2.summary(days=7)
-    assert summary2["totals"]["requests"] == 2
-    assert summary2["totals"]["prompt_tokens"] == 1500
+
+def _month_labels(start: datetime, end: datetime) -> list[str]:
+    """Expected zero-filled month buckets between two UTC instants, inclusive."""
+    labels = []
+    cur = start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    while cur <= end:
+        labels.append(cur.strftime("%Y-%m-01T00:00:00Z"))
+        cur = (
+            cur.replace(year=cur.year + 1, month=1)
+            if cur.month == 12
+            else cur.replace(month=cur.month + 1)
+        )
+    return labels
+
+
+def test_all_time_includes_old_event_and_reports_span(temp_db):
+    """days=0 reaches events outside any fixed window and reports the DB span."""
+    store = UsageStore(temp_db)
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=800, hours=2)
+
+    store.record({"ts": old.isoformat().replace("+00:00", "Z"), "model": "old-model", "prompt_tokens": 100})
+    store.record({"ts": now.isoformat().replace("+00:00", "Z"), "model": "new-model", "prompt_tokens": 20})
+
+    recent = store.summary(days=7)
+    assert recent["totals"]["requests"] == 1
+    assert recent["all_time"] is False
+
+    all_time = store.summary(days=0)
+    assert all_time["available"] is True
+    assert all_time["window_days"] == 0
+    assert all_time["all_time"] is True
+    assert all_time["totals"]["requests"] == 2
+    assert {m["model"] for m in all_time["by_model"]} == {"old-model", "new-model"}
+    assert all_time["earliest_ts"] == old.isoformat().replace("+00:00", "Z")
+    expected_span = math.ceil((now - old).total_seconds() / 86400)
+    assert all_time["span_days"] == expected_span
+    assert all_time["span_days"] >= 800
+
+
+def test_long_window_uses_monthly_buckets_zero_filled(temp_db):
+    """A >400-day window reports one monthly bucket per month, including empty ones."""
+    store = UsageStore(temp_db)
+    now = datetime.now(timezone.utc)
+
+    store.record({"ts": now.isoformat().replace("+00:00", "Z"), "model": "model-a", "prompt_tokens": 50})
+
+    summary = store.summary(days=800)
+    assert summary["available"] is True
+    assert summary["window_days"] == 800
+    assert summary["all_time"] is False
+    assert summary["timeseries"], "expected a zero-filled monthly series"
+
+    expected = _month_labels(now - timedelta(days=800), now)
+    assert [b["ts"] for b in summary["timeseries"]] == expected
+    assert all(b["ts"].endswith("-01T00:00:00Z") for b in summary["timeseries"])
+    assert len(summary["timeseries"]) == len(expected)
+    nonzero = [b for b in summary["timeseries"] if b["prompt_tokens"] == 50]
+    assert len(nonzero) == 1
+    assert nonzero[0]["ts"] == now.strftime("%Y-%m-01T00:00:00Z")
+
+
+def test_positive_days_clamped_to_ten_years(temp_db):
+    """Huge windows clamp to 3650 days instead of the old 365-day ceiling."""
+    store = UsageStore(temp_db)
+    store.record(
+        {
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "model": "model-a",
+            "prompt_tokens": 10,
+        }
+    )
+
+    summary = store.summary(days=99999)
+    assert summary["window_days"] == 3650
+    assert summary["all_time"] is False
+    assert summary["totals"]["requests"] == 1

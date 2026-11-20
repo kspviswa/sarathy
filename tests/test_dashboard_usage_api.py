@@ -2,7 +2,7 @@
 
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -130,6 +130,11 @@ class TestUsageSummaryAPI(AioHTTPTestCase):
         # Check shape
         assert "available" in data
         assert "window_days" in data
+        assert "all_time" in data
+        assert "earliest_ts" in data
+        assert "span_days" in data
+        assert data["all_time"] is False
+        assert isinstance(data["span_days"], int) and data["span_days"] >= 0
         assert "totals" in data
         assert "by_model" in data
         assert "timeseries" in data
@@ -159,21 +164,53 @@ class TestUsageSummaryAPI(AioHTTPTestCase):
 
     @unittest_run_loop
     async def test_usage_summary_days_clamp(self):
-        """Test days parameter clamping (1..365)."""
+        """Test days parameter clamping (0 = all time, positive 1..3650)."""
         resp = await self.client.request("GET", "/api/usage/summary?days=0", headers=self._auth_headers())
         assert resp.status == 200
         data = await resp.json()
-        assert data["window_days"] == 1
+        assert data["window_days"] == 0
+        assert data["all_time"] is True
 
         resp = await self.client.request("GET", "/api/usage/summary?days=500", headers=self._auth_headers())
         assert resp.status == 200
         data = await resp.json()
-        assert data["window_days"] == 365
+        assert data["window_days"] == 500
+        assert data["all_time"] is False
+
+        resp = await self.client.request("GET", "/api/usage/summary?days=99999", headers=self._auth_headers())
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["window_days"] == 3650
 
         resp = await self.client.request("GET", "/api/usage/summary?days=abc", headers=self._auth_headers())
         assert resp.status == 200
         data = await resp.json()
         assert data["window_days"] == 7  # Default on bad value
+
+    @unittest_run_loop
+    async def test_usage_summary_all_time_includes_old_event(self):
+        """?days=0 reaches rows that have aged out of every fixed window."""
+        from sarathy.usage.store import get_usage_store
+
+        store = get_usage_store()
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=800)
+        store.record({"ts": old.isoformat().replace("+00:00", "Z"), "model": "old-model", "prompt_tokens": 100})
+        store.record(
+            {"ts": now.isoformat().replace("+00:00", "Z"), "model": "new-model", "prompt_tokens": 20}
+        )
+
+        recent = await self.client.request("GET", "/api/usage/summary?days=7", headers=self._auth_headers())
+        assert (await recent.json())["totals"]["requests"] == 1
+
+        resp = await self.client.request("GET", "/api/usage/summary?days=0", headers=self._auth_headers())
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["all_time"] is True
+        assert data["window_days"] == 0
+        assert data["span_days"] >= 800
+        assert data["totals"]["requests"] == 2
+        assert data["totals"]["prompt_tokens"] == 120
 
     @unittest_run_loop
     async def test_usage_summary_empty_store(self):

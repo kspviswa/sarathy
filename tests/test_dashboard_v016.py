@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,6 +31,7 @@ from sarathy.channels.dashboard.server import (
     split_quotes,
     wrap_quotes,
 )
+from sarathy.config.schema import Config
 
 # --------------------------------------------------------------- pure helpers
 
@@ -748,3 +750,76 @@ class TestDashboardNewApis(AioHTTPTestCase):
         ):
             assert field in data
         assert data["model"] == "test-model"
+
+
+class TestStatusEnabledChannels(AioHTTPTestCase):
+    """A real ChannelsConfig drives the Status panel's channel list.
+
+    A MagicMock config hid this defect because every attribute looked enabled.
+    These tests use the actual declaration-ordered Pydantic model instead.
+    """
+
+    async def get_application(self):
+        config = MagicMock()
+        config.host = "127.0.0.1"
+        config.port = 8080
+        config.streaming = False
+        config.pairing_keys = ["test-key-123"]
+        config.allow_from = None
+
+        self.temp_dir = tempfile.mkdtemp()
+        cfg = Config()
+        cfg.channels.telegram.enabled = True
+        cfg.channels.discord.enabled = False
+        cfg.channels.email.enabled = True
+        cfg.channels.dashboard.enabled = True
+        cfg.channels.satellites.enabled = True
+        cfg.channels.backend.enabled = True
+
+        self.cfg = cfg
+        with patch("sarathy.channels.dashboard.server.DashboardChannel._load_full_config") as mock_load:
+            mock_load.return_value = cfg
+            registry = DeviceRegistry(Path(self.temp_dir) / "devices.json")
+            self.test_token, _ = registry.register("test-key-123", "Test Device")
+            bus = MagicMock(spec=MessageBus)
+            self.channel = DashboardChannel(
+                config=config,
+                bus=bus,
+                session_manager=None,
+                config_path=Path(self.temp_dir) / "config.json",
+                devices_path=Path(self.temp_dir) / "devices.json",
+                runtime=None,
+            )
+            self.channel._running = False
+            return self.channel._build_app()
+
+    def _auth(self):
+        return {"Authorization": f"Bearer {self.test_token}"}
+
+    @unittest_run_loop
+    async def test_status_lists_every_enabled_channel_in_declaration_order(self):
+        # Patch at request time: the app is built before get_application's
+        # patch context exits, but _load_full_config runs on each request.
+        with patch.object(DashboardChannel, "_load_full_config", return_value=self.cfg):
+            resp = await self.client.request("GET", "/api/status", headers=self._auth())
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["channels"] == ["telegram", "email", "dashboard", "satellites", "backend"]
+        assert "discord" not in data["channels"]
+        assert "send_progress" not in data["channels"]
+        assert "send_tool_hints" not in data["channels"]
+
+    @unittest_run_loop
+    async def test_status_survives_a_partial_config_double(self):
+        # A partially populated test double must not raise out of the endpoint.
+        partial = MagicMock()
+        partial.agents.defaults.model = "test-model"
+        partial.workspace_path = self.temp_dir
+        partial.tools.mcp_servers = {}
+        partial.get_provider_name.return_value = None
+        partial.channels = MagicMock(spec=["telegram", "send_progress"])
+        partial.channels.telegram = SimpleNamespace(enabled=True)
+        with patch.object(DashboardChannel, "_load_full_config", return_value=partial):
+            resp = await self.client.request("GET", "/api/status", headers=self._auth())
+        assert resp.status == 200
+        assert (await resp.json())["channels"] == ["telegram"]

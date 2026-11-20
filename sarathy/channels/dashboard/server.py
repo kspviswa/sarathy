@@ -44,7 +44,7 @@ from sarathy.channels.dashboard.media_proxy import (
     MediaProxy,
     ProxyError,
 )
-from sarathy.config.schema import DashboardConfig
+from sarathy.config.schema import ChannelsConfig, DashboardConfig
 from sarathy.session.manager import channel_for_key
 from sarathy.voice.coordinator import VoiceCoordinator
 
@@ -3110,10 +3110,19 @@ class DashboardChannel(BaseChannel):
             pass
 
         enabled = []
-        for name in ("telegram", "discord", "email", "dashboard"):
-            ch = getattr(cfg.channels, name, None)
-            if ch and getattr(ch, "enabled", False):
-                enabled.append(name)
+        channels_cfg = getattr(cfg, "channels", None)
+        for name, field in ChannelsConfig.model_fields.items():
+            # send_progress / send_tool_hints are behavior flags, not channels.
+            # Walk the model's fields so a new channel appears here automatically.
+            if field.annotation is bool:
+                continue
+            try:
+                ch = getattr(channels_cfg, name, None)
+                if not isinstance(ch, bool) and ch and getattr(ch, "enabled", False):
+                    enabled.append(name)
+            except Exception:
+                # A partial/test-double config must never take down /api/status.
+                continue
 
         return web.json_response(
             {
@@ -3139,12 +3148,12 @@ class DashboardChannel(BaseChannel):
         try:
             from sarathy.usage.store import get_usage_store
 
-            # Parse days parameter with clamping
+            # Parse days parameter with clamping (0 = all time).
             try:
                 days = int(request.query.get("days", "7"))
             except (ValueError, TypeError):
                 days = 7
-            days = max(1, min(365, days))
+            days = max(0, min(3650, days))
 
             # Optional per-model filter ("" / absent => all models).
             model = (request.query.get("model") or "").strip() or None
@@ -3157,6 +3166,9 @@ class DashboardChannel(BaseChannel):
                 {
                     "available": False,
                     "window_days": days if "days" in locals() else 7,
+                    "all_time": days == 0 if "days" in locals() else False,
+                    "earliest_ts": None,
+                    "span_days": 0,
                     "model": None,
                     "totals": {
                         "requests": 0,

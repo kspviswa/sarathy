@@ -253,6 +253,7 @@ export const api = {
   status: () => request<StatusResponse>("/api/status"),
 
   usageSummary: (days = 7, model?: string | null) => {
+    // String(), not a truthiness check: days=0 is the all-time window.
     const params = new URLSearchParams({ days: String(days) });
     if (model) params.set("model", model);
     return request<UsageSummary>(`/api/usage/summary?${params.toString()}`);

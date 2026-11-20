@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -54,6 +55,24 @@ def get_usage_store() -> "UsageStore":
         if _usage_store_instance is None:
             _usage_store_instance = UsageStore()
         return _usage_store_instance
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    """Parse a stored ISO timestamp (Z or explicit offset) as UTC.
+
+    Legacy rows may be naive or carry an offset; normalising here keeps
+    earliest_ts/span_days comparable with the timezone-aware "now" used for
+    window cutoffs.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class UsageStore:
@@ -194,31 +213,53 @@ class UsageStore:
     def summary(self, days: int = 7, model: str | None = None) -> dict[str, Any]:
         """Aggregate usage over the given window.
 
+        ``days <= 0`` means all time. Positive windows are clamped to 1..3650.
         When ``model`` is given, totals and timeseries are restricted to that
         model (``by_model`` always lists every model, so the UI can offer the
         full set of filter options).
         """
+        model_filter = model.strip() if isinstance(model, str) and model.strip() else None
+        earliest_ts: str | None = None
+        span_days = 0
         try:
-            days = max(1, min(365, days))
-            model_filter = model.strip() if isinstance(model, str) and model.strip() else None
-            cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
-            cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
-            # WHERE fragments shared by the filtered aggregates.
-            where = "WHERE ts >= ?"
-            where_args: list[Any] = [cutoff_iso]
-            if model_filter is not None:
-                where += " AND model = ?"
-                where_args.append(model_filter)
+            days = max(1, min(3650, days)) if days > 0 else 0
+            all_time = days == 0
+            now = datetime.now(timezone.utc)
 
             with self._get_conn() as conn:
-                # Check if any data exists
+                # Span metadata describes the whole DB, not just the window, so
+                # the SPA can decide which windows are worth offering on load.
+                earliest_row = conn.execute("SELECT MIN(ts) AS ts FROM usage_events").fetchone()
+                earliest_dt = _parse_ts(earliest_row["ts"]) if earliest_row else None
+                if earliest_dt is not None:
+                    earliest_ts = earliest_dt.isoformat().replace("+00:00", "Z")
+                    span_days = max(0, math.ceil((now - earliest_dt).total_seconds() / 86400))
+
+                if all_time:
+                    cutoff_dt = min(earliest_dt, now) if earliest_dt is not None else now
+                    window_where = ""
+                    window_args: list[Any] = []
+                else:
+                    cutoff_dt = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
+                    window_where = "WHERE ts >= ?"
+                    window_args = [cutoff_dt.isoformat().replace("+00:00", "Z")]
+
+                # Check if any data exists in the window (all rows when all-time).
                 row = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM usage_events WHERE ts >= ?",
-                    (cutoff_iso,),
+                    f"SELECT COUNT(*) as cnt FROM usage_events {window_where}",
+                    tuple(window_args),
                 ).fetchone()
                 if not row or row["cnt"] == 0:
-                    return self._empty_summary(days)
+                    return self._empty_summary(
+                        days, model_filter, earliest_ts=earliest_ts, span_days=span_days, all_time=all_time
+                    )
+
+                # WHERE fragments shared by the filtered aggregates.
+                where = window_where
+                where_args = list(window_args)
+                if model_filter is not None:
+                    where = (where + " AND model = ?") if where else "WHERE model = ?"
+                    where_args.append(model_filter)
 
                 # Totals
                 totals_row = conn.execute(
@@ -241,7 +282,7 @@ class UsageStore:
 
                 # By model
                 by_model_rows = conn.execute(
-                    """
+                    f"""
                     SELECT
                         model,
                         provider,
@@ -250,11 +291,11 @@ class UsageStore:
                         COALESCE(SUM(cached_tokens), 0) as cached_tokens,
                         COALESCE(SUM(completion_tokens), 0) as completion_tokens
                     FROM usage_events
-                    WHERE ts >= ?
+                    {window_where}
                     GROUP BY model, provider
                     ORDER BY requests DESC
                     """,
-                    (cutoff_iso,),
+                    tuple(window_args),
                 ).fetchall()
 
                 by_model = []
@@ -274,11 +315,21 @@ class UsageStore:
                         }
                     )
 
-                # Timeseries bucketing: hourly for <=2 days, daily otherwise.
-                # The window is zero-filled so sparse models (e.g. one busy day)
-                # still render a full timeline instead of 1-2 isolated points.
-                bucket = "hour" if days <= 2 else "day"
-                strftime_fmt = "%Y-%m-%dT%H:00:00Z" if bucket == "hour" else "%Y-%m-%dT00:00:00Z"
+                # Timeseries bucketing: hourly for <=2 days, daily up to 400,
+                # monthly beyond that (5 years of daily points would drown the
+                # chart and the response). All-time uses the DB's own span.
+                effective_days = span_days if all_time else days
+                if effective_days <= 2:
+                    bucket = "hour"
+                elif effective_days <= 400:
+                    bucket = "day"
+                else:
+                    bucket = "month"
+                strftime_fmt = {
+                    "hour": "%Y-%m-%dT%H:00:00Z",
+                    "day": "%Y-%m-%dT00:00:00Z",
+                    "month": "%Y-%m-01T00:00:00Z",
+                }[bucket]
 
                 ts_rows = conn.execute(
                     f"""
@@ -303,22 +354,19 @@ class UsageStore:
                         "completion_tokens": r["completion_tokens"] or 0,
                     }
 
-                # Full window of buckets from cutoff to now (inclusive), zero-filled.
-                now = datetime.now(timezone.utc)
+                # Full window of buckets from cutoff (earliest event in all-time
+                # mode) to now, inclusive, zero-filled so sparse models render a
+                # continuous timeline.
                 if bucket == "hour":
-                    cur = datetime.fromtimestamp(cutoff, tz=timezone.utc).replace(
-                        minute=0, second=0, microsecond=0
-                    )
-                    step = timedelta(hours=1)
+                    cur = cutoff_dt.replace(minute=0, second=0, microsecond=0)
+                elif bucket == "day":
+                    cur = cutoff_dt.replace(hour=0, minute=0, second=0, microsecond=0)
                 else:
-                    cur = datetime.fromtimestamp(cutoff, tz=timezone.utc).replace(
-                        hour=0, minute=0, second=0, microsecond=0
-                    )
-                    step = timedelta(days=1)
+                    cur = cutoff_dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
                 timeseries = []
                 while cur <= now:
-                    label = cur.strftime("%Y-%m-%dT%H:00:00Z" if bucket == "hour" else "%Y-%m-%dT00:00:00Z")
+                    label = cur.strftime(strftime_fmt)
                     row = ts_map.get(label, {"prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0})
                     pt = row["prompt_tokens"]
                     ct = row["cached_tokens"]
@@ -332,11 +380,23 @@ class UsageStore:
                             "cache_hit_pct": hit_pct,
                         }
                     )
-                    cur += step
+                    if bucket == "month":
+                        # Calendar months, not 30-day steps: a 30-day increment
+                        # drifts across month boundaries and skips/repeats points.
+                        cur = (
+                            cur.replace(year=cur.year + 1, month=1)
+                            if cur.month == 12
+                            else cur.replace(month=cur.month + 1)
+                        )
+                    else:
+                        cur += timedelta(hours=1) if bucket == "hour" else timedelta(days=1)
 
                 return {
                     "available": True,
                     "window_days": days,
+                    "all_time": all_time,
+                    "earliest_ts": earliest_ts,
+                    "span_days": span_days,
                     "model": model_filter,
                     "totals": {
                         "requests": totals_row["requests"],
@@ -351,7 +411,9 @@ class UsageStore:
                 }
         except Exception as e:
             logger.debug("Usage store summary failed: %s", e)
-            return self._empty_summary(days, model_filter)
+            return self._empty_summary(
+                days, model_filter, earliest_ts=earliest_ts, span_days=span_days, all_time=days == 0
+            )
 
     def available(self) -> bool:
         """Check if DB exists and has at least one row."""
@@ -480,10 +542,21 @@ class UsageStore:
         except Exception:
             return 0
 
-    def _empty_summary(self, days: int, model: str | None = None) -> dict[str, Any]:
+    def _empty_summary(
+        self,
+        days: int,
+        model: str | None = None,
+        *,
+        earliest_ts: str | None = None,
+        span_days: int = 0,
+        all_time: bool = False,
+    ) -> dict[str, Any]:
         return {
             "available": False,
             "window_days": days,
+            "all_time": all_time,
+            "earliest_ts": earliest_ts,
+            "span_days": span_days,
             "model": model,
             "totals": {
                 "requests": 0,

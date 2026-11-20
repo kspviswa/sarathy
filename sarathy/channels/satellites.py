@@ -167,9 +167,6 @@ class _LiveTurn:
     first_sentence: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     filler_task: asyncio.Task | None = None
-    # Set by the answer path to cut the processing cue short, so a fast reply
-    # is never queued behind the whole chime.
-    filler_interrupt: asyncio.Event | None = None
     closed: bool = False
 
 
@@ -345,22 +342,12 @@ class SatellitesChannel(BaseChannel):
             },
         )
 
-    async def _stream_pcm(
-        self,
-        ws: web.WebSocketResponse,
-        pcm: bytes,
-        *,
-        interrupt: asyncio.Event | None = None,
-    ) -> bool:
-        """Stream PCM in 100 ms chunks. Returns False if cut short."""
+    async def _stream_pcm(self, ws: web.WebSocketResponse, pcm: bytes) -> None:
         for i in range(0, len(pcm), CHUNK_BYTES):
             if ws.closed:
-                return False
-            if interrupt is not None and interrupt.is_set():
-                return False
+                return
             await ws.send_bytes(pcm[i : i + CHUNK_BYTES])
             await asyncio.sleep(0)  # yield
-        return True
 
     async def _speak_sentence(self, turn: _LiveTurn, text: str) -> None:
         text = text.strip()
@@ -455,7 +442,6 @@ class SatellitesChannel(BaseChannel):
                 # A cue is audio-only: no phrase text, so the device shows no
                 # subtitle while the chime plays.
                 text = "" if self._filler_is_cue else self.config.filler_phrase
-                turn.filler_interrupt = asyncio.Event()
                 turn.spoken_seq += 1
                 seq = turn.spoken_seq
                 await self._send_state(turn.ws, "speaking")
@@ -469,12 +455,7 @@ class SatellitesChannel(BaseChannel):
                     },
                 )
                 if pcm:
-                    # The answer path sets this event the moment it has
-                    # something to say, so a fast reply is not held behind
-                    # the whole cue.
-                    await self._stream_pcm(
-                        turn.ws, pcm, interrupt=turn.filler_interrupt
-                    )
+                    await self._stream_pcm(turn.ws, pcm)
                 await self._send_json(
                     turn.ws, {"type": "tts.sentence_end", "seq": seq}
                 )
@@ -497,10 +478,6 @@ class SatellitesChannel(BaseChannel):
             return
 
         content = msg.content or ""
-        # Cut the processing cue short the moment there is something to say,
-        # so the answer is never queued behind the whole chime.
-        if turn.filler_interrupt is not None:
-            turn.filler_interrupt.set()
         async with turn.lock:
             if turn.closed:
                 return

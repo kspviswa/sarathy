@@ -459,6 +459,65 @@ async def test_filler_cue_plays_chime_not_phrase(tmp_path, monkeypatch):
         await channel.stop()
 
 
+@pytest.mark.asyncio
+async def test_cue_is_cut_short_by_answer(tmp_path, monkeypatch):
+    """A fast reply must not queue behind the whole processing cue."""
+    import sarathy.channels.satellites as sat_mod
+
+    cue_pcm = b"\x00\x01" * (24000 * 30)  # 30 s of silence — never finishes here
+    monkeypatch.setattr(
+        sat_mod, "decode_audio_to_pcm", lambda path, sr=24000: cue_pcm
+    )
+
+    channel, bus, _sm = _make_channel(
+        tmp_path, filler_after_s=0.0, filler_sound="/tmp/cue.mp3"
+    )
+    client = await _start_client(channel)
+    try:
+        ws, chat_id = await _open_live_turn(channel, bus, client, device_id="cut1")
+        try:
+            # Wait for the cue to be announced, then let a little play.
+            cue_seq = None
+            cue_bytes = 0
+            while cue_seq is None:
+                msg = await asyncio.wait_for(ws.receive(), timeout=3)
+                if msg.type.name == "BINARY":
+                    continue
+                ev = json.loads(msg.data)
+                if ev.get("type") == "tts.sentence":
+                    cue_seq = ev["seq"]
+
+            for _ in range(3):
+                msg = await asyncio.wait_for(ws.receive(), timeout=3)
+                if msg.type.name == "BINARY":
+                    cue_bytes += len(msg.data)
+
+            # The answer arrives while the cue is still playing.
+            await channel.send(_out(chat_id, "Done.", _final=True))
+
+            while True:
+                msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                if msg.type.name == "BINARY":
+                    cue_bytes += len(msg.data)
+                    continue
+                if msg.type.name != "TEXT":
+                    break
+                ev = json.loads(msg.data)
+                if ev.get("type") == "tts.sentence_end" and ev.get("seq") == cue_seq:
+                    break
+
+            assert cue_bytes < len(cue_pcm), "cue must be cut short, not played out"
+            assert cue_bytes > 0, "cue must actually start"
+
+            rest = await _collect_until_idle(ws)
+            assert any(f.get("type") == "tts.done" for f in rest)
+        finally:
+            await ws.close()
+    finally:
+        await client.close()
+        await channel.stop()
+
+
 # ---------------------------------------------------------------------------
 # Streaming sentence path (spec 179)
 # ---------------------------------------------------------------------------

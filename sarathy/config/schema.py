@@ -105,6 +105,8 @@ class SatellitesConfig(Base):
     allow_cidrs: list[str] = Field(default_factory=lambda: ["192.168.0.0/16"])
     max_utterance_s: int = 30
     stt_model: str = "small"
+    # Deprecated aliases: folded into voice.tts at load time; ignored when the
+    # canonical voice.tts block is present. Kept so old configs still validate.
     tts_voice: str = "bm_lewis"
     tts_lang: str = "en-gb"
     tts_speed: float = 0.95
@@ -119,6 +121,51 @@ class SatellitesConfig(Base):
     rate_limit_per_min: int = 20
     streaming: bool = True  # Stream sentence-level TTS as the reply grows
     allowed_tools: list[str] = Field(default_factory=_default_satellites_allowed_tools)
+
+
+class TTSEngineConfig(Base):
+    """A script-backed TTS engine known to ``voice/tts.sh``."""
+
+    type: str = "script"
+    command: str = ""  # Path relative to the voice dir, or an absolute path
+    sample_rate: int = 24_000
+    languages: list[str] = Field(default_factory=list)
+    format: str = "wav"
+
+
+class VoiceTTSConfig(Base):
+    """One source of truth for the half-duplex TTS backend.
+
+    ``engine`` is the primary, ``fallback`` the ordered skip chain used by
+    ``tts.sh``. Adding an engine needs a script plus one ``engines`` entry —
+    never a code change.
+    """
+
+    engine: str = "maya2"
+    fallback: list[str] = Field(default_factory=lambda: ["kokoro"])
+    voice: str = "Vasant"
+    lang: str = "ta"
+    speed: float = 0.92
+    engines: dict[str, TTSEngineConfig] = Field(
+        default_factory=lambda: {
+            "maya2": TTSEngineConfig(
+                command="engines/maya2.sh",
+                sample_rate=48_000,
+                languages=["ta", "en"],
+            ),
+            "kokoro": TTSEngineConfig(
+                command="engines/kokoro.sh",
+                sample_rate=24_000,
+                languages=["en-gb", "ta"],
+            ),
+        }
+    )
+
+
+class VoiceConfig(Base):
+    """Voice settings shared by both half-duplex consumers."""
+
+    tts: VoiceTTSConfig = Field(default_factory=VoiceTTSConfig)
 
 
 class BackendConfig(Base):
@@ -425,6 +472,7 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
 
     @property
     def workspace_path(self) -> Path:

@@ -76,4 +76,31 @@ def _migrate_config(data: dict) -> dict:
         for name, p in providers.items():
             if isinstance(p, dict) and "kind" not in p and name in legacy_kinds:
                 p["kind"] = legacy_kinds[name]
+
+    # channels.satellites.tts_* are deprecated aliases of voice.tts.*. An
+    # explicit voice.tts value always wins; the legacy keys are left intact so
+    # older clients that still read them keep working.
+    channels = data.get("channels")
+    satellites = channels.get("satellites") if isinstance(channels, dict) else None
+    if isinstance(satellites, dict):
+        aliases = (
+            ("ttsVoice", "voice"),
+            ("ttsLang", "lang"),
+            ("ttsSpeed", "speed"),
+            ("tts_voice", "voice"),
+            ("tts_lang", "lang"),
+            ("tts_speed", "speed"),
+        )
+        if any(legacy in satellites for legacy, _ in aliases):
+            voice = data.get("voice")
+            if not isinstance(voice, dict):
+                voice = {}
+                data["voice"] = voice
+            tts = voice.get("tts")
+            if not isinstance(tts, dict):
+                tts = {}
+                voice["tts"] = tts
+            for legacy, canonical in aliases:
+                if legacy in satellites and canonical not in tts:
+                    tts[canonical] = satellites[legacy]
     return data

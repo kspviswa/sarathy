@@ -1246,6 +1246,7 @@ class DashboardChannel(BaseChannel):
         app.router.add_get("/api/media/proxy", self._api_media_proxy)
         app.router.add_get("/api/config", self._api_get_config)
         app.router.add_put("/api/config", self._api_put_config)
+        app.router.add_get("/api/voice/tts", self._api_voice_tts)
         app.router.add_get("/api/providers", self._api_providers_list)
         app.router.add_post("/api/providers", self._api_providers_add)
         app.router.add_put("/api/providers/{name}", self._api_providers_edit)
@@ -2425,6 +2426,15 @@ class DashboardChannel(BaseChannel):
 
         save_config(new_cfg, self.config_path)
         return web.json_response({"ok": True, "restartRequired": True})
+
+    async def _api_voice_tts(self, request: web.Request) -> web.Response:
+        """Read-only view of the shared half-duplex TTS decision."""
+        from sarathy.tts import resolution
+
+        data = resolution(config=self._load_full_config())
+        return web.json_response(
+            {key: data[key] for key in ("engine", "fallback", "resolved", "engines")}
+        )
 
     # ------------------------------------------------------------------ providers api
 

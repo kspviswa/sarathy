@@ -38,13 +38,7 @@ TTS_SR = 24_000
 BYTES_PER_SAMPLE = 2
 CHUNK_MS = 100
 CHUNK_BYTES = TTS_SR * BYTES_PER_SAMPLE * CHUNK_MS // 1000  # 100 ms @ 24 kHz
-
-_KOKORO_MODEL = (
-    Path.home() / ".sarathy" / "workspace" / "voice" / "models" / "kokoro-v1.0.onnx"
-)
-_KOKORO_VOICES = (
-    Path.home() / ".sarathy" / "workspace" / "voice" / "models" / "voices-v1.0.bin"
-)
+_TTS_SCRIPT = Path.home() / ".sarathy" / "workspace" / "voice" / "tts.sh"
 
 _EMPTY_TRANSCRIPT = re.compile(r"^[\W_\s]*$")
 
@@ -113,7 +107,7 @@ def decode_audio_to_pcm(path: str, sr: int = TTS_SR) -> bytes:
 
     The device only understands raw PCM s16le, so any container the firmware
     cannot play (mp3, ogg, m4a) is converted once at startup and cached. This
-    keeps the wire format identical to Kokoro's output — no codec negotiation.
+    keeps the wire format identical to TTS output — no codec negotiation.
 
     Raises ``RuntimeError`` when ffmpeg is missing or the file cannot be read.
     """
@@ -149,6 +143,40 @@ def decode_audio_to_pcm(path: str, sr: int = TTS_SR) -> bytes:
     if not proc.stdout:
         raise RuntimeError("decoded audio is empty")
     return proc.stdout
+
+
+def wav_to_pcm(path: str, sr: int = TTS_SR) -> bytes:
+    """Read a WAV's real header, then return int16 mono PCM at ``sr``.
+
+    The engine's advertised rate is never trusted — the header is the truth.
+    Linear interpolation resamples when the engine uses another rate (the
+    satellite wire contract is 24 kHz).
+    """
+    import wave
+
+    import numpy as np
+
+    with wave.open(path, "rb") as handle:
+        rate = handle.getframerate()
+        channels = handle.getnchannels()
+        width = handle.getsampwidth()
+        frames = handle.readframes(handle.getnframes())
+    if width != 2:
+        raise ValueError(f"expected 16-bit WAV samples, got {width * 8}-bit")
+    if not frames:
+        return b""
+
+    samples = np.frombuffer(frames, dtype="<i2")
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+    if rate != sr:
+        count = max(1, int(round(len(samples) * sr / rate)))
+        samples = np.interp(
+            np.linspace(0, len(samples) - 1, count),
+            np.arange(len(samples)),
+            samples.astype(np.float64),
+        )
+    return np.clip(np.rint(samples), -32768, 32767).astype("<i2").tobytes()
 
 
 @dataclass
@@ -197,7 +225,6 @@ class SatellitesChannel(BaseChannel):
         self._filler_pcm: bytes | None = None
         self._filler_is_cue = False  # True when _filler_pcm came from filler_sound
         self._whisper = None
-        self._kokoro = None
         self._conn_session_ids: dict[int, str] = {}  # id(ws) → session_id
 
     # ------------------------------------------------------------------ mount
@@ -283,36 +310,38 @@ class SatellitesChannel(BaseChannel):
         segments, _ = model.transcribe(audio, language="en")
         return " ".join(s.text.strip() for s in segments).strip()
 
-    def _get_kokoro(self):
-        if self._kokoro is None:
-            from kokoro_onnx import Kokoro
-
-            self._kokoro = Kokoro(str(_KOKORO_MODEL), str(_KOKORO_VOICES))
-        return self._kokoro
-
     def _synthesize(self, text: str) -> bytes:
         if self._tts_fn is not None:
             return self._tts_fn(text) or b""
         text = (text or "").strip()
         if not text:
             return b""
+
+        import os
+        import subprocess
+        import tempfile
+
+        script = Path(
+            os.environ.get("SARATHY_TTS_SCRIPT") or str(_TTS_SCRIPT)
+        ).expanduser()
+        fd, wav_path = tempfile.mkstemp(prefix="sat-tts-", suffix=".wav")
+        os.close(fd)
         try:
-            k = self._get_kokoro()
-            samples, sr = k.create(
-                text,
-                voice=self.config.tts_voice,
-                speed=self.config.tts_speed,
-                lang=self.config.tts_lang,
+            proc = subprocess.run(
+                [str(script), text, wav_path, "--format", "wav"],
+                capture_output=True,
+                check=False,
+                timeout=180,
             )
-            if sr != TTS_SR:
-                logger.warning("Kokoro returned {} Hz; expected {}", sr, TTS_SR)
-            return b"".join(
-                struct.pack("<h", max(-32768, min(32767, int(float(s) * 32767))))
-                for s in samples
-            )
+            if proc.returncode != 0:
+                err = proc.stderr.decode("utf-8", "replace").strip()
+                raise RuntimeError(err[:300] or f"tts.sh exited {proc.returncode}")
+            return wav_to_pcm(wav_path, TTS_SR)
         except Exception as e:
-            logger.warning("Kokoro TTS failed ({}): falling back to tone", e)
+            logger.warning("TTS script failed ({}): falling back to tone", e)
             return _tone_pcm(0.5)
+        finally:
+            Path(wav_path).unlink(missing_ok=True)
 
     # ------------------------------------------------------------------ ws helpers
 

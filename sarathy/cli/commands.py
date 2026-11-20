@@ -1674,5 +1674,91 @@ def mcp_clear(confirm: bool = typer.Option(False, "--yes", "-y", help="Skip conf
     console.print(f"[green]✓ Removed {count} MCP server(s)[/green]")
 
 
+# ============================================================================
+# TTS backend (half-duplex: satellites + voice notes)
+# ============================================================================
+
+tts_app = typer.Typer(help="Manage the half-duplex TTS backend")
+app.add_typer(tts_app, name="tts")
+
+
+@tts_app.command("set")
+def tts_set(
+    engine: str = typer.Argument(..., help="Engine name (e.g. maya2, kokoro)"),
+):
+    """Switch the engine used by satellites and voice notes (no restart needed)."""
+    from sarathy.tts import set_engine
+
+    config_path = _tts_config_path()
+    try:
+        result = set_engine(engine, config_path)
+    except Exception as exc:
+        console.print(f"[red]Could not set TTS engine: {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"engine={result['engine']}")
+    console.print(f"fallback={','.join(result['fallback']) or '-'}")
+    console.print(f"satellite={result['resolved']['satellite'] or 'unavailable'}")
+    console.print(f"note={result['resolved']['note'] or 'unavailable'}")
+    if result["error"]:
+        console.print(f"[yellow]{result['error']}[/yellow]")
+
+
+@tts_app.command("status")
+def tts_status():
+    """Show configured engine, fallbacks and per-consumer resolution."""
+    from sarathy.tts import config_path_from_env, migrate_legacy_engine_conf, resolution
+
+    config_path = config_path_from_env()
+    migrate_legacy_engine_conf(config_path)
+    result = resolution(config_path=config_path)
+    console.print(f"engine={result['engine']}")
+    console.print(f"fallback={','.join(result['fallback']) or '-'}")
+    console.print(f"satellite={result['resolved']['satellite'] or 'unavailable'}")
+    console.print(f"note={result['resolved']['note'] or 'unavailable'}")
+    for entry in result["engines"]:
+        state = "available" if entry["available"] else "unavailable"
+        console.print(
+            f"engine={entry['name']} status={state} reason={entry['reason']} "
+            f"sample_rate={entry['sampleRate']} script={entry['command']}"
+        )
+    if result["error"]:
+        console.print(f"[red]{result['error']}[/red]")
+        raise typer.Exit(1)
+
+
+@tts_app.command("note")
+def tts_note(
+    text: str = typer.Option(..., "--text", "-t", help="Text to synthesize"),
+    out: Path = typer.Option(..., "--out", "-o", help="Output .wav/.ogg/.pcm path"),
+    lang: str = typer.Option("", "--lang", help="Language code"),
+    voice: str = typer.Option("", "--voice", help="Voice name"),
+):
+    """Synthesize a voice-note file through tts.sh."""
+    from sarathy.tts import TTSResolutionError, synthesize_note
+
+    try:
+        result = synthesize_note(
+            text,
+            out,
+            lang=lang or None,
+            voice=voice or None,
+            config_path=_tts_config_path(),
+        )
+    except TTSResolutionError as exc:
+        console.print(f"[red]TTS failed: {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(
+        f"engine={result['engine']} sample_rate={result['sample_rate']} "
+        f"format={result['format']}"
+    )
+    console.print(f"wrote {result['output']}")
+
+
+def _tts_config_path() -> Path:
+    from sarathy.tts import config_path_from_env
+
+    return config_path_from_env()
+
+
 if __name__ == "__main__":
     app()

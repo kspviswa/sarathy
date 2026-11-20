@@ -108,6 +108,49 @@ def _tone_pcm(seconds: float = 0.4, sr: int = TTS_SR, freq: float = 440.0) -> by
     )
 
 
+def decode_audio_to_pcm(path: str, sr: int = TTS_SR) -> bytes:
+    """Decode an audio file to mono 16-bit PCM at ``sr`` using ffmpeg.
+
+    The device only understands raw PCM s16le, so any container the firmware
+    cannot play (mp3, ogg, m4a) is converted once at startup and cached. This
+    keeps the wire format identical to Kokoro's output — no codec negotiation.
+
+    Raises ``RuntimeError`` when ffmpeg is missing or the file cannot be read.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-i",
+                str(path),
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "-ac",
+                "1",
+                "-ar",
+                str(sr),
+                "-",
+            ],
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError as e:
+        raise RuntimeError("ffmpeg not found on PATH") from e
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(err[:300] or f"ffmpeg exited {proc.returncode}")
+    if not proc.stdout:
+        raise RuntimeError("decoded audio is empty")
+    return proc.stdout
+
+
 @dataclass
 class _LiveTurn:
     ws: web.WebSocketResponse
@@ -152,6 +195,7 @@ class SatellitesChannel(BaseChannel):
         self._live_count = 0
         self._rate: dict[str, list[float]] = {}
         self._filler_pcm: bytes | None = None
+        self._filler_is_cue = False  # True when _filler_pcm came from filler_sound
         self._whisper = None
         self._kokoro = None
         self._conn_session_ids: dict[int, str] = {}  # id(ws) → session_id
@@ -170,13 +214,32 @@ class SatellitesChannel(BaseChannel):
 
     async def start(self) -> None:
         self._running = True
-        try:
-            self._filler_pcm = await asyncio.to_thread(
-                self._synthesize, self.config.filler_phrase
-            )
-        except Exception as e:
-            logger.warning("Satellites: failed to pre-cache filler TTS: {}", e)
-            self._filler_pcm = _tone_pcm(0.6)
+        if self.config.filler_sound:
+            try:
+                self._filler_pcm = await asyncio.to_thread(
+                    decode_audio_to_pcm, self.config.filler_sound
+                )
+                self._filler_is_cue = True
+                logger.info(
+                    "Satellites: processing cue loaded from {} ({} bytes PCM)",
+                    self.config.filler_sound,
+                    len(self._filler_pcm),
+                )
+            except Exception as e:
+                logger.warning(
+                    "Satellites: failed to load processing cue {}: {}",
+                    self.config.filler_sound,
+                    e,
+                )
+                self._filler_pcm = None
+        if self._filler_pcm is None:
+            try:
+                self._filler_pcm = await asyncio.to_thread(
+                    self._synthesize, self.config.filler_phrase
+                )
+            except Exception as e:
+                logger.warning("Satellites: failed to pre-cache filler TTS: {}", e)
+                self._filler_pcm = _tone_pcm(0.6)
         logger.info("Satellites channel ready (CIDR gate: {})", self.config.allow_cidrs)
 
     async def stop(self) -> None:
@@ -376,6 +439,9 @@ class SatellitesChannel(BaseChannel):
                 pcm = self._filler_pcm or await asyncio.to_thread(
                     self._synthesize, self.config.filler_phrase
                 )
+                # A cue is audio-only: no phrase text, so the device shows no
+                # subtitle while the chime plays.
+                text = "" if self._filler_is_cue else self.config.filler_phrase
                 turn.spoken_seq += 1
                 seq = turn.spoken_seq
                 await self._send_state(turn.ws, "speaking")
@@ -384,7 +450,7 @@ class SatellitesChannel(BaseChannel):
                     {
                         "type": "tts.sentence",
                         "seq": seq,
-                        "text": self.config.filler_phrase,
+                        "text": text,
                         "sample_rate": TTS_SR,
                     },
                 )

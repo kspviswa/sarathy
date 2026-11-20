@@ -109,6 +109,11 @@ class SatellitesConfig(Base):
     tts_lang: str = "en-gb"
     tts_speed: float = 0.95
     filler_phrase: str = "Let me look that up."
+    # Optional audio file (mp3/wav/ogg/…) played instead of the spoken filler
+    # while the agent is still working. Decoded to mono 16-bit PCM at 24 kHz
+    # with ffmpeg, so the device keeps receiving raw PCM only. Empty = speak
+    # ``filler_phrase`` as before.
+    filler_sound: str = ""
     filler_after_s: float = 1.2
     max_concurrent: int = 2
     rate_limit_per_min: int = 20

@@ -75,6 +75,7 @@ def _make_channel(
     allow_cidrs: list[str] | None = None,
     max_utterance_s: int = 30,
     filler_after_s: float = 60.0,
+    filler_sound: str = "",
     streaming: bool = True,
 ) -> tuple[SatellitesChannel, MessageBus, SessionManager]:
     cfg = SatellitesConfig(
@@ -82,6 +83,7 @@ def _make_channel(
         allow_cidrs=allow_cidrs or ["127.0.0.1/32", "::1/128", "192.168.0.0/16"],
         max_utterance_s=max_utterance_s,
         filler_after_s=filler_after_s,
+        filler_sound=filler_sound,
         max_concurrent=4,
         rate_limit_per_min=100,
         streaming=streaming,
@@ -401,6 +403,57 @@ async def test_empty_transcript(tmp_path):
             assert sm._cache == {} or all(
                 not k.startswith("satellites:quiet1:") for k in sm._cache
             )
+    finally:
+        await client.close()
+        await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_filler_cue_plays_chime_not_phrase(tmp_path, monkeypatch):
+    """filler_sound → a text-less cue plays while the agent is still working."""
+    import sarathy.channels.satellites as sat_mod
+
+    cue_pcm = _tts_stub("")  # 200 ms tone, stands in for the decoded chime
+    monkeypatch.setattr(
+        sat_mod, "decode_audio_to_pcm", lambda path, sr=24000: cue_pcm
+    )
+
+    channel, bus, _sm = _make_channel(
+        tmp_path, filler_after_s=0.05, filler_sound="/tmp/cue.mp3"
+    )
+    client = await _start_client(channel)
+    try:
+        assert channel._filler_is_cue is True
+        ws, chat_id = await _open_live_turn(channel, bus, client, device_id="cue1")
+        try:
+            texts: list[str] = []
+            audio = 0
+            deadline = asyncio.get_event_loop().time() + 3
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    msg = await asyncio.wait_for(ws.receive(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    break
+                if msg.type.name == "BINARY":
+                    audio += len(msg.data)
+                    continue
+                if msg.type.name != "TEXT":
+                    break
+                ev = json.loads(msg.data)
+                if ev.get("type") == "tts.sentence":
+                    texts.append(ev.get("text", ""))
+                    if audio:
+                        break
+
+            assert texts == [""], "cue must carry no phrase text"
+            assert audio > 0, "cue PCM must reach the device"
+            assert "Let me look that up." not in texts
+
+            await channel.send(_out(chat_id, "Done.", _final=True))
+            rest = await _collect_until_idle(ws)
+            assert any(f.get("type") == "tts.done" for f in rest)
+        finally:
+            await ws.close()
     finally:
         await client.close()
         await channel.stop()

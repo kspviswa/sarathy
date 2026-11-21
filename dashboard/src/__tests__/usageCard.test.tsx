@@ -74,6 +74,7 @@ vi.mock("@/components/ui/separator", () => ({
 
 import { UsageCard } from "@/components/UsageCard";
 import { api } from "@/lib/api";
+import { formatTokens } from "@/lib/format";
 
 const mockUsageSummary = {
   available: true,
@@ -222,6 +223,38 @@ describe("UsageCard — renders headline stats from mocked api.usageSummary", ()
     // Check legend
     expect(screen.getByText("Cached")).toBeInTheDocument();
     expect(screen.getByText("Prompt")).toBeInTheDocument();
+  });
+});
+
+describe("UsageCard — billions-scale totals", () => {
+  it("abbreviates totals in the B range and keeps M for the next tier", async () => {
+    (api.usageSummary as any).mockResolvedValue({
+      ...mockUsageSummary,
+      totals: {
+        ...mockUsageSummary.totals,
+        total_tokens: 1_220_000_000,
+        cached_tokens: 900_000_000,
+      },
+    });
+    render(<UsageCard />);
+
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(screen.getByText("1.2B")).toBeInTheDocument();
+    expect(screen.getByText("900.0M")).toBeInTheDocument();
+  });
+});
+
+describe("formatTokens — shared abbreviation", () => {
+  it("scales B → M → K → raw", () => {
+    expect(formatTokens(1_220_000_000, "K")).toBe("1.2B");
+    expect(formatTokens(1_220_000_000)).toBe("1.2B");
+    expect(formatTokens(122_000_000)).toBe("122.0M");
+    expect(formatTokens(122_000, "K")).toBe("122.0K");
+    expect(formatTokens(122_000)).toBe("122.0k");
+    expect(formatTokens(999)).toBe("999");
   });
 });
 

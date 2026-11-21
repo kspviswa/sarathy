@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
+import { formatTokens } from "@/lib/format";
 import type { UsageSummary } from "@/lib/types";
 
 const ALL_MODELS = "__all__";
@@ -30,9 +31,7 @@ const WINDOW_OPTIONS = [
 ] as const;
 
 function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
+  return formatTokens(n, "K");
 }
 
 function TruncateModelId(model: string, maxLen = 40): string {

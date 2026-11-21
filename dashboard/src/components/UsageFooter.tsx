@@ -2,13 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CircleDollarSign, Gauge, Tag, Zap } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { formatTokens } from "@/lib/format";
 import type { SessionFooter } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
+  return formatTokens(n);
 }
 
 /**
